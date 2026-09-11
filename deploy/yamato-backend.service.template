@@ -1,0 +1,49 @@
+# Yamato 后端 systemd 服务单元（模板）。
+# 由 scripts/install_systemd.sh 渲染后安装到 /etc/systemd/system/yamato-backend.service。
+# 占位符：__ROOT__ / __USER__ / __VENV_DIR__
+[Unit]
+Description=Yamato AI Backend (uvicorn)
+Documentation=file://__ROOT__/README.md
+# Docker 容器（nginx/postgres/redis/minio/sqlserver/dify）靠 restart=always 自启，
+# 这里仅在 docker.service 之后拉起，并等待网络就绪。
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=__USER__
+Group=__USER__
+WorkingDirectory=__ROOT__
+
+# 虚拟环境路径，供 start_backend.sh 解析
+Environment=VENV_DIR=__VENV_DIR__
+# 反代在 8080，后端监听 8000；出站请求不得走代理
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+# 依赖就绪探测参数
+Environment=WAIT_TIMEOUT=180
+Environment=POLL_INTERVAL=3
+# 如需任一依赖未就绪即拒绝启动，改为 1
+Environment=FAIL_ON_UNREADY=0
+
+ExecStart=__ROOT__/scripts/start_backend.sh
+ExecReload=/bin/kill -HUP $MAINPID
+
+# 崩溃自动重启
+Restart=on-failure
+RestartSec=5
+# 启动慢（GPU/模型预热）给足时间
+TimeoutStartSec=300
+TimeoutStopSec=60
+KillSignal=SIGINT
+KillMode=mixed
+
+# 日志走 journald：journalctl -u yamato-backend -f
+StandardOutput=journal
+StandardError=journal
+
+# 资源与安全（按需调整）
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

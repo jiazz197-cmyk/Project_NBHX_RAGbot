@@ -1,0 +1,1 @@
+"""Closing form domain logic."""

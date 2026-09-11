@@ -1,0 +1,4 @@
+# 提交记录纯属行尾归一化（CRLF -> LF），无内容改动，git blame 应跳过。
+# 用法：git blame --ignore-revs-file .git-blame-ignore-revs（git 2.23+ 默认读取本文件）
+46a72fc3e8dbb21c108a97499f43b535682aac3d
+7e3851e

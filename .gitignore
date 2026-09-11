@@ -1,0 +1,43 @@
+# .github/
+.idea/
+logs/
+.vscode/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+index_storage/
+
+# Generated nginx config (from nginx/nginx.conf.template; see scripts/render_nginx_conf.sh)
+nginx/nginx.conf
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.bak.*
+.env.backup
+
+# Charts output
+charts1/
+charts/
+logs/
+
+# Local test exports (e.g. U8 CSV adapter)
+tests/output/
+
+.kilo/
+.cursor/
+.claude/
+.understand-anything/
+understand-anything/
+
+# macOS / editor junk
+.DS_Store
+**/.DS_Store

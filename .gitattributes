@@ -1,0 +1,26 @@
+# 行尾统一 LF：自动归一化文本文件，杜绝 CRLF 混入（见 CLAUDE.md「关键约定 1」）
+* text=auto eol=lf
+
+# 显式标注二进制，避免被当作文本转换行尾
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.svg  binary
+*.webp binary
+*.pdf  binary
+*.xlsx binary
+*.xls  binary
+*.docx binary
+*.doc  binary
+*.pptx binary
+*.zip  binary
+*.gz   binary
+*.tar  binary
+*.7z   binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.otf  binary

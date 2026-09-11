@@ -1,0 +1,50 @@
+---
+description: 项目技术栈与工程规范说明
+globs:
+alwaysApply: false
+---
+
+## 项目架构
+
+- 项目采用 **Monorepo 架构**
+- 使用 **pnpm workspace** 管理多个应用与共享包
+- 可复用的公共组件与工具库统一放置于 `packages/` 目录
+
+## 开发工具
+
+- **vue-tsc 2.2.10**  
+  用于 Vue 3 + TypeScript 的类型检查
+
+- **ESLint 8.x**  
+  用于代码规范校验与静态检查
+
+- **PostCSS**  
+  用于 CSS 的后处理
+
+- **Autoprefixer**  
+  自动为 CSS 添加浏览器前缀
+
+## CSS 预处理
+
+- **sass-embedded 1.89.2**  
+  作为项目统一的 Sass 编译器
+
+## 构建与打包
+
+- **Turbo**  
+  用于 Monorepo 场景下的任务调度与构建加速
+
+- **Rollup**  
+  作为 Vite 底层使用的打包工具
+
+## 工程规范
+
+- **禁止硬编码（Hard Coding）**
+  - 不允许在代码中直接写死以下信息：
+    - 接口地址、端口、环境标识
+    - 密钥、Token、账号信息
+    - 可变业务参数、开关配置
+  - 所有环境相关或可变信息必须：
+    - 通过 `.env` / `.env.example` 管理，或  
+    - 通过独立的配置文件统一维护
+  - 代码中仅通过环境变量或配置读取方式使用上述信息

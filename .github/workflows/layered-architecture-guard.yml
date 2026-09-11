@@ -1,0 +1,21 @@
+name: Layered Architecture Guard
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  layered-architecture-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run layered architecture guard
+        run: bash scripts/check_layered_architecture.sh
