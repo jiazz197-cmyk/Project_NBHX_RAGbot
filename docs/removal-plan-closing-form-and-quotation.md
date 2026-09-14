@@ -26,6 +26,7 @@
 - [ ] `collection2`（知识库管理）迁移后的新 API 前缀，例如继续叫 `/collection2` 还是改为 `/knowledge/collection2`。
 - [ ] 品牌替换范围：是否包括内部代码标识、CSS 变量、localStorage key、MinIO bucket、systemd 服务名等；还是只替换 UI/文档中可见素材。
 - [ ] 新品牌展示名称确认：中文名“宁波华翔”、简称“NBHX”；根目录 `NBHX.png` 是否作为唯一 Logo 源。
+- [ ] Dify 移除后，是保留现有 `/api/v1/chat-messages`、`/api/v1/conversations`、`/api/v1/messages` 等外部路径与 SSE 事件名（前端改动最小），还是统一改成新的 `/api/v1/langchain/*` 路径与协议。
 
 ### 0.3 当前目录说明
 
@@ -347,6 +348,8 @@
 - [ ] 前端构建通过，侧边栏只剩：AI 聊天、知识库管理、用户管理。
 - [ ] 保留功能冒烟：登录、用户管理、知识库管理、AI 对话、文档处理、OCR、RAG 检索、`/sqlserver` 查询。
 - [ ] 品牌冒烟：页面标题/Logo/favicon/文案、后端示例接口、Nginx/systemd 名称均为宁波华翔 / NBHX；无 Yamato / 大和 / 衡器 / 上海大和残留。
+- [ ] Dify 移除冒烟：无 Dify 配置/代理/容器依赖，聊天接口返回统一“LangChain 编排未配置”错误。
+- [ ] LangChain 接口文档冒烟：`docs/langchain-api-contract.md` 已生成，且每个接口的鉴权、请求、响应、SSE、错误码、实现状态均已填写。
 
 ## 12. 品牌与素材替换：消除上海大和，切换宁波华翔（NBHX）
 
@@ -471,11 +474,238 @@
 - [ ] `pnpm install`、`pnpm --filter chat type-check`、`pnpm build` 通过。
 - [ ] systemd/Nginx 部署名称替换后启动正常，健康检查通过。
 
-## 13. 默认保留清单
+## 13. 消除 Dify，改为 LangChain 预留接口
+
+### 13.1 目标与接口策略
+
+- [ ] 移除所有 Dify 运行时依赖、配置、代理和文档，不再通过 Nginx / Vite 把 `/api/v1/*` 兜底转发到 Dify。
+- [ ] 聊天主链路改为由本服务 FastAPI 承接，底层预留 `ChatOrchestratorPort`，后续用 LangChain 实现。
+- [ ] 前端继续调用现有聊天路径（推荐），后端先提供“接口已预留、实现未完成”的明确行为，避免前端被 Dify 删除后直接 404 / 502：
+  - [ ] `POST /api/v1/chat-messages`
+  - [ ] `POST /api/v1/chat-messages/{task_id}/stop`
+  - [ ] `GET /api/v1/conversations`
+  - [ ] `GET /api/v1/messages`
+  - [ ] `POST /api/v1/conversations/{conversation_id}/name`
+  - [ ] `DELETE /api/v1/conversations/{conversation_id}`
+- [ ] 预留实现返回统一的“编排器未配置”错误，建议：
+  - [ ] HTTP `501 Not Implemented` 或 `503 Service Unavailable`
+  - [ ] 错误码 `CHAT_ORCHESTRATOR_NOT_CONFIGURED`
+  - [ ] 错误信息：`LangChain chat orchestrator is reserved but not configured`
+  - [ ] 前端在收到该错误时显示明确提示，不理解为登录失效或网络错误
+- [ ] 若确定改新路径，则前端 `services/chat.ts`、`MessageList.vue`、Nginx、接口文档需同步切换，不允许新旧路径并存造成歧义。
+
+### 13.2 Dify 清除清单
+
+#### 后端
+
+- [ ] `app/core/config.py`：
+  - [ ] 删除 `DIFY_BASE_URL`
+  - [ ] 删除或重命名 `CHAT_API_KEY`（当前用于 Dify App API Key 和上下文压缩；LangChain 自托管 LLM 通常不需要）
+  - [ ] 新增 LangChain 预留配置（见 13.3）
+- [ ] `.env.example`：
+  - [ ] 删除 `DIFY_BASE_URL`
+  - [ ] 删除 / 重命名 `CHAT_API_KEY`
+  - [ ] 新增 `LANGCHAIN_*` 预留配置
+- [ ] `app/adapters/chat_archive/message_extractor.py`：
+  - [ ] 删除 `MessageExtractor` 中所有 `/messages`、`/conversations/...` 的 Dify HTTP 调用
+  - [ ] 保留纯 LangChain 摘要逻辑；消息来源改为本地消息仓储 Port
+  - [ ] 删除 `httpx` / Dify base_url / Dify headers 相关逻辑
+- [ ] `app/adapters/context_compressor.py`：
+  - [ ] 删除 `GET /conversations/{id}/variables` 的 Dify 变量拉取
+  - [ ] 改为从本地对话消息仓储拼接 `recent/older`，或直接使用请求入参
+  - [ ] 删除 `dify_api_key`、`MessageExtractor`、Dify URL 拼接逻辑
+  - [ ] 保留 LangChain + OpenAI 兼容 LLM 的压缩能力
+- [ ] `app/api/v1/context_compression.py`：
+  - [ ] 注释、字段说明删除 “Dify conversation ID”
+  - [ ] `conversation_id` 改为本服务内部会话 ID 语义
+- [ ] `app/usecases/context_compression/compress.py`：
+  - [ ] 文档字符串和日志删除 Dify
+- [ ] `app/core/validators/conversation_id.py`：
+  - [ ] 文件名可保留，但注释改为“内部会话 ID 校验”，不再称 Dify
+- [ ] `app/api/v1/chat_summary.py`：
+  - [ ] 不再注入 `MessageExtractorChatArchiveAdapter(api_key=settings.CHAT_API_KEY)`
+  - [ ] 改为注入本地消息归档 Port / LangChain 摘要实现
+- [ ] 全仓库删除 `DIFY_API_KEY`、`DIFY_BASE_URL`、`DIFY_APP_API_KEY`、`VITE_DIFY_TARGET`、`VITE_DIFY_API_PREFIX`、`CHAT_PROXY_API_KEY` 等 Dify 专属配置。
+
+#### Nginx / 脚本 / 部署
+
+- [ ] `nginx/nginx.conf.template`：
+  - [ ] 删除 `upstream yamato_dify` / `nbhx_dify`
+  - [ ] 删除兜底 `location ^~ /api/v1/` 到 Dify 的转发
+  - [ ] 删除 `proxy_set_header Authorization "Bearer ${DIFY_APP_API_KEY}"`
+  - [ ] 为聊天接口增加显式后端路由：
+    - [ ] `location ^~ /api/v1/chat-messages`
+    - [ ] `location ^~ /api/v1/conversations`
+    - [ ] `location ^~ /api/v1/messages`
+    - [ ] `location ^~ /api/v1/context-compression`
+    - [ ] `location ^~ /api/v1/chat-summary`
+  - [ ] 未知 `/api/v1/*` 路由建议返回 404，不再回退 Dify
+- [ ] `scripts/render_nginx_conf.sh`：
+  - [ ] 删除 `DIFY_APP_API_KEY` 渲染要求
+  - [ ] 不再从 `frontend/apps/chat/.env` 读取 Dify key
+  - [ ] 如模板已无 envsubst 变量，可退化为普通 copy，或仅保留环境相关变量
+- [ ] `scripts/nginx_smoke.sh`：
+  - [ ] 删除 `DIFY_PROBE_PATH` 和对应探活
+  - [ ] 增加聊天接口需要登录/返回明确预留错误的检查
+- [ ] `scripts/start_backend.sh`：
+  - [ ] 删除 `Dify` 依赖探测
+  - [ ] 注释中的 Docker 依赖列表去掉 Dify
+- [ ] `deploy/*.service.template`：
+  - [ ] 注释中的 Docker 容器依赖列表去掉 Dify
+- [ ] `nginx/README.md`：
+  - [ ] 删除 Dify key 渲染、key rotation、Dify upstream、Dify catch-all 等章节
+  - [ ] 更新为 FastAPI/LangChain 预留路由说明
+
+#### 前端
+
+- [ ] `frontend/apps/chat/vite.config.ts`：
+  - [ ] 删除 `VITE_DIFY_TARGET`、`VITE_DIFY_API_PREFIX`、`CHAT_PROXY_API_KEY` 的读取与校验
+  - [ ] 删除 `difyApiPrefix`、`chatProxyApiKey` 注入
+  - [ ] 不再把未命中的 `/api/v1/*` 兜底代理到 Dify
+  - [ ] 将聊天接口显式代理到 `VITE_BACKEND_TARGET`
+- [ ] `frontend/apps/chat/env.d.ts`：
+  - [ ] 删除 `VITE_DIFY_TARGET`、`VITE_DIFY_API_PREFIX` 类型声明
+- [ ] `frontend/apps/chat/env.example`、`.env.production`：
+  - [ ] 删除 `VITE_DIFY_TARGET`、`VITE_DIFY_API_PREFIX`
+  - [ ] 删除 `CHAT_PROXY_API_KEY`、`VITE_CHAT_API_KEY`、`CHAT_API_KEY`（如果已不再使用）
+- [ ] `frontend/apps/chat/src/services/chat.ts`：
+  - [ ] 原调用 `/chat-messages`、`/chat-messages/{id}/stop`、`/conversations`、`/messages`、`/conversations/{id}/name` 的请求，统一改为 Bearer JWT 鉴权
+  - [ ] 不再通过 body 里的 `token`、`user` 作为可信身份；身份从 JWT 解析
+  - [ ] 删除 Dify SSE 语义注释；按最终协议更新 SSE 解析
+  - [ ] `createChatHeaders()` 只设 Content-Type 的临时逻辑删除，改用统一 `createAuthHeaders()`
+- [ ] `frontend/packages/components/src/MessageList/MessageList.vue`：
+  - [ ] 删除会话与重命名会话接口改为 Bearer JWT
+  - [ ] 删除 body 中的 `user` 依赖（或仅作为展示用途，不再作为鉴权依据）
+- [ ] `frontend/packages/components/src/ChatSummary/useChatSummary.ts`：
+  - [ ] `conversation_id` 改为本服务内部会话 ID
+  - [ ] 确认归档失败时不再依赖 Dify 错误格式
+- [ ] `frontend/apps/chat/src/types/chat.ts`：
+  - [ ] 文件头注释删除“与 Dify 聊天 API 对接”字样
+  - [ ] 按最终 LangChain 预留协议更新类型
+- [ ] 全局搜索前端中的 Dify：
+  - [ ] `Dify`
+  - [ ] `dify`
+  - [ ] `VITE_DIFY`
+  - [ ] `CHAT_PROXY_API_KEY`
+  - [ ] `createChatHeaders`
+
+#### 文档
+
+- [ ] `README.md`：
+  - [ ] 删除“对话编排由 Dify 承担”“Dify 工作流”“Nginx 兜底到 Dify”等表述
+  - [ ] 技术栈表、架构分工、快速开始、前置要求、部署说明同步更新
+- [ ] `CLAUDE.md`：
+  - [ ] 项目概览、架构说明、外部服务配置中删除 Dify
+- [ ] `nginx/README.md`：
+  - [ ] 按 13.2 脚本章节重写
+- [ ] `docs/`：
+  - [ ] 搜索并更新 Dify 相关说明；历史决策如需留档，统一移入 `docs/archive/`
+- [ ] `tests/test_dead_code_cleanup.py`：
+  - [ ] 将 `DIFY_BASE_URL` 从 `KEPT_CONFIG_FIELDS` 移到 `REMOVED_CONFIG_FIELDS`（或删除对应断言）
+  - [ ] 新增 `DIFY_API_KEY` / `DIFY_BASE_URL` 已删除断言
+
+### 13.3 LangChain 预留接口设计
+
+- [ ] 新增 Port 与 DTO：
+  - [ ] `app/ports/dto/chat.py`
+    - [ ] `ChatMessageCommand`：`user_id`、`conversation_id?`、`query`、`search_mode`、`inputs`、`response_mode`
+    - [ ] `ChatStreamEvent`：`event`、`task_id`、`conversation_id`、`content`、`usage?`、`error?`
+    - [ ] `ConversationDTO`、`MessageDTO`、`ConversationPageQuery`
+  - [ ] `app/ports/outbound/chat.py`
+    - [ ] `ChatOrchestratorPort.stream_message(command) -> AsyncIterator[ChatStreamEvent]`
+    - [ ] `ChatOrchestratorPort.stop(task_id, user) -> bool`
+    - [ ] `ChatOrchestratorPort.list_conversations(query) -> ConversationPage`
+    - [ ] `ChatOrchestratorPort.list_messages(query) -> MessagePage`
+    - [ ] `ChatOrchestratorPort.rename_conversation(command) -> ConversationDTO`
+    - [ ] `ChatOrchestratorPort.delete_conversation(command) -> None`
+- [ ] 新增 UseCase：
+  - [ ] `app/usecases/chat/send_message.py`
+  - [ ] `app/usecases/chat/stop_message.py`
+  - [ ] `app/usecases/chat/list_conversations.py`
+  - [ ] `app/usecases/chat/list_messages.py`
+  - [ ] `app/usecases/chat/rename_conversation.py`
+  - [ ] `app/usecases/chat/delete_conversation.py`
+- [ ] 新增占位 Adapter：
+  - [ ] `app/adapters/langchain_chat/adapter.py`
+  - [ ] 所有方法抛出 / 返回统一 `ChatOrchestratorNotConfiguredError`
+  - [ ] 组合根捕获后转换成 `501/503 + CHAT_ORCHESTRATOR_NOT_CONFIGURED`
+- [ ] 新增路由：
+  - [ ] `app/api/v1/chat.py`（或 `langchain_chat.py`）
+  - [ ] `app/api/v1/prefixes.py` 增加 `CHAT` / `LANGCHAIN` 前缀
+  - [ ] `app/api/v1/tags.py` 增加 LangChain 预留接口 tag
+  - [ ] `app/api/v1/registry.py` 挂载
+- [ ] 鉴权与数据要求：
+  - [ ] 所有接口要求 `Authorization: Bearer <JWT>`
+  - [ ] `user_id` 由 JWT 当前用户推导；非 admin 不允许查询他人会话
+  - [ ] 会话/消息落 PostgreSQL，前端传入的 `conversation_id` 必须校验归属
+  - [ ] SSE 流式回复需支持协作取消 `POST /chat-messages/{task_id}/stop`
+  - [ ] 任务状态、token usage、检索引用资源按现有任务/Redis/观察者体系记录
+- [ ] LangChain 配置预留：
+  - [ ] `LANGCHAIN_CHAT_ENABLED`（默认 `false`，未实现前返回明确未配置错误）
+  - [ ] `LANGCHAIN_CHAT_BASE_URL` / `LANGCHAIN_CHAT_MODEL`（可复用 `QWEN3_6_35B_*`）
+  - [ ] `LANGCHAIN_CHAT_TIMEOUT_SEC`
+  - [ ] `LANGCHAIN_MAX_CONTEXT_MESSAGES`
+  - [ ] `LANGCHAIN_MAX_OUTPUT_TOKENS`
+- [ ] 移除 Dify 后必须保证本服务可独立启动，不再依赖 `DIFY_BASE_URL` 或 Dify 容器。
+
+### 13.4 接口列表交付物（修改完成后生成）
+
+- [ ] 修改完成后生成 `docs/langchain-api-contract.md`（或等价命名），并纳入 git。
+- [ ] 接口列表必须覆盖所有聊天相关外部接口，至少包括：
+  - [ ] `POST /api/v1/chat-messages`（SSE 流式）
+  - [ ] `POST /api/v1/chat-messages/{task_id}/stop`
+  - [ ] `GET /api/v1/conversations`
+  - [ ] `GET /api/v1/messages`
+  - [ ] `POST /api/v1/conversations/{conversation_id}/name`
+  - [ ] `DELETE /api/v1/conversations/{conversation_id}`
+  - [ ] `POST /api/v1/context-compression/compress`
+  - [ ] `POST /api/v1/chat-summary/create`
+  - [ ] `GET /api/v1/chat-summary/query/{user_id}`
+- [ ] 每个接口必须写出以下要求，不能只写路径：
+
+| 项目 | 要求 |
+|------|------|
+| 接口名称 / OpenAPI tag | 中文名、英文 tag |
+| Method + Path | 完整路径，含 `/api/v1` |
+| 功能说明 | 一句话说明用途 |
+| 认证 | JWT Bearer / 角色 / 页面权限 |
+| 归属校验 | 会话或消息是否必须属于当前用户；admin 是否可越权 |
+| Request Header | `Content-Type`、`Accept`、`Authorization` 等 |
+| Request Query | 分页、排序、过滤参数及默认值 |
+| Request Body | 字段名、类型、必填/选填、约束、示例 |
+| Response Body | 字段名、类型、含义、示例 |
+| SSE 协议 | event 名称、data 结构、顺序、结束/错误事件 |
+| 错误码 | 400 / 401 / 403 / 404 / 429 / 501 / 503 与统一错误结构 |
+| 分页 | page / limit / has_more 语义 |
+| 超时 / 重试 | 请求超时、SSE 心跳、幂等要求、是否可重试 |
+| 取消 | 是否支持 stop、取消后的消息落库状态 |
+| 限流 | 用户/IP 限流与 429 语义 |
+| 依赖 | PostgreSQL / Redis / RAG / LLM / 对象存储 |
+| 日志与观测 | request_id、task_id、conversation_id、metrics |
+| 实现状态 | `预留未实现` / `实现中` / `已完成` |
+| 前端调用方 | 具体文件与函数 |
+
+- [ ] 同步生成/更新 `docs/langchain-api-contract.md` 中的“预留状态表”，明确各接口当前是否返回 `501`。
+- [ ] 如果 FastAPI OpenAPI 可以直接生成接口清单，也应保留上面的人工要求说明，OpenAPI 不能替代业务要求。
+- [ ] 接口列表完成前，不允许删除 Dify 后把前端直接置于 404/502 状态。
+
+### 13.5 Dify 移除与接口预留验证
+
+- [ ] 全仓库 `grep -Rni "dify\|DIFY\|VITE_DIFY\|CHAT_PROXY_API_KEY"` 只允许命中历史留档 `docs/archive/`。
+- [ ] 后端启动不需要 `DIFY_BASE_URL`、`DIFY_APP_API_KEY`、Dify 容器。
+- [ ] `.env.example` 中不再有 Dify 必需配置。
+- [ ] Nginx 中不再存在 Dify upstream、Dify catch-all、Dify Authorization 注入。
+- [ ] Vite 中不再存在 `VITE_DIFY_TARGET`、`VITE_DIFY_API_PREFIX`。
+- [ ] 聊天接口返回统一“未配置编排器”错误，而不是 404 / 502。
+- [ ] 聊天接口未实现期间，前端能显示明确的“LangChain 聊天编排未配置”提示。
+- [ ] 修改完成后已生成 `docs/langchain-api-contract.md`，并且每个接口的要求均已填写。
+- [ ] 后续接入 LangChain 时只需实现 `ChatOrchestratorPort`，不需要再次改 Nginx、前端路径和后端路由。
+
+## 14. 默认保留清单
 
 以下功能按“其他功能保留”原则继续保留：
 
-- AI 对话、Dify 接入、对话摘要、上下文压缩。
+- AI 对话（Dify 已移除，改为 LangChain 预留接口）、对话摘要、上下文压缩。
 - 文档上传 / 文档处理 / 文档任务 WebSocket。
 - OCR：图片识别、PDF 转图片，含 `/ocr` 与 legacy 别名。
 - RAG 检索：`/retriever`、`app/adapters/ragsystem/*`、`data_doc_collection_1`。
@@ -486,12 +716,13 @@
 - SQLServer 查询：`/api/v1/sqlserver`、U8/PDM adapter、PDM matcher、keyword 迁移模块。
 - 任务基础设施：TaskManager、Observer、WebSocket 任务进度、Executor、MinIO orphan reconcile。
 
-## 14. 建议 PR 拆分
+## 15. 建议 PR 拆分
 
 1. **PR1 解耦**：collection2 迁出 closing_form；keyword 模块迁出 quotation；共享 core / 任务基础设施去报价化。
 2. **PR2**：删除 closing_form 后端 + 前端 + 权限 + `data_pending` 数据。
 3. **PR3**：删除报价生成后端 + 前端 + 权限 + `quotation_tasks` 数据。
 4. **PR4**：测试脚本、文档、存量 RBAC 与 MinIO 清理。
 5. **PR5**：品牌与素材替换（NBHX），删除 Yamato / 大和素材，统一前端、后端、部署与文档品牌。
+6. **PR6**：消除 Dify，增加 LangChain 预留 Port / UseCase / 路由 / 占位实现，前端与 Nginx 去 Dify 化；修改完成后生成 `docs/langchain-api-contract.md`。
 
 每个 PR 独立回归，避免一次删除过多导致保留功能被误伤。
