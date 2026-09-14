@@ -70,32 +70,8 @@ def require_metrics_access(x_api_key: str | None = Header(default=None, alias="X
         )
 
 
-def _startup_check_sqlserver_connectivity(app: FastAPI) -> None:
-    """Check U8/PDM connectivity at startup without blocking service startup."""
-    try:
-        from app.adapters.sqlserver.connectivity import test_sqlserver_connectivity
-
-        sqlserver_checks = test_sqlserver_connectivity()
-        app.state.sqlserver_connectivity = sqlserver_checks
-        for db_name in ("u8", "pdm"):
-            result = sqlserver_checks.get(db_name, {})
-            if result.get("ok"):
-                print(
-                    f"[success] {db_name.upper()} SQLServer 连接成功 "
-                    f"({result.get('latency_ms')}ms)"
-                )
-            else:
-                print(
-                    f"[warning] {db_name.upper()} SQLServer 连接失败: "
-                    f"{result.get('error')}"
-                )
-    except Exception as e:
-        app.state.sqlserver_connectivity = {}
-        print(f"[warning] SQLServer 连通性检查失败: {e}")
-
-
 async def shutdown_all_pools() -> None:
-    """有序关闭所有连接池：PG -> Redis -> SQL Server -> 模型池 -> MinIO。
+    """有序关闭所有连接池：PG -> Redis -> 模型池 -> MinIO。
 
     收口到一处：一处看全、一处改全。各池独立 try/except，单个失败不阻塞后续。
     须在消费方（executor / 观察者 / retention / WebSocket）已停后再调用，否则
@@ -119,15 +95,7 @@ async def shutdown_all_pools() -> None:
     except Exception as e:
         print(f"[warning] 关闭 Redis 时出错: {e}")
 
-    # 3. SQL Server（U8 共享连接池；PDM 走单连接 client，不在此列）
-    try:
-        from app.adapters.sqlserver.u8_bom import close_shared_u8_pool
-        close_shared_u8_pool()
-        print("[success] SQL Server 共享连接池已关闭")
-    except Exception as e:
-        print(f"[warning] 关闭 SQL Server 共享连接池时出错: {e}")
-
-    # 4. 文档处理模型池（PaddleOCR / TagGenerator）
+    # 3. 文档处理模型池（PaddleOCR / TagGenerator）
     try:
         from app.adapters.doc_processing.doc_reader import _paddleocr_pool
         from app.adapters.doc_processing.text_splitter import _taggen_pool
@@ -176,18 +144,6 @@ def pool_snapshot() -> Dict[str, Dict[str, Any]]:
         }
     except Exception as exc:  # noqa: BLE001
         logger.debug("pool_snapshot redis 失败: %s", exc)
-
-    # SQL Server（U8 共享连接池）
-    try:
-        from app.adapters.sqlserver.u8_bom import _shared_pool
-        if _shared_pool is not None:
-            snap["sqlserver_u8"] = {
-                "idle": _shared_pool.idle_count,
-                "checked_out": _shared_pool.checked_out,
-                "max": _shared_pool.max_size,
-            }
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("pool_snapshot sqlserver_u8 失败: %s", exc)
 
     return snap
 
@@ -244,8 +200,6 @@ async def lifespan(app: FastAPI):
         
     except Exception as e:
         print(f"[warning] 注册任务观察者失败: {e}")
-
-    _startup_check_sqlserver_connectivity(app)
 
     try:
         from app.core.retention_scheduler import run_reconcile_once, start_reconcile_scheduler
@@ -325,13 +279,6 @@ async def lifespan(app: FastAPI):
             print(f"[warning] 关闭线程池时出错: {e}")
 
         try:
-            from app.api.v1.sqlserver_queries import shutdown_sqlserver_query_executor
-            shutdown_sqlserver_query_executor()
-            print("[success] SQLServer 查询线程池已关闭")
-        except Exception as e:
-            print(f"[warning] 关闭 SQLServer 查询线程池时出错: {e}")
-
-        try:
             from app.core.task_manager import task_manager
             await asyncio.wait_for(task_manager.remove_all_observers(), timeout=1.0)
             print("[success] 观察者已清理")
@@ -356,7 +303,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[warning] 关闭 WebSocket 时出错: {e}")
 
-        # 连接池收口：PG -> Redis -> SQL Server -> 模型池 -> MinIO，一处看全、一处改全。
+        # 连接池收口：PG -> Redis -> 模型池 -> MinIO，一处看全、一处改全。
         # 在 executor / 观察者 / retention / WebSocket 均已停后调用。
         await shutdown_all_pools()
 

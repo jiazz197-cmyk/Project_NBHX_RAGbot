@@ -12,15 +12,15 @@
 
 | 块 | 内容 | 状态 |
 |----|------|------|
-| A | 删除报价生成（quotation 域） | ✅ 完成（keyword 两文件延迟阶段3） |
-| B | 删除 SQLServer / U8 / PDM 查询 | ⬜ 未开始（阶段3） |
-| C | main.py 生命周期 | 🟡 部分（报价完成，SQLServer 阶段3） |
-| D | 共享基础设施去报价化 | ✅ 完成（报价部分） |
-| E | 配置 | 🟡 部分（报价完成，SQLServer 阶段3） |
+| A | 删除报价生成（quotation 域） | ✅ 完成 |
+| B | 删除 SQLServer / U8 / PDM 查询 | ✅ 完成 |
+| C | main.py 生命周期 | ✅ 完成 |
+| D | 共享基础设施去报价化 | ✅ 完成 |
+| E | 配置 | ✅ 完成 |
 | F | 前端 | ✅ 完成 |
-| G | 测试 | 🟡 部分（删除+报价改写完成，SQLServer 阶段3） |
+| G | 测试 | ✅ 完成 |
 | H | 网关 | ✅ 完成 |
-| I | 补充项（Issue 清单未覆盖的残留点） | 🟡 部分（view_quotation 完成，残留复查收尾） |
+| I | 补充项（Issue 清单未覆盖的残留点） | 🟡 部分（残留复查阶段4） |
 | 验收 | 验收标准 | ⬜ 未开始 |
 
 ---
@@ -50,23 +50,25 @@
 
 ## B. 删除 SQLServer / U8 / PDM 查询
 
-- [ ] 删除 `app/api/v1/sqlserver_queries.py`
-- [ ] 删除 `app/adapters/sqlserver_queries.py`
-- [ ] 删除整个 `app/adapters/sqlserver/`（client、connectivity、exceptions、pdm_bom、pdm_matcher_adapter、u8_bom）
-- [ ] 删除整个 `app/adapters/pdm_matcher/`
-- [ ] 删除整个 `app/usecases/sqlserver_queries/`
-- [ ] 删除 `app/adapters/web/sqlserver.py`
-- [ ] 删除 `app/ports/dto/sqlserver_queries.py`
-- [ ] 删除 `app/ports/outbound/sqlserver_queries.py`
-- [ ] `app/core/security.py`：删除 `get_current_user_detached`（已确认唯一使用者是 sqlserver 端点）
-- [ ] `app/core/middleware/rate_limit.py`：`expensive_path_prefixes` 删除 `/sqlserver`
-- [ ] `app/adapters/doc_processing/model_pool.py`：更新「镜像 sqlserver 连接池语义」的注释
+- [x] 删除 `app/api/v1/sqlserver_queries.py`
+- [x] 删除 `app/adapters/sqlserver_queries.py`
+- [x] 删除整个 `app/adapters/sqlserver/`（client、connectivity、exceptions、pdm_bom、pdm_matcher_adapter、u8_bom）
+- [x] 删除整个 `app/adapters/pdm_matcher/`
+- [x] 删除整个 `app/usecases/sqlserver_queries/`
+- [x] 删除 `app/adapters/web/sqlserver.py`
+- [x] 删除 `app/ports/dto/sqlserver_queries.py`
+- [x] 删除 `app/ports/outbound/sqlserver_queries.py`
+- [x] `app/core/security.py`：删除 `get_current_user_detached`（已确认唯一使用者是 sqlserver 端点）
+- [x] `app/core/middleware/rate_limit.py`：`expensive_path_prefixes` 删除 `/sqlserver`
+- [x] `app/adapters/doc_processing/model_pool.py`：更新「镜像 sqlserver 连接池语义」的注释
+- [x] 删除 `app/domain/quotation/` 剩余的 `__init__.py`、`keyword_mapping.py`、`keyword_normalizer.py`（阶段2延迟项）
+- [x] 删除 `app/core/circuit_breaker.py`（SQLServer 专属熔断器，唯一使用者 sqlserver/client.py 已删，且引用了已删的 SQLSERVER_CB_* 配置，属死代码）
 
 ## C. main.py 生命周期
 
-- [ ] 删除 `_startup_check_sqlserver_connectivity()` 及调用（含 `app.state.sqlserver_connectivity`）（阶段3）
-- [ ] 删除关闭流程中的 SQL Server 连接池清理（`close_shared_u8_pool`）与 pool snapshot 的 `sqlserver_u8` 段（阶段3）
-- [ ] 删除 `shutdown_sqlserver_query_executor` 引用（阶段3）
+- [x] 删除 `_startup_check_sqlserver_connectivity()` 及调用（含 `app.state.sqlserver_connectivity`）
+- [x] 删除关闭流程中的 SQL Server 连接池清理（`close_shared_u8_pool`）与 pool snapshot 的 `sqlserver_u8` 段
+- [x] 删除 `shutdown_sqlserver_query_executor` 引用
 - [x] 删除 `_startup_resume_quotation_services()` 及调用
 - [x] 删除 `set_quotation_dispatch_loop(...)` 注册与清理
 - [x] 更新报价任务 retention 调度相关启动 / 关闭日志（retention 已重命名为 MinIO reconcile 调度器）；`or_` import 已删除
@@ -85,12 +87,12 @@
 
 ## E. 配置
 
-- [x] `app/core/config.py` 删除报价配置：`QUOTATION_MAX_RUNNING_PER_OWNER`、`QUOTATION_MAX_RUNNING_PER_IP`、`QUOTATION_RETENTION_MAX_TOTAL`、`QUOTATION_RETENTION_TARGET`、`QUOTATION_RETENTION_INTERVAL_SEC`、`QUOTATION_AWAITING_APPROVAL_TTL_HOURS`、`QUOTATION_RUNNING_TIMEOUT_SEC`（`U8_SQLSERVER_*`、`PDM_SQLSERVER_*`、`SQLSERVER_QUERY_*`、`U8_BOM_*` 及校验器为阶段3）
-- [x] `app/core/logging.py`：删除 quotation 日志文件与 logger route（sqlserver 无独立 route）
-- [x] `app/api/v1/registry.py`：移除 `quotation_generation` import 与 mount（`sqlserver_queries` 为阶段3）
-- [x] `app/api/v1/prefixes.py`：删除 `QUOTATION`（`SQLSERVER` 为阶段3）
-- [x] `app/api/v1/tags.py`：删除 `QUOTATION_GENERATION` 常量与 tag 元数据（`SQLSERVER_QUERY` 为阶段3）
-- [x] `.env.example`：删除报价运行时配置（原 176-183 行）（U8 / PDM / SQLSERVER 配置为阶段3）
+- [x] `app/core/config.py` 删除：`QUOTATION_*`、`U8_SQLSERVER_*`、`PDM_SQLSERVER_*`、`SQLSERVER_QUERY_*`、`U8_BOM_*` 及 `_validate_u8_bom_concurrency` 校验器、secrets 列表中的 `U8_SQLSERVER_PASSWORD`/`PDM_SQLSERVER_PASSWORD`（保留 `EXECUTOR_MAX_WORKERS`）
+- [x] `app/core/logging.py`：删除 quotation 日志文件与 logger route
+- [x] `app/api/v1/registry.py`：移除 `quotation_generation`、`sqlserver_queries` import 与 mount
+- [x] `app/api/v1/prefixes.py`：删除 `QUOTATION`、`SQLSERVER`
+- [x] `app/api/v1/tags.py`：删除 `QUOTATION_GENERATION`、`SQLSERVER_QUERY` 常量与 tag 元数据
+- [x] `.env.example`：删除报价运行时配置与 U8 / PDM / SQLSERVER 专属配置；保留 `MINIO_RECONCILE_*`
 
 ## F. 前端
 
@@ -125,9 +127,9 @@
 
 改写：
 
-- [x] `tests/test_dead_code_cleanup.py`：删除 quotation 域断言（sqlserver 断言阶段3）
-- [x] `tests/test_ports_dead_code_cleanup.py`：删除 quotation port 断言（sqlserver 断言阶段3）
-- [x] `tests/test_rate_limit_role_tier.py`：将 `/quotation/tasks` 样例路径换成 `/document-tasks`（`/sqlserver/query` 阶段3换）
+- [x] `tests/test_dead_code_cleanup.py`：删除 quotation / sqlserver 域断言（含 `U8_BOM_POOL_ACQUIRE_TIMEOUT_SEC`）
+- [x] `tests/test_ports_dead_code_cleanup.py`：删除 quotation / sqlserver port 断言
+- [x] `tests/test_rate_limit_role_tier.py`：将 `/quotation/tasks` 样例路径换成 `/document-tasks`、`/sqlserver/query` 换成 `/retriever`
 
 ## H. 网关
 
@@ -151,12 +153,12 @@
 > 阶段 0 扫描补充发现（2026-09-14）：
 
 - [x] `scripts/check_layered_architecture.sh` 确认**无需修改**：8 条规则均为目录/import 正则，不 hardcode quotation / sqlserver 路径
-- [ ] `app/core/config.py` 额外点：`_validate_u8_bom_concurrency` 校验器、secrets 列表中的 `PDM_SQLSERVER_PASSWORD`、SQL Server 连接配置、U8_BOM + circuit breaker 配置（阶段3）
-- [ ] `main.py` 引用点：connectivity check、连接池清理与 snapshot、shutdown_sqlserver_query_executor（阶段3）；报价队列恢复、dispatch loop 已在阶段2删除
-- [ ] `app/api/v1/prefixes.py` 的 `SQLSERVER` 常量、`app/api/v1/tags.py` 的 `SQLSERVER_QUERY` 常量、`.env.example` 的 U8/PDM/SQLSERVER 配置（阶段3；`QUOTATION` 常量、`QUOTATION_GENERATION` tag、报价配置已在阶段2删除）
-- [x] `app/core/circuit_breaker.py`、`app/core/storage.py` 注释清理（阶段2完成）
-- [x] 与 Issue #4（closing_form）交叉点处理：`user_repository.py` 中删除 `page_quotation`，保留 `page_closing_form`（阶段2完成）
-- [ ] 全量 grep 复查 7 符号业务代码零命中（收尾阶段执行）
+- [x] `app/core/config.py` 额外点：`_validate_u8_bom_concurrency` 校验器、secrets 列表中的 `U8_SQLSERVER_PASSWORD`/`PDM_SQLSERVER_PASSWORD`、SQL Server 连接配置、U8_BOM 配置均已删除
+- [x] `main.py` 引用点：connectivity check、连接池清理与 snapshot、shutdown_sqlserver_query_executor、报价队列恢复、dispatch loop 均已删除
+- [x] `app/api/v1/prefixes.py` 的 `QUOTATION`/`SQLSERVER` 常量、`app/api/v1/tags.py` 的 `QUOTATION_GENERATION`/`SQLSERVER_QUERY` 常量、`.env.example` 的报价/U8/PDM/SQLSERVER 配置均已删除
+- [x] `app/core/circuit_breaker.py`、`app/core/storage.py` 注释清理（circuit_breaker 为 SQLServer 专属死代码，已整体删除）
+- [x] 与 Issue #4（closing_form）交叉点处理：`user_repository.py` 中删除 `page_quotation`，保留 `page_closing_form`
+- [ ] 全量 grep 复查 7 符号业务代码零命中（阶段4收尾）
 
 ---
 

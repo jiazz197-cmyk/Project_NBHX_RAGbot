@@ -7,8 +7,6 @@ land in the right architectural layer (depend on ports only).
 """
 import importlib
 
-import pytest
-
 
 class TestRetrieverPortNarrowed:
     def test_retriever_port_has_db_excel_no_query(self):
@@ -26,16 +24,6 @@ class TestRetrieverPortNarrowed:
     def test_chart_analysis_port_kept(self):
         from app.ports.outbound.retriever import ChartAnalysisPort
         assert hasattr(ChartAnalysisPort, "analyze")
-
-
-class TestDeadDtosRemoved:
-    def test_query_result_dto_absent(self):
-        import app.ports.dto.sqlserver_queries as mod
-        assert not hasattr(mod, "QueryResultDTO"), "QueryResultDTO should have been removed"
-
-    def test_sqlserver_query_result_dto_kept(self):
-        from app.ports.dto.sqlserver_queries import SqlserverQueryResultDTO
-        assert SqlserverQueryResultDTO is not None
 
 
 class TestRetrieverUseCases:

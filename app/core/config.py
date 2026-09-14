@@ -162,72 +162,7 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     DB_POOL_TIMEOUT: int = Field(30, ge=1, le=300, env="DB_POOL_TIMEOUT")
     DB_POOL_RECYCLE: int = Field(3600, ge=60, le=86400, env="DB_POOL_RECYCLE")
 
-    # SQL Server（U8 / PDM）
-    U8_SQLSERVER_HOST: str = Field("127.0.0.1", env="U8_SQLSERVER_HOST")
-    U8_SQLSERVER_PORT: int = Field(1433, env="U8_SQLSERVER_PORT")
-    U8_SQLSERVER_DATABASE: str = Field("UFDATA_888_2016", env="U8_SQLSERVER_DATABASE")
-    U8_SQLSERVER_USER: str = Field("sa", env="U8_SQLSERVER_USER")
-    U8_SQLSERVER_PASSWORD: str = Field("change_me_u8_sqlserver_password", env="U8_SQLSERVER_PASSWORD")
-    U8_SQLSERVER_ENCRYPT: bool = Field(False, env="U8_SQLSERVER_ENCRYPT")
-
-    PDM_SQLSERVER_HOST: str = Field("127.0.0.1", env="PDM_SQLSERVER_HOST")
-    PDM_SQLSERVER_PORT: int = Field(1433, env="PDM_SQLSERVER_PORT")
-    PDM_SQLSERVER_DATABASE: str = Field("pdm78", env="PDM_SQLSERVER_DATABASE")
-    PDM_SQLSERVER_USER: str = Field("sa", env="PDM_SQLSERVER_USER")
-    PDM_SQLSERVER_PASSWORD: str = Field("change_me_pdm_sqlserver_password", env="PDM_SQLSERVER_PASSWORD")
-    PDM_SQLSERVER_ENCRYPT: bool = Field(False, env="PDM_SQLSERVER_ENCRYPT")
-    # pymssql: query timeout (seconds) and connection/login timeout
-    SQLSERVER_QUERY_TIMEOUT_SEC: int = Field(120, ge=1, le=3600, env="SQLSERVER_QUERY_TIMEOUT_SEC")
-    SQLSERVER_LOGIN_TIMEOUT_SEC: int = Field(30, ge=1, le=300, env="SQLSERVER_LOGIN_TIMEOUT_SEC")
-    # PDM matcher 四路召回的"查询内"并行度（与跨请求并发无关）。不用于同步查询 API
-    # 执行器（那个用 EXECUTOR_MAX_WORKERS）。
-    SQLSERVER_QUERY_MAX_WORKERS: int = Field(2, ge=1, le=8, env="SQLSERVER_QUERY_MAX_WORKERS")
-    # Circuit breaker for U8/PDM SQLServer (failure isolation, 20003 timeout protection)
-    SQLSERVER_CB_FAIL_THRESHOLD: int = Field(5, ge=1, le=100, env="SQLSERVER_CB_FAIL_THRESHOLD")
-    SQLSERVER_CB_OPEN_SEC: int = Field(60, ge=5, le=3600, env="SQLSERVER_CB_OPEN_SEC")
-
-    # U8 BOM 树展开并行度：单个 BOM 任务内嵌 ThreadPoolExecutor 的 worker 数
-    # （每个根编码子树一个 worker）。注意：采用全局共享连接池后，本值不再决定
-    # 到 ERP 的连接数（由 U8_BOM_MAX_TOTAL_CONNECTIONS 决定），仅决定单任务的
-    # 线程数/并行度。设为 1 即退回串行。调大会增加线程数（任务数 × 本值）。
-    U8_BOM_PARALLEL_WORKERS: int = Field(
-        16, ge=1, le=128, env="U8_BOM_PARALLEL_WORKERS"
-    )
-    # 允许同时运行的 BOM 查询任务数（运行时全局信号量约束）。
-    # 采用共享连接池后，本值不再保护 ERP 连接（连接池上限负责），而是限制并发
-    # BOM 任务数 / 嵌套线程池总数。需 ≤ EXECUTOR_MAX_WORKERS，否则任务会卡在
-    # 执行器队列里等待（“看戏”）。
-    U8_BOM_MAX_CONCURRENT_TASKS: int = Field(
-        30, ge=1, le=64, env="U8_BOM_MAX_CONCURRENT_TASKS"
-    )
-    # 单个用户同时可运行的 BOM 查询任务数上限（每用户独立信号量，互不共享）。
-    # 防止单人刷爆全局并发额度，保证 30 人团队公平性。
-    U8_BOM_MAX_CONCURRENT_TASKS_PER_USER: int = Field(
-        2, ge=1, le=64, env="U8_BOM_MAX_CONCURRENT_TASKS_PER_USER"
-    )
-    # 后台任务线程池大小，同时也是同步查询 API 执行器大小（两条路径共用此旋钮）。
-    # 控制 OCR/导入/报价等后台任务 + 同步 /u8/bom-inventory 查询的并发。
-    # 需 ≥ U8_BOM_MAX_CONCURRENT_TASKS，否则 BOM 任务（无论同步还是后台）会在
-    # 执行器队列里排队"看戏"，根本到不了 per-user / 全局 BOM 信号量。
-    EXECUTOR_MAX_WORKERS: int = Field(
-        30, ge=1, le=512, env="EXECUTOR_MAX_WORKERS"
-    )
-    # 全局共享 U8 连接池大小 = 单实例同时打开的 U8 SQL Server 连接总数硬上限。
-    # 所有 BOM 任务共享此池，按需 acquire/release，ERP 永远只看到这么多连接。
-    # 这是保护生产 U8 ERP 数据库的唯一连接闸门（取代旧的“任务数×并行度”乘积）。
-    U8_BOM_MAX_TOTAL_CONNECTIONS: int = Field(
-        64, ge=1, le=2048, env="U8_BOM_MAX_TOTAL_CONNECTIONS"
-    )
-    # SQL Server 共享连接池：按年龄回收。空闲连接 checkout 时若 age 超过此秒数，
-    # 关闭旧连接并新建一条（不增加 ERP 往返，把"新建"成本从失败时提前到到期时）。
-    # 语义对齐 PG 的 DB_POOL_RECYCLE，是治 idle-death 的首选手段。
-    SQLSERVER_POOL_RECYCLE_SEC: int = Field(
-        1800, ge=60, le=86400, env="SQLSERVER_POOL_RECYCLE_SEC"
-    )
-    # SQL Server 共享连接池：出借前校验（SELECT 1）。每次 checkout 多一次真实 ERP
-    # 往返，慢 ERP + 高频 checkout 下负载不可忽略，故默认关闭。仅当观察到 stale
-    # 连接失败（recycle + discard-on-error 已不足以挡住）时再按需打开。
-    SQLSERVER_POOL_PRE_PING: bool = Field(False, env="SQLSERVER_POOL_PRE_PING")
+    # 后台任务线程池大小（共享 executor 服务 OCR / 文档处理 / 知识库上传任务）。
 
     # 文档处理重模型有界池上限。PaddleOCR / TagGenerator 各自一个全局池，
     # checkout 互斥（一实例一线程）既绕开 PaddleOCR 线程安全问题，又把 GPU
@@ -248,26 +183,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     TAGGENERATOR_ACQUIRE_TIMEOUT_SEC: int = Field(
         30, ge=1, le=300, env="TAGGENERATOR_ACQUIRE_TIMEOUT_SEC"
     )
-
-    @model_validator(mode="after")
-    def _validate_u8_bom_concurrency(self):
-        """共享连接池模型下的并发一致性校验。
-
-        - EXECUTOR_MAX_WORKERS ≥ U8_BOM_MAX_CONCURRENT_TASKS：EXECUTOR 同时是后台
-          任务池和同步查询 API 执行器，二者共用此旋钮。若小于任务并发上限，BOM 任务
-          （无论同步 /u8/bom-inventory 还是后台报价）会在执行器队列里排队“看戏”，
-          根本到不了 per-user / 全局 BOM 信号量。
-        - U8_BOM_MAX_TOTAL_CONNECTIONS 是 ERP 连接硬上限（共享池大小），与任务数/
-          并行度解耦——任务数 × 并行度 可远大于连接数，多出的 worker 线程会在池上
-          阻塞等待连接（合理的背压，非错误）。
-        """
-        if self.U8_BOM_MAX_CONCURRENT_TASKS > self.EXECUTOR_MAX_WORKERS:
-            raise ValueError(
-                f"U8_BOM_MAX_CONCURRENT_TASKS({self.U8_BOM_MAX_CONCURRENT_TASKS}) > "
-                f"EXECUTOR_MAX_WORKERS({self.EXECUTOR_MAX_WORKERS})：BOM 任务会卡在"
-                f"执行器队列，请调大 EXECUTOR_MAX_WORKERS 或调小任务并发数"
-            )
-        return self
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
@@ -297,7 +212,7 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     REDIS_PASSWORD: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
     REDIS_MAX_CONNECTIONS: int = Field(10, env="REDIS_MAX_CONNECTIONS")
     # 出借前校验（pre-ping 等价物）：空闲超过此秒数的连接借出前自动 PING，失败即换。
-    # 0 = 关闭。语义对齐 PG 的 pool_pre_ping / SQL Server 的 SQLSERVER_POOL_PRE_PING。
+    # 0 = 关闭。语义对齐 PG 的 pool_pre_ping。
     REDIS_HEALTH_CHECK_INTERVAL_SEC: int = Field(
         30, ge=0, le=600, env="REDIS_HEALTH_CHECK_INTERVAL_SEC"
     )
@@ -432,8 +347,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
         "INTERNAL_API_KEY",
         "CHAT_API_KEY",
         "POSTGRES_PASSWORD",
-        "U8_SQLSERVER_PASSWORD",
-        "PDM_SQLSERVER_PASSWORD",
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
         mode="after",

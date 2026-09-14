@@ -53,7 +53,7 @@ def test_normal_path_limit_tiered_by_role(role, is_admin):
 )
 def test_expensive_path_limit_tiered_by_role(role, is_admin):
     limiter = _limiter()
-    req = FakeRequest(path=f"{settings.API_V1_STR}/sqlserver/query")
+    req = FakeRequest(path=f"{settings.API_V1_STR}/retriever")
     limit = limiter._get_limit_for_request(req, is_authenticated=True, role=role)
     expected = (
         settings.RATE_LIMIT_EXPENSIVE_AUTH_ADMIN
@@ -67,7 +67,7 @@ def test_anon_limits_unchanged():
     limiter = _limiter()
     normal = FakeRequest(path=f"{settings.API_V1_STR}/document-tasks")
     assert limiter._get_limit_for_request(normal, is_authenticated=False, role=None) == settings.RATE_LIMIT_ANON
-    expensive = FakeRequest(path=f"{settings.API_V1_STR}/sqlserver/query")
+    expensive = FakeRequest(path=f"{settings.API_V1_STR}/retriever")
     assert (
         limiter._get_limit_for_request(expensive, is_authenticated=False, role=None)
         == settings.RATE_LIMIT_EXPENSIVE_ANON

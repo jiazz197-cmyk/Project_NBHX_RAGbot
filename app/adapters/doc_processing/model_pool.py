@@ -1,7 +1,6 @@
 """有界对象池：用于 PaddleOCR / TagGenerator 等重 GPU 模型的全局复用。
 
-镜像 ``app.adapters.sqlserver.client.PymssqlConnectionPool`` 的语义，泛型化
-（factory 注入）。核心约束：
+泛型化（factory 注入）有界对象池。核心约束：
 
 - ``max_size`` 闸住**存活实例总数（idle + 已借出）**，超出则 acquire 阻塞等待。
 - checkout 互斥：一个实例同一时刻只被一个线程持有。PaddleOCR 3.x 的 ``ocr()``

@@ -14,7 +14,6 @@ from app.api.v1 import (
     image2url,
     pdf2image,
     retriever,
-    sqlserver_queries,
     websocket_notifier,
 )
 from app.api.v1 import prefixes as p
@@ -66,7 +65,6 @@ def build_api_router() -> APIRouter:
         p.CONTEXT_COMPRESSION,
         [t.CONTEXT_COMPRESSION],
     )
-    _mount(r, sqlserver_queries.router, p.SQLSERVER, [t.SQLSERVER_QUERY])
 
     # --- Legacy path aliases (same router objects; keep old clients working) ---
     _mount(

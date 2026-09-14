@@ -14,7 +14,6 @@ RETRIEVER: Tag = "Retriever"
 CHAT_SUMMARY: Tag = "Chat Summary"
 CLOSING_FORM: Tag = "Closing Form"
 CONTEXT_COMPRESSION: Tag = "Context Compression"
-SQLSERVER_QUERY: Tag = "SQLServer Query"
 OCR: Tag = "OCR"
 
 # Descriptions for FastAPI `openapi_tags` in main app
@@ -62,9 +61,5 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": CONTEXT_COMPRESSION,
         "description": "Context compression for long conversations.",
-    },
-    {
-        "name": SQLSERVER_QUERY,
-        "description": "U8 / PDM and other SQL Server backed queries.",
     },
 ]
