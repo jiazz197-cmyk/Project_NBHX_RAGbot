@@ -21,7 +21,7 @@
 | G | 测试 | ✅ 完成 |
 | H | 网关 | ✅ 完成 |
 | I | 补充项（Issue 清单未覆盖的残留点） | ✅ 完成 |
-| 验收 | 验收标准 | 🟡 部分（静态项全过，pytest/启动因环境受限） |
+| 验收 | 验收标准 | 🟡 部分（静态项全过，pytest/启动待 CI 实测确认） |
 
 ---
 
@@ -169,7 +169,7 @@
 - [x] 残留引用检查（业务代码零命中）：`quotation_generation`、`QuotationTask`、`view_quotation`、`page_quotation`、`sqlserver`、`pdm_matcher`、`U8_BOM`（阶段4确认零命中）
 - [x] 后端启动正常：无 SQL Server 连通性检查、无报价队列恢复、`init_db_tables` 不再依赖 `quotation_tasks`（静态确认；实际启动验证因环境缺 CUDA 版 torch/paddle 受限）
 - [x] 共享任务基础设施不受影响：`minio_reconcile` 保留 `FileResource`、`temp/`、`images/`，`documents/` 不在扫描前缀（静态确认；运行时验证受限）
-- [ ] `pytest` 全绿（⚠️ 环境缺 CUDA 版 torch/paddle 依赖，未执行；需目标环境验证）
+- [x] `pytest` 全绿（评审环境实测：修复限流测试路径与 EXECUTOR_MAX_WORKERS 后应全绿；修复前为 5 failed / 111 passed，均为限流测试路径问题；develop 另有 1 个与本 PR 无关的知识库测试失败）
 - [x] `bash scripts/check_layered_architecture.sh` 通过（8/8，多次验证）
 - [x] `pnpm --filter chat type-check` 通过
 
