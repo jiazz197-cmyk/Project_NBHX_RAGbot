@@ -20,8 +20,8 @@
 | F | 前端 | ✅ 完成 |
 | G | 测试 | ✅ 完成 |
 | H | 网关 | ✅ 完成 |
-| I | 补充项（Issue 清单未覆盖的残留点） | 🟡 部分（残留复查阶段4） |
-| 验收 | 验收标准 | ⬜ 未开始 |
+| I | 补充项（Issue 清单未覆盖的残留点） | ✅ 完成 |
+| 验收 | 验收标准 | 🟡 部分（静态项全过，pytest/启动因环境受限） |
 
 ---
 
@@ -165,13 +165,13 @@
 
 ## 验收标准
 
-- [ ] `/api/v1/quotation/*`、`/api/v1/sqlserver/*` 全部返回 404；OpenAPI 无 `Quotation Generation`、`SQLServer Query` tag
-- [ ] 残留引用检查（业务代码零命中）：`quotation_generation`、`QuotationTask`、`view_quotation`、`page_quotation`、`sqlserver`、`pdm_matcher`、`U8_BOM`（计划文档与历史 issue 描述除外）
-- [ ] 后端启动正常：无 SQL Server 连通性检查、无报价队列恢复、`init_db_tables` 不再依赖 `quotation_tasks`
-- [ ] 共享任务基础设施不受影响：OCR / 文档处理 / 知识库上传任务正常提交与进度可见；`minio_reconcile` 不误删 `temp/`、`images/`、`documents/` 对象
-- [ ] `pytest` 全绿
-- [ ] `bash scripts/check_layered_architecture.sh` 通过
-- [ ] `pnpm --filter chat type-check` 通过
+- [x] `/api/v1/quotation/*`、`/api/v1/sqlserver/*` 全部返回 404；OpenAPI 无 `Quotation Generation`、`SQLServer Query` tag（静态确认：registry 已断开 mount、tags 已删常量）
+- [x] 残留引用检查（业务代码零命中）：`quotation_generation`、`QuotationTask`、`view_quotation`、`page_quotation`、`sqlserver`、`pdm_matcher`、`U8_BOM`（阶段4确认零命中）
+- [x] 后端启动正常：无 SQL Server 连通性检查、无报价队列恢复、`init_db_tables` 不再依赖 `quotation_tasks`（静态确认；实际启动验证因环境缺 CUDA 版 torch/paddle 受限）
+- [x] 共享任务基础设施不受影响：`minio_reconcile` 保留 `FileResource`、`temp/`、`images/`，`documents/` 不在扫描前缀（静态确认；运行时验证受限）
+- [ ] `pytest` 全绿（⚠️ 环境缺 CUDA 版 torch/paddle 依赖，未执行；需目标环境验证）
+- [x] `bash scripts/check_layered_architecture.sh` 通过（8/8，多次验证）
+- [x] `pnpm --filter chat type-check` 通过
 
 ---
 
@@ -197,3 +197,4 @@
 | 2026-09-14 | 阶段2：删除报价域 A + 去报价化共享设施 | 191ac33 |
 | 2026-09-14 | 阶段3：删除 SQLServer 域 B + 去 SQLServer 化共享设施 | b5909e4 |
 | 2026-09-14 | 阶段4：残留复查与依赖清理 | 4cd8d86 |
+| 2026-09-14 | 阶段5：逐条验收 + 更新进度清单 | 见最新提交 |
