@@ -63,6 +63,7 @@
 - [x] `app/adapters/doc_processing/model_pool.py`：更新「镜像 sqlserver 连接池语义」的注释
 - [x] 删除 `app/domain/quotation/` 剩余的 `__init__.py`、`keyword_mapping.py`、`keyword_normalizer.py`（阶段2延迟项）
 - [x] 删除 `app/core/circuit_breaker.py`（SQLServer 专属熔断器，唯一使用者 sqlserver/client.py 已删，且引用了已删的 SQLSERVER_CB_* 配置，属死代码）
+- [x] `requirements.txt`：删除 `pymssql==2.3.0`（SQL Server 驱动，无使用者）
 
 ## C. main.py 生命周期
 
@@ -158,7 +159,7 @@
 - [x] `app/api/v1/prefixes.py` 的 `QUOTATION`/`SQLSERVER` 常量、`app/api/v1/tags.py` 的 `QUOTATION_GENERATION`/`SQLSERVER_QUERY` 常量、`.env.example` 的报价/U8/PDM/SQLSERVER 配置均已删除
 - [x] `app/core/circuit_breaker.py`、`app/core/storage.py` 注释清理（circuit_breaker 为 SQLServer 专属死代码，已整体删除）
 - [x] 与 Issue #4（closing_form）交叉点处理：`user_repository.py` 中删除 `page_quotation`，保留 `page_closing_form`
-- [ ] 全量 grep 复查 7 符号业务代码零命中（阶段4收尾）
+- [x] 全量 grep 复查 7 符号业务代码零命中（阶段4完成）
 
 ---
 
