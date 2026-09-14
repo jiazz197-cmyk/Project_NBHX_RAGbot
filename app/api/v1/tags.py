@@ -13,7 +13,6 @@ IMAGE_PROCESSING: Tag = "Image Processing"
 PDF_PROCESSING: Tag = "PDF Processing"
 RETRIEVER: Tag = "Retriever"
 CHAT_SUMMARY: Tag = "Chat Summary"
-CLOSING_FORM: Tag = "Closing Form"
 KNOWLEDGE: Tag = "Knowledge"
 CONTEXT_COMPRESSION: Tag = "Context Compression"
 SQLSERVER_QUERY: Tag = "SQLServer Query"
@@ -60,10 +59,6 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": CHAT_SUMMARY,
         "description": "Chat summary storage and read APIs.",
-    },
-    {
-        "name": CLOSING_FORM,
-        "description": "Smart scale order form submission and approval.",
     },
     {
         "name": KNOWLEDGE,

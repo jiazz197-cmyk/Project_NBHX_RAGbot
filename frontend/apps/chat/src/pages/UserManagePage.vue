@@ -50,16 +50,6 @@
               </template>
               <template v-else>
                 <label class="perm-toggle">
-                  <span class="perm-toggle__label">营业订单</span>
-                  <input
-                    type="checkbox"
-                    class="perm-toggle__input"
-                    :checked="hasPerm(user, 'view_closing_form')"
-                    :disabled="permPending === user.id"
-                    @change="togglePerm(user, 'view_closing_form')"
-                  />
-                </label>
-                <label class="perm-toggle">
                   <span class="perm-toggle__label">报价生成</span>
                   <input
                     type="checkbox"
@@ -264,11 +254,9 @@ const hasPerm = (user: UserResponse, perm: string): boolean => {
 const togglePerm = async (user: UserResponse, perm: string) => {
   if (permPending.value) return
   permPending.value = user.id
-  const viewClosing = perm === 'view_closing_form' ? !hasPerm(user, 'view_closing_form') : hasPerm(user, 'view_closing_form')
   const viewQuotation = perm === 'view_quotation' ? !hasPerm(user, 'view_quotation') : hasPerm(user, 'view_quotation')
   try {
     const updated = await updateUserPagePermissions(user.id, {
-      view_closing_form: viewClosing,
       view_quotation: viewQuotation,
     })
     const idx = users.value.findIndex((u) => u.id === user.id)

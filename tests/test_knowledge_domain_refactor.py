@@ -396,30 +396,3 @@ def test_pipeline_nodes_carry_collection_metadata():
     assert "\x00" not in nodes[0].text  # NUL 清理仍生效
     assert nodes[0].metadata["source"] == "a.pdf"
 
-
-def test_closing_form_embedding_still_writes_doc_collection_1(monkeypatch):
-    """验收标准：data_doc_collection_1 维持现状（closing_form 删除前仍由其写入）。"""
-    pytest.importorskip("torch")
-    pytest.importorskip("llama_index")
-    from app.adapters.closing_form import embedding as closing_form_embedding
-
-    captured: dict = {}
-
-    class FakeVectorStoreManager:
-        def __init__(self, db_config=None, **kwargs):
-            captured["init_kwargs"] = kwargs
-
-        def upsert_chunks(self, chunks, collection_name, embedding_model):
-            captured["collection_name"] = collection_name
-            captured["chunks"] = chunks
-
-    # closing_form.embedding 通过 from-import 持有名字绑定，必须 patch 其自身命名空间
-    monkeypatch.setattr(closing_form_embedding, "VectorStoreManager", FakeVectorStoreManager)
-    monkeypatch.setattr(closing_form_embedding, "BGEM3EmbeddingWrapper", lambda: object())
-
-    closing_form_embedding.ClosingFormEmbeddingAdapter().upsert_approved_form(
-        text="表单文本",
-        uploader="alice",
-        upload_time="2026-01-01 00:00:00",
-    )
-    assert captured["collection_name"] == "doc_collection_1"

@@ -64,7 +64,6 @@ class UpdatePagePermissionsCommand:
     """Command to update a user's page visibility permissions."""
 
     target_user_id: str
-    view_closing_form: bool
     view_quotation: bool
     current_user_id: str
 

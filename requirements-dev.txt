@@ -1,0 +1,14 @@
+# 开发 / 测试工具（部署环境不需要这些）。
+#
+# 用法：
+#   bash scripts/setup_local_env.sh            # 会自动连同本文件一起装
+#   uv pip install -r requirements-dev.txt     # 或手动装
+#
+# 版本与 .gitlab-ci.yml 的 pytest job 保持一致（CI 那边也是单独装这几个包，
+# 不走 requirements.txt）。
+pytest==9.1.1
+pytest-asyncio==1.4.0
+# pytest 自己的传递依赖（packaging/pygments 已在 requirements.txt 里）。
+# 显式列出是为了让 `uv pip sync`（精确同步、不展开依赖）不会把它们误删。
+iniconfig==2.3.0
+pluggy==1.6.0

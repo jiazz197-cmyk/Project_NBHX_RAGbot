@@ -35,12 +35,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '报价生成', requiresPermission: 'view_quotation' },
   },
   {
-    path: '/closing-form',
-    name: 'closing-form',
-    component: () => import('@/pages/PolicyGeneratePage.vue'),
-    meta: { title: '营业订单信息', requiresPermission: 'view_closing_form' },
-  },
-  {
     path: '/users',
     name: 'users',
     component: () => import('@/pages/UserManagePage.vue'),

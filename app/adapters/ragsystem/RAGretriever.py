@@ -1,10 +1,11 @@
 """PGVector + HTTP 嵌入/重排 API 的 RAG 检索；环境变量 BGE_M3_API_URL、RERANKER_API_URL。"""
 
+import asyncio
+import inspect
 import os
 import re
 import threading
 from typing import List, Dict, Optional
-from pathlib import Path
 import httpx
 
 from sqlalchemy import text
@@ -17,7 +18,7 @@ from app.adapters.doc_processing.embedding_store import BGEM3EmbeddingWrapper
 from pydantic import Field
 
 from llama_index.vector_stores.postgres import PGVectorStore
-from llama_index.core import VectorStoreIndex, StorageContext, load_index_from_storage
+from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
@@ -122,31 +123,34 @@ class HTTPReranker(BaseNodePostprocessor):
             logger.error(f"解析重排序响应失败: {e}，返回原始节点")
             return nodes[:self.top_n]
 
+    async def probe(self, timeout_sec: float = 5.0) -> None:
+        """单次最小请求探活重排接口；不重试、短超时，失败抛异常。
+
+        供启动阶段连通性检查使用：走一遍「发请求 → raise_for_status →
+        校验响应结构」链路，并要求返回含 results / rankings 之一，
+        确保地址、路径、模型服务三者都真实可用。
+        """
+        client = await get_http_client()
+        response = await client.post(
+            self.api_url,
+            json=self._rerank_payload("ping", ["ping"]),
+            timeout=timeout_sec,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not (isinstance(result, dict) and ("results" in result or "rankings" in result)):
+            raise ValueError(f"重排响应格式不符合预期: {str(result)[:200]}")
+
 
 class VectorStoreManager:
-    """PGVector 表 + 可选本地 persist 目录。"""
+    """PGVector 表管理（线程安全的 vector store 单例缓存）。"""
 
     def __init__(self, db_config: Dict, table_prefix: str = "doc_collection", async_engine=None):
         self.db_config = db_config
         self.table_prefix = table_prefix
-        self.persist_base_dir = Path("./index_storage")
         self.vector_stores: Dict[str, PGVectorStore] = {}
         self.async_engine = async_engine
         self._stores_lock = threading.Lock()
-
-    def get_persist_dir(self, instance_id: int) -> Path:
-        """index_storage 下按 collection 分子目录。"""
-        collection_name = f"{self.table_prefix}_{instance_id}"
-        persist_dir = self.persist_base_dir / f"index_storage_{collection_name}"
-        persist_dir.mkdir(parents=True, exist_ok=True)
-        return persist_dir
-
-    def check_persist_exists(self, persist_dir: Path) -> bool:
-        """需同时存在 docstore 与 index_store。"""
-        if not persist_dir.exists():
-            return False
-        required_files = ["docstore.json", "index_store.json"]
-        return all((persist_dir / file_name).exists() for file_name in required_files)
 
     def create_vector_store(self, instance_id: int) -> PGVectorStore:
         """线程安全的 PGVectorStore 单例缓存。"""
@@ -171,66 +175,6 @@ class VectorStoreManager:
 
             self.vector_stores[collection_name] = vector_store
             return vector_store
-
-    def create_index(self, instance_id: int, embed_model) -> VectorStoreIndex:
-        """有 persist 则 load，否则 from_vector_store。"""
-        vector_store = self.create_vector_store(instance_id)
-        persist_dir = self.get_persist_dir(instance_id)
-
-        try:
-            if self.check_persist_exists(persist_dir):
-                logger.debug(f"从持久化存储加载索引: 实例 {instance_id}")
-                storage_context = StorageContext.from_defaults(
-                    vector_store=vector_store,
-                    persist_dir=persist_dir
-                )
-                Settings.embed_model = embed_model
-                return load_index_from_storage(storage_context, embed_model=embed_model)
-            else:
-                logger.debug(f"创建新索引: 实例 {instance_id}")
-                storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                return VectorStoreIndex.from_vector_store(
-                    vector_store,
-                    storage_context=storage_context,
-                    embed_model=embed_model,
-                    show_progress=True
-                )
-        except Exception as e:
-            logger.warning(f"索引创建/加载失败，创建新索引: {e}")
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            return VectorStoreIndex.from_vector_store(
-                vector_store,
-                storage_context=storage_context,
-                embed_model=embed_model,
-                show_progress=True
-            )
-
-    def persist_index(self, index: VectorStoreIndex, instance_id: int):
-        """storage_context.persist。"""
-        persist_dir = self.get_persist_dir(instance_id)
-        try:
-            index.storage_context.persist(persist_dir=persist_dir)
-            logger.debug(f"索引已持久化: 实例 {instance_id} -> {persist_dir}")
-        except Exception as e:
-            logger.error(f"持久化失败: 实例 {instance_id}, 错误: {e}")
-            raise
-
-    def list_persisted_instances(self) -> List[int]:
-        """扫描 persist 目录名解析 instance_id。"""
-        persisted_instances = []
-        if not self.persist_base_dir.exists():
-            return persisted_instances
-
-        for item in self.persist_base_dir.iterdir():
-            if item.is_dir() and item.name.startswith(f"index_storage_{self.table_prefix}_"):
-                try:
-                    instance_id = int(item.name.split("_")[-1])
-                    if self.check_persist_exists(item):
-                        persisted_instances.append(instance_id)
-                except (ValueError, IndexError):
-                    continue
-
-        return sorted(persisted_instances)
 
     def list_available_collections_sync(self) -> List[str]:
         """information_schema 里 data_{prefix}_% 表（同步，供 worker/线程池）。"""
@@ -276,17 +220,42 @@ class VectorStoreManager:
             logger.error(f"获取向量存储表列表失败: {e}")
             return []
 
-    def close_all_vector_stores(self):
-        """Close cached PGVectorStore instances and clear cache."""
+    async def aclose_all_vector_stores(self) -> None:
+        """关闭缓存的 PGVectorStore 并清空缓存。
+
+        llama-index 的 ``PGVectorStore.close()`` 是**协程**（内部要 dispose 连接池），
+        必须 await，否则会静默不关闭并抛 "coroutine was never awaited" RuntimeWarning。
+        """
         with self._stores_lock:
-            for collection_name, vector_store in list(self.vector_stores.items()):
-                try:
-                    close_fn = getattr(vector_store, "close", None)
-                    if callable(close_fn):
-                        close_fn()
-                except Exception as e:
-                    logger.warning(f"关闭向量存储 {collection_name} 失败: {e}")
+            stores = list(self.vector_stores.items())
             self.vector_stores.clear()
+
+        for collection_name, vector_store in stores:
+            close_fn = getattr(vector_store, "close", None)
+            if not callable(close_fn):
+                continue
+            try:
+                result = close_fn()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"关闭向量存储 {collection_name} 失败: {e}")
+
+    def close_all_vector_stores(self) -> None:
+        """同步入口：无事件循环时转交 :meth:`aclose_all_vector_stores`。
+
+        若当前已在事件循环里（例如从 async 代码调用），这里不会阻塞等待，
+        只告警并跳过——请改用 ``await vector_store_manager.aclose_all_vector_stores()``。
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            run_async(self.aclose_all_vector_stores())
+            return
+        logger.warning(
+            "close_all_vector_stores() 在事件循环内被调用，已跳过关闭；"
+            "请改用 await vector_store_manager.aclose_all_vector_stores()"
+        )
 
     async def drop_vector_store(self, instance_id: int):
         """DROP TABLE IF EXISTS data_..."""
@@ -352,7 +321,7 @@ class RAGRetrieverSystem:
         """构造 BGEM3EmbeddingWrapper。"""
         try:
             embedding_model = BGEM3EmbeddingWrapper(api_url=self.bge_m3_api_url)
-            logger.debug(f"BGE-M3 API 连接初始化完成: {self.bge_m3_api_url}")
+            logger.debug(f"BGE-M3 API 配置完成（不校验连通性）: {self.bge_m3_api_url}")
             return embedding_model
         except Exception as e:
             logger.error(f"嵌入模型 API 初始化失败: {e}")
@@ -366,7 +335,7 @@ class RAGRetrieverSystem:
                 top_n=self.default_top_n,
                 timeout=30
             )
-            logger.debug(f"重排序器 API 连接初始化完成: {self.reranker_api_url}")
+            logger.debug(f"重排序器 API 配置完成（不校验连通性）: {self.reranker_api_url}")
             return reranker
         except Exception as e:
             logger.error(f"重排序器 API 初始化失败: {e}")
@@ -477,10 +446,36 @@ class RAGRetrieverSystem:
         """委托 VectorStoreManager。"""
         return await self.vector_store_manager.list_available_collections()
 
-    def list_persisted_collections(self) -> List[str]:
-        """persist 实例 id 转成表名前缀形式。"""
-        persisted_instances = self.vector_store_manager.list_persisted_instances()
-        return [f"{self.table_prefix}_{instance_id}" for instance_id in persisted_instances]
+    async def probe_services(self, timeout_sec: float = 5.0) -> List[Dict]:
+        """并发探活 BGE-M3 / Reranker 服务，返回逐服务的探活结果。
+
+        单次最小请求、短超时、不重试；任一服务失败只体现在返回值里
+        （ok=False + error），本方法自身不抛异常、不阻断启动——与
+        lifespan 里 Redis/MinIO 的降级约定一致。
+        """
+
+        async def _probe_one(name: str, api_url: str, probe_call) -> Dict:
+            try:
+                await probe_call()
+                return {"name": name, "ok": True, "api_url": api_url, "error": None}
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                logger.warning("%s 探活失败: %s (%s)", name, api_url, error)
+                return {"name": name, "ok": False, "api_url": api_url, "error": error}
+
+        async def _embedding_probe():
+            await self.embedding_model.probe(timeout_sec=timeout_sec)
+
+        async def _reranker_probe():
+            if self.reranker is None:
+                raise RuntimeError("重排序器未初始化")
+            await self.reranker.probe(timeout_sec=timeout_sec)
+
+        results = await asyncio.gather(
+            _probe_one("BGE-M3 嵌入服务", self.bge_m3_api_url, _embedding_probe),
+            _probe_one("Reranker 重排服务", self.reranker_api_url, _reranker_probe),
+        )
+        return list(results)
 
     def get_all_retrievers(self, embedding_model=None, top_k: int = None) -> Dict[str, any]:
         """枚举库表，去掉 data_ 前缀后逐个 get_retriever_for_collection。"""
@@ -518,7 +513,8 @@ class RAGRetrieverSystem:
                 logger.debug("开始清理RAG系统资源...")
 
             if hasattr(self, "vector_store_manager") and self.vector_store_manager:
-                self.vector_store_manager.close_all_vector_stores()
+                # PGVectorStore.close() 是协程，必须 await（否则连接池不会真正关闭）
+                await self.vector_store_manager.aclose_all_vector_stores()
                 if not silent:
                     logger.debug("PGVectorStore 缓存已清理")
 

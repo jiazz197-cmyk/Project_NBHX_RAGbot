@@ -74,7 +74,11 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
             with _EMBEDDING_LOCK:
                 _EMBEDDING_INSTANCES[cache_key] = self
 
-            logger.info("BGE-M3 远程接口初始化完成: %s (model=%s)", self.api_url, self.model_name)
+            logger.info(
+                "BGE-M3 远程接口配置完成（仅登记地址，不校验连通性）: %s (model=%s)",
+                self.api_url,
+                self.model_name,
+            )
         except Exception as exc:
             raise EmbeddingError(f"初始化 BGE-M3 远程接口失败: {exc}") from exc
 
@@ -233,6 +237,19 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
         except Exception as batch_exc:
             logger.warning("批量嵌入失败，回退逐条请求: %s", batch_exc)
             return [self._get_text_embedding(text) for text in texts]
+
+    async def probe(self, timeout_sec: float = 5.0) -> List[float]:
+        """单次最小请求探活远程接口；不重试、短超时，失败抛异常。
+
+        供启动阶段连通性检查使用：用一个极小 payload 真实走一遍
+        「发请求 → raise_for_status → 解析嵌入」链路，地址错误/服务未起
+        会在这里暴露，而不是推迟到首次 RAG 调用。
+        """
+        payload = {"model": self.model_name, "input": ["ping"]}
+        client = await get_http_client()
+        response = await client.post(self.api_url, json=payload, timeout=timeout_sec)
+        response.raise_for_status()
+        return self._parse_embedding(response.json())
 
     @classmethod
     def cleanup_all_instances(cls):

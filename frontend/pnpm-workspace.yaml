@@ -1,3 +1,10 @@
+# pnpm 11+ 读取本文件里的设置（pnpm ≤10 读 .npmrc，两处需保持一致）。
+# 相对路径以本文件所在目录（frontend/）为基准解析。
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# 依赖与缓存全部落在仓库目录内，不写 $HOME（见 CLAUDE.md「本地环境」）
+storeDir: .pnpm-store
+cacheDir: .pnpm-cache
+shamefullyHoist: true
