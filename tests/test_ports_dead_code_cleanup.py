@@ -10,21 +10,6 @@ import importlib
 import pytest
 
 
-class TestDeadPortsRemoved:
-    @pytest.mark.parametrize("name", ["OcrStructuredInfoPort", "KeywordPayloadMappingPort"])
-    def test_dead_port_absent_from_quotation(self, name):
-        import app.ports.outbound.quotation as mod
-        assert not hasattr(mod, name), f"{name} should have been removed"
-
-    def test_u8_result_by_type_csv_port_module_removed(self):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("app.ports.outbound.u8_result_by_type_csv")
-
-    def test_u8_result_by_type_csv_adapter_module_removed(self):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("app.adapters.quotation.u8_result_by_type_csv")
-
-
 class TestRetrieverPortNarrowed:
     def test_retriever_port_has_db_excel_no_query(self):
         from app.ports.outbound.retriever import RetrieverPort
@@ -44,14 +29,6 @@ class TestRetrieverPortNarrowed:
 
 
 class TestDeadDtosRemoved:
-    def test_stored_file_absent(self):
-        import app.ports.dto.quotation as mod
-        assert not hasattr(mod, "StoredFile"), "StoredFile should have been removed"
-
-    def test_quotation_task_snapshot_kept(self):
-        from app.ports.dto.quotation import QuotationTaskSnapshot
-        assert QuotationTaskSnapshot is not None
-
     def test_query_result_dto_absent(self):
         import app.ports.dto.sqlserver_queries as mod
         assert not hasattr(mod, "QueryResultDTO"), "QueryResultDTO should have been removed"

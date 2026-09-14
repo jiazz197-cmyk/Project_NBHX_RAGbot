@@ -185,7 +185,6 @@ async def update_user_page_permissions(
         dto = await uc.execute(UpdatePagePermissionsCommand(
             target_user_id=str(user_id),
             view_closing_form=body.view_closing_form,
-            view_quotation=body.view_quotation,
             current_user_id=current_user.id,
         ))
         return _dto_to_user_read(dto)

@@ -13,7 +13,6 @@ from app.api.v1 import (
     file_manager,
     image2url,
     pdf2image,
-    quotation_generation,
     retriever,
     sqlserver_queries,
     websocket_notifier,
@@ -39,7 +38,6 @@ def build_api_router() -> APIRouter:
     _mount(r, auth.router, p.AUTH, [t.AUTHENTICATION])
     _mount(r, example.router, p.EXAMPLE, [t.EXAMPLE])
     _mount(r, file_manager.router, p.FILES, [t.FILE_MANAGEMENT])
-    _mount(r, quotation_generation.router, p.QUOTATION, [t.QUOTATION_GENERATION])
 
     # Document processing + task WebSocket (canonical)
     _mount(

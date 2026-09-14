@@ -35,14 +35,6 @@ class TaskStatePort(Protocol):
         ...
 
 
-class TaskDispatchPort(Protocol):
-    def dispatch_owner_queue(self, owner_id: str) -> None:
-        ...
-
-    def dispatch_phase2(self, task_id: str, owner_id: str) -> None:
-        ...
-
-
 class TaskExecutionPort(Protocol):
     def set_task_owner(self, task_id: str, owner_id: str) -> None:
         ...

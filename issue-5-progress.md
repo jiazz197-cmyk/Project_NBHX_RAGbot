@@ -12,15 +12,15 @@
 
 | 块 | 内容 | 状态 |
 |----|------|------|
-| A | 删除报价生成（quotation 域） | ⬜ 未开始 |
-| B | 删除 SQLServer / U8 / PDM 查询 | ⬜ 未开始 |
-| C | main.py 生命周期 | ⬜ 未开始 |
-| D | 共享基础设施去报价化 | ⬜ 未开始 |
-| E | 配置 | ⬜ 未开始 |
+| A | 删除报价生成（quotation 域） | ✅ 完成（keyword 两文件延迟阶段3） |
+| B | 删除 SQLServer / U8 / PDM 查询 | ⬜ 未开始（阶段3） |
+| C | main.py 生命周期 | 🟡 部分（报价完成，SQLServer 阶段3） |
+| D | 共享基础设施去报价化 | ✅ 完成（报价部分） |
+| E | 配置 | 🟡 部分（报价完成，SQLServer 阶段3） |
 | F | 前端 | ✅ 完成 |
-| G | 测试 | 🟡 部分（删除完成，改写待阶段4） |
+| G | 测试 | 🟡 部分（删除+报价改写完成，SQLServer 阶段3） |
 | H | 网关 | ✅ 完成 |
-| I | 补充项（Issue 清单未覆盖的残留点） | ⬜ 未开始 |
+| I | 补充项（Issue 清单未覆盖的残留点） | 🟡 部分（view_quotation 完成，残留复查收尾） |
 | 验收 | 验收标准 | ⬜ 未开始 |
 
 ---
@@ -36,17 +36,17 @@
 
 ## A. 删除报价生成（quotation 域）
 
-- [ ] 删除 `app/api/v1/quotation_generation.py`
-- [ ] 删除整个 `app/adapters/quotation/`
-- [ ] 删除整个 `app/adapters/workers/quotation_generation/`
-- [ ] 删除 `app/adapters/workers/dispatch.py`（`QuotationDispatchAdapter` 专用）
-- [ ] 删除整个 `app/usecases/quotation/`
-- [ ] 删除 `app/models/orm/quotation_task.py`
-- [ ] 删除 `app/ports/dto/quotation.py`
-- [ ] 删除 `app/ports/dto/quotation_workbook.py`
-- [ ] 删除 `app/ports/outbound/quotation.py`
-- [ ] 删除 `app/ports/outbound/quotation_workbook.py`
-- [ ] 删除整个 `app/domain/quotation/`（entities、exceptions、partid_mapping、pdm_result、results、summary_selection、u8_grouping、value_objects、workbook、`__init__.py`、`keyword_mapping.py`、`keyword_normalizer.py`）
+- [x] 删除 `app/api/v1/quotation_generation.py`
+- [x] 删除整个 `app/adapters/quotation/`
+- [x] 删除整个 `app/adapters/workers/quotation_generation/`
+- [x] 删除 `app/adapters/workers/dispatch.py`（`QuotationDispatchAdapter` 专用）
+- [x] 删除整个 `app/usecases/quotation/`
+- [x] 删除 `app/models/orm/quotation_task.py`
+- [x] 删除 `app/ports/dto/quotation.py`
+- [x] 删除 `app/ports/dto/quotation_workbook.py`
+- [x] 删除 `app/ports/outbound/quotation.py`
+- [x] 删除 `app/ports/outbound/quotation_workbook.py`
+- [x] 删除 `app/domain/quotation/` 的 entities、exceptions、partid_mapping、pdm_result、results、summary_selection、u8_grouping、value_objects、workbook（⚠️ `__init__.py`、`keyword_mapping.py`、`keyword_normalizer.py` 因被 `sqlserver_queries.py` 依赖，**延迟到阶段3删除**）
 
 ## B. 删除 SQLServer / U8 / PDM 查询
 
@@ -64,33 +64,33 @@
 
 ## C. main.py 生命周期
 
-- [ ] 删除 `_startup_check_sqlserver_connectivity()` 及调用（含 `app.state.sqlserver_connectivity`）
-- [ ] 删除关闭流程中的 SQL Server 连接池清理（`close_shared_u8_pool`）与 pool snapshot 的 `sqlserver_u8` 段
-- [ ] 删除 `shutdown_sqlserver_query_executor` 引用
-- [ ] 删除 `_startup_resume_quotation_services()` 及调用
-- [ ] 删除 `set_quotation_dispatch_loop(...)` 注册与清理
-- [ ] 更新报价任务 retention 调度相关启动 / 关闭日志；`or_` import 若不再使用同步删除
+- [ ] 删除 `_startup_check_sqlserver_connectivity()` 及调用（含 `app.state.sqlserver_connectivity`）（阶段3）
+- [ ] 删除关闭流程中的 SQL Server 连接池清理（`close_shared_u8_pool`）与 pool snapshot 的 `sqlserver_u8` 段（阶段3）
+- [ ] 删除 `shutdown_sqlserver_query_executor` 引用（阶段3）
+- [x] 删除 `_startup_resume_quotation_services()` 及调用
+- [x] 删除 `set_quotation_dispatch_loop(...)` 注册与清理
+- [x] 更新报价任务 retention 调度相关启动 / 关闭日志（retention 已重命名为 MinIO reconcile 调度器）；`or_` import 已删除
 
 ## D. 共享基础设施去报价化（⚠️ 精准摘除，不伤及 OCR / 文档处理）
 
-- [ ] `app/core/task_owner_registry.py`：删除 `_QuotationOwnerLookup` 及 `QuotationTask` import，保留 doc / OCR 任务 owner 查找
-- [ ] `app/ports/contracts/tasking.py`：删除 `TaskDispatchPort`（仅报价使用），保留 `TaskStatePort`、`TaskExecutionPort`
-- [ ] `app/core/minio_reconcile.py`：删除 `QuotationTask`、`data_pending`、`quotation-results/` 相关注册与前缀；保留 `FileResource`、`temp/`、`images/`、`documents/`
-- [ ] `app/core/retention_scheduler.py`：删除报价任务留存逻辑，保留 / 重命名为 MinIO orphan reconcile 调度器
-- [ ] 删除 `app/core/quotation_task_cleanup.py`
-- [ ] `app/core/circuit_breaker.py`：清理报价相关注释
-- [ ] `app/core/storage.py`：清理报价相关注释
-- [ ] `app/core/task_manager.py`：清理报价相关注释
-- [ ] `app/core/database.py`：删除 `QuotationTask` import、`quotation_tasks` 的 `owner_ip` / `display_name` / `awaiting_approval_at` 等迁移逻辑、RBAC 种子 `view_quotation`、`page_quotation`
+- [x] `app/core/task_owner_registry.py`：删除 `_QuotationOwnerLookup` 及 `QuotationTask` import，保留 doc / OCR 任务 owner 查找
+- [x] `app/ports/contracts/tasking.py`：删除 `TaskDispatchPort`（仅报价使用），保留 `TaskStatePort`、`TaskExecutionPort`
+- [x] `app/core/minio_reconcile.py`：删除 `QuotationTask` 及其字段注册，保留 `FileResource`、`temp/`、`images/`、`documents/`
+- [x] `app/core/retention_scheduler.py`：删除报价任务留存逻辑，重命名为 MinIO orphan reconcile 调度器
+- [x] 删除 `app/core/quotation_task_cleanup.py`
+- [x] `app/core/circuit_breaker.py`：清理报价相关注释
+- [x] `app/core/storage.py`：清理报价相关注释
+- [x] `app/core/task_manager.py`：清理报价相关注释
+- [x] `app/core/database.py`：删除 `QuotationTask` import、`quotation_tasks` 迁移逻辑、RBAC 种子 `view_quotation`、`page_quotation`
 
 ## E. 配置
 
-- [ ] `app/core/config.py` 删除：`QUOTATION_MAX_RUNNING_PER_OWNER`、`QUOTATION_MAX_RUNNING_PER_IP`、`QUOTATION_RETENTION_MAX_TOTAL`、`QUOTATION_RETENTION_TARGET`、`QUOTATION_RETENTION_INTERVAL_SEC`、`QUOTATION_AWAITING_APPROVAL_TTL_HOURS`、`QUOTATION_RUNNING_TIMEOUT_SEC`、`U8_SQLSERVER_*`、`PDM_SQLSERVER_*`、`SQLSERVER_QUERY_*`、`U8_BOM_*`（含 `U8_BOM_MAX_CONCURRENT_TASKS ≤ EXECUTOR_MAX_WORKERS` 校验器）
-- [ ] `app/core/logging.py`：删除 quotation / sqlserver 相关日志文件与 logger route
-- [ ] `app/api/v1/registry.py`：移除 `quotation_generation`、`sqlserver_queries` import 与 mount
-- [ ] `app/api/v1/prefixes.py`：删除 `QUOTATION`、`SQLSERVER`
-- [ ] `app/api/v1/tags.py`：删除 `QUOTATION_GENERATION`、`SQLSERVER_QUERY` 常量与 tag 元数据
-- [ ] `.env.example`：删除报价运行时配置（原 176-183 行）与其他报价 / U8 / PDM / SQLSERVER 专属配置；保留 `MINIO_RECONCILE_*`
+- [x] `app/core/config.py` 删除报价配置：`QUOTATION_MAX_RUNNING_PER_OWNER`、`QUOTATION_MAX_RUNNING_PER_IP`、`QUOTATION_RETENTION_MAX_TOTAL`、`QUOTATION_RETENTION_TARGET`、`QUOTATION_RETENTION_INTERVAL_SEC`、`QUOTATION_AWAITING_APPROVAL_TTL_HOURS`、`QUOTATION_RUNNING_TIMEOUT_SEC`（`U8_SQLSERVER_*`、`PDM_SQLSERVER_*`、`SQLSERVER_QUERY_*`、`U8_BOM_*` 及校验器为阶段3）
+- [x] `app/core/logging.py`：删除 quotation 日志文件与 logger route（sqlserver 无独立 route）
+- [x] `app/api/v1/registry.py`：移除 `quotation_generation` import 与 mount（`sqlserver_queries` 为阶段3）
+- [x] `app/api/v1/prefixes.py`：删除 `QUOTATION`（`SQLSERVER` 为阶段3）
+- [x] `app/api/v1/tags.py`：删除 `QUOTATION_GENERATION` 常量与 tag 元数据（`SQLSERVER_QUERY` 为阶段3）
+- [x] `.env.example`：删除报价运行时配置（原 176-183 行）（U8 / PDM / SQLSERVER 配置为阶段3）
 
 ## F. 前端
 
@@ -125,9 +125,9 @@
 
 改写：
 
-- [ ] `tests/test_dead_code_cleanup.py`：删除 quotation / sqlserver 域断言
-- [ ] `tests/test_ports_dead_code_cleanup.py`：删除 quotation / sqlserver port 断言
-- [ ] `tests/test_rate_limit_role_tier.py`：将 `/quotation/tasks` 样例路径换成保留端点
+- [x] `tests/test_dead_code_cleanup.py`：删除 quotation 域断言（sqlserver 断言阶段3）
+- [x] `tests/test_ports_dead_code_cleanup.py`：删除 quotation port 断言（sqlserver 断言阶段3）
+- [x] `tests/test_rate_limit_role_tier.py`：将 `/quotation/tasks` 样例路径换成 `/document-tasks`（`/sqlserver/query` 阶段3换）
 
 ## H. 网关
 
@@ -141,21 +141,21 @@
 
 > 验收标准要求 `view_quotation`、`page_quotation` 业务代码零命中，但 Issue 清单 F/E 块未覆盖以下后端 auth 域引用，必须一并清理。
 
-- [ ] `app/ports/dto/auth.py`：删除 `view_quotation: bool` 字段
-- [ ] `app/ports/outbound/auth.py`：删除 Port 签名中的 `view_quotation`
-- [ ] `app/usecases/auth/users.py`：删除 `cmd.view_quotation` 透传
-- [ ] `app/adapters/auth/user_repository.py`：删除 `page_quotation` 角色管理逻辑（⚠️ 与 `page_closing_form` 成对硬编码，勿误伤后者，后者属 Issue #4）
-- [ ] `app/adapters/web/platform/user.py`：删除 `view_quotation` 字段/默认值
-- [ ] `app/api/v1/auth.py`：删除 `view_quotation=body.view_quotation` 等用户更新入参
+- [x] `app/ports/dto/auth.py`：删除 `view_quotation: bool` 字段
+- [x] `app/ports/outbound/auth.py`：删除 Port 签名中的 `view_quotation`
+- [x] `app/usecases/auth/users.py`：删除 `cmd.view_quotation` 透传
+- [x] `app/adapters/auth/user_repository.py`：删除 `page_quotation` 角色管理逻辑（保留 `page_closing_form`）
+- [x] `app/adapters/web/platform/user.py`：删除 `view_quotation` 字段/默认值
+- [x] `app/api/v1/auth.py`：删除 `view_quotation=body.view_quotation` 等用户更新入参
 
 > 阶段 0 扫描补充发现（2026-09-14）：
 
 - [x] `scripts/check_layered_architecture.sh` 确认**无需修改**：8 条规则均为目录/import 正则，不 hardcode quotation / sqlserver 路径
-- [ ] `app/core/config.py` 额外点：`_validate_u8_bom_concurrency` 校验器（253-266 行）、secrets 列表中的 `PDM_SQLSERVER_PASSWORD`（447 行）、165-178 行 SQL Server 连接配置、182-219 行 U8_BOM + circuit breaker 配置
-- [ ] `main.py` 引用点约 10 处：74-94（connectivity check）、108-143（报价队列恢复）、194-196/254-262（连接池清理与 snapshot）、273/383（quotation_task_workers import）、330（check 调用）、419-420（shutdown_sqlserver_query_executor）
-- [ ] `app/api/v1/prefixes.py` 的 `QUOTATION` 常量、`app/api/v1/tags.py` 的 `QUOTATION_GENERATION` / `SQLSERVER_QUERY` 常量、`.env.example` 的报价运行时配置（`QUOTATION_*` 大写）为本次 grep 大小写未覆盖项，执行时用大写模式补扫确认
-- [ ] `app/core/circuit_breaker.py`（1/109 行注释）、`app/core/storage.py`（299 行注释）为注释清理
-- [ ] 与 Issue #4（closing_form）交叉点确认：`user_repository.py` 中 `page_closing_form` 与 `page_quotation` 成对硬编码（77/80/196/202/206 行），删 `page_quotation` 时须保留 `page_closing_form` 并简化三元表达式
+- [ ] `app/core/config.py` 额外点：`_validate_u8_bom_concurrency` 校验器、secrets 列表中的 `PDM_SQLSERVER_PASSWORD`、SQL Server 连接配置、U8_BOM + circuit breaker 配置（阶段3）
+- [ ] `main.py` 引用点：connectivity check、连接池清理与 snapshot、shutdown_sqlserver_query_executor（阶段3）；报价队列恢复、dispatch loop 已在阶段2删除
+- [ ] `app/api/v1/prefixes.py` 的 `SQLSERVER` 常量、`app/api/v1/tags.py` 的 `SQLSERVER_QUERY` 常量、`.env.example` 的 U8/PDM/SQLSERVER 配置（阶段3；`QUOTATION` 常量、`QUOTATION_GENERATION` tag、报价配置已在阶段2删除）
+- [x] `app/core/circuit_breaker.py`、`app/core/storage.py` 注释清理（阶段2完成）
+- [x] 与 Issue #4（closing_form）交叉点处理：`user_repository.py` 中删除 `page_quotation`，保留 `page_closing_form`（阶段2完成）
 - [ ] 全量 grep 复查 7 符号业务代码零命中（收尾阶段执行）
 
 ---

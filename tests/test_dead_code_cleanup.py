@@ -171,36 +171,6 @@ class TestCoreUtilsCleanup:
 
 
 # ---------------------------------------------------------------------------
-# Domain: QuotationTaskEntity removed, QuotationTaskStatus kept,
-#         specification_mapping module removed
-# ---------------------------------------------------------------------------
-
-EXPECTED_STATUS_VALUES = [
-    "queued",
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-    "awaiting_approval",
-]
-
-
-class TestQuotationDomainCleanup:
-    def test_quotation_task_entity_removed(self):
-        import app.domain.quotation.entities as mod
-        assert not hasattr(mod, "QuotationTaskEntity")
-
-    def test_quotation_task_status_kept(self):
-        from app.domain.quotation.entities import QuotationTaskStatus
-        for val in EXPECTED_STATUS_VALUES:
-            assert QuotationTaskStatus(val).value == val
-
-    def test_specification_mapping_module_removed(self):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("app.domain.quotation.specification_mapping")
-
-
-# ---------------------------------------------------------------------------
 # ORM: deleted knowledge models absent from metadata & module;
 #      KnowledgeInstance kept and registered for create_all
 # ---------------------------------------------------------------------------

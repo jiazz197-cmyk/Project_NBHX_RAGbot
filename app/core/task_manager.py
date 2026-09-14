@@ -446,7 +446,7 @@ class TaskManager:
             return False
 
     async def update_status(self, task_id: str, status: str, message: str = "") -> bool:
-        """Update task status string (supports quotation-specific values)."""
+        """Update task status string."""
         try:
             task_status = await self.get_task_status(task_id)
             if not task_status:

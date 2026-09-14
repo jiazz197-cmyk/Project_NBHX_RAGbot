@@ -375,17 +375,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # Cap in-memory per-IP message counter entries to avoid unbounded growth
     WS_MAX_TRACKED_IPS_FOR_COUNTERS: int = Field(2000, ge=100, le=100000, env="WS_MAX_TRACKED_IPS_FOR_COUNTERS")
 
-    # Quotation queue runtime concurrency limits
-    QUOTATION_MAX_RUNNING_PER_OWNER: int = Field(2, ge=1, le=20, env="QUOTATION_MAX_RUNNING_PER_OWNER")
-    QUOTATION_MAX_RUNNING_PER_IP: int = Field(2, ge=1, le=20, env="QUOTATION_MAX_RUNNING_PER_IP")
-
-    QUOTATION_RETENTION_MAX_TOTAL: int = Field(100, ge=10, le=10000, env="QUOTATION_RETENTION_MAX_TOTAL")
-    QUOTATION_RETENTION_TARGET: int = Field(50, ge=1, le=5000, env="QUOTATION_RETENTION_TARGET")
-    QUOTATION_RETENTION_INTERVAL_SEC: int = Field(300, ge=60, le=86400, env="QUOTATION_RETENTION_INTERVAL_SEC")
-    QUOTATION_AWAITING_APPROVAL_TTL_HOURS: int = Field(24, ge=1, le=168, env="QUOTATION_AWAITING_APPROVAL_TTL_HOURS")
-    # Reclaim quotation tasks stuck in running longer than this (worker hang protection)
-    QUOTATION_RUNNING_TIMEOUT_SEC: int = Field(1800, ge=60, le=86400, env="QUOTATION_RUNNING_TIMEOUT_SEC")
-
     # task_owner_registry in-memory cache bounds (prevents unbounded growth)
     TASK_OWNER_CACHE_TTL_SEC: int = Field(86400, ge=60, le=604800, env="TASK_OWNER_CACHE_TTL_SEC")
     TASK_OWNER_CACHE_MAX: int = Field(5000, ge=100, le=100000, env="TASK_OWNER_CACHE_MAX")

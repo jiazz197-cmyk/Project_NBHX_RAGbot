@@ -3,7 +3,7 @@
 Provides failure isolation: when a backend (e.g. U8 BOM query) starts timing out
 (error 20003) or refusing connections, the breaker opens and fast-fails subsequent
 calls instead of queuing them on worker threads for the full 120s query timeout.
-This prevents cascading stalls across the quotation pipeline.
+This prevents cascading stalls across dependent workflows.
 
 Design:
 - States: CLOSED (normal) -> OPEN (fast-fail) -> HALF_OPEN (probe).

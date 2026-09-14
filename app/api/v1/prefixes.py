@@ -3,7 +3,6 @@
 AUTH = "/auth"
 EXAMPLE = "/example"
 FILES = "/files"
-QUOTATION = "/quotation"
 DOCUMENT_TASKS = "/document-tasks"
 DOCS_DEPRECATED = "/docs"
 OCR = "/ocr"

@@ -41,7 +41,6 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import or_
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.api.v1.registry import api_router
 from app.api.v1.tags import OPENAPI_TAG_METADATA
@@ -93,77 +92,6 @@ def _startup_check_sqlserver_connectivity(app: FastAPI) -> None:
     except Exception as e:
         app.state.sqlserver_connectivity = {}
         print(f"[warning] SQLServer 连通性检查失败: {e}")
-
-
-async def _startup_resume_quotation_services() -> None:
-    """
-    Recover quotation task queue after process restart.
-
-    - reset stale running tasks to queued
-    - dispatch queued tasks for each owner
-    """
-    try:
-        from sqlalchemy import select
-
-        from app.adapters.workers.quotation_generation.quotation_task_workers import (
-            dispatch_quotation_queue_for_owner,
-        )
-        from app.core.database import AsyncSessionLocal
-        from app.core.task_manager import task_manager
-        from app.models.orm.quotation_task import QuotationTask, QuotationTaskStatus
-
-        stale_task_ids: list[str] = []
-        owner_ids: list[str] = []
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(QuotationTask).where(
-                    QuotationTask.status == QuotationTaskStatus.running.value
-                )
-            )
-            stale_running_tasks = result.scalars().all()
-            for task in stale_running_tasks:
-                task.status = QuotationTaskStatus.queued.value
-                task.message = "服务重启后重新排队"
-                task.started_at = None
-                task.completed_at = None
-                task.error = None
-                task.progress = 0
-                task.awaiting_approval_at = None
-                stale_task_ids.append(task.task_id)
-
-            if stale_running_tasks:
-                await db.commit()
-                print(f"[info] 已重置 {len(stale_running_tasks)} 个中断中的报价任务为排队状态")
-
-            owner_result = await db.execute(
-                select(QuotationTask.owner_id)
-                .where(
-                    or_(
-                        QuotationTask.status == QuotationTaskStatus.queued.value,
-                        QuotationTask.status == QuotationTaskStatus.running.value,
-                    )
-                )
-                .distinct()
-            )
-            owner_rows = owner_result.all()
-            owner_ids = [str(row[0]).strip() for row in owner_rows if str(row[0]).strip()]
-
-        async def _sync_redis_status() -> None:
-            for task_id in stale_task_ids:
-                await task_manager.update_status(task_id, "queued", "服务重启后重新排队")
-
-        if stale_task_ids:
-            asyncio.get_running_loop().create_task(_sync_redis_status())
-
-        for owner_id in owner_ids:
-            dispatch_quotation_queue_for_owner(owner_id)
-
-        if owner_ids:
-            print(f"[success] 报价任务服务已恢复并调度，影响用户数: {len(owner_ids)}")
-        else:
-            print("[info] 报价任务服务启动完成，无待调度任务")
-    except Exception as e:
-        print(f"[warning] 报价任务服务启动失败: {e}")
 
 
 async def shutdown_all_pools() -> None:
@@ -268,16 +196,6 @@ def pool_snapshot() -> Dict[str, Dict[str, Any]]:
 async def lifespan(app: FastAPI):
     """启动时初始化依赖，关闭时按序释放。"""
     app.state.metrics = prometheus_metrics
-    main_loop = asyncio.get_running_loop()
-    try:
-        from app.adapters.workers.quotation_generation.quotation_task_workers import (
-            set_quotation_dispatch_loop,
-        )
-        set_quotation_dispatch_loop(main_loop)
-        logger.info("报价任务调度主事件循环已注册")
-    except Exception as e:
-        logger.warning("报价任务调度主事件循环注册失败: %s", e)
-    
     try:
         from app.core.database import init_db_tables
         await asyncio.to_thread(init_db_tables)
@@ -328,16 +246,15 @@ async def lifespan(app: FastAPI):
         print(f"[warning] 注册任务观察者失败: {e}")
 
     _startup_check_sqlserver_connectivity(app)
-    await _startup_resume_quotation_services()
 
     try:
-        from app.core.retention_scheduler import run_retention_once, start_retention_scheduler
+        from app.core.retention_scheduler import run_reconcile_once, start_reconcile_scheduler
 
-        await run_retention_once()
-        app.state.retention_task = start_retention_scheduler()
-        print("[success] 报价任务 retention 调度已启动")
+        await run_reconcile_once()
+        app.state.reconcile_task = start_reconcile_scheduler()
+        print("[success] MinIO reconcile 调度已启动")
     except Exception as e:
-        print(f"[warning] 报价任务 retention 调度启动失败: {e}")
+        print(f"[warning] MinIO reconcile 调度启动失败: {e}")
     
     try:
         await redis_manager.test_connection()
@@ -379,14 +296,6 @@ async def lifespan(app: FastAPI):
     import signal
 
     print("\n[shutdown] 开始关闭...")
-    try:
-        from app.adapters.workers.quotation_generation.quotation_task_workers import (
-            set_quotation_dispatch_loop,
-        )
-        set_quotation_dispatch_loop(None)
-    except Exception as e:
-        logger.warning("关闭报价任务调度循环失败: %s", e)
-    
     def force_exit(signum=None, frame=None):
         print("\n[warning] 关闭超时，强制退出")
         sys.exit(1)
@@ -432,11 +341,11 @@ async def lifespan(app: FastAPI):
             print(f"[warning] 清理观察者时出错: {e}")
         
         try:
-            from app.core.retention_scheduler import stop_retention_scheduler
-            await stop_retention_scheduler()
-            print("[success] 报价任务 retention 调度已停止")
+            from app.core.retention_scheduler import stop_reconcile_scheduler
+            await stop_reconcile_scheduler()
+            print("[success] MinIO reconcile 调度已停止")
         except Exception as e:
-            print(f"[warning] 停止 retention 调度时出错: {e}")
+            print(f"[warning] 停止 MinIO reconcile 调度时出错: {e}")
 
         try:
             from app.core.websocket_task_manager import ws_manager

@@ -135,13 +135,11 @@ class UpdateUserPagePermissionsUseCase:
         updated = await self._user_repo.update_page_permissions(
             cmd.target_user_id,
             cmd.view_closing_form,
-            cmd.view_quotation,
         )
         logger.info(
-            "User page permissions updated: %s (closing=%s, quotation=%s) by %s",
+            "User page permissions updated: %s (closing=%s) by %s",
             cmd.target_user_id,
             cmd.view_closing_form,
-            cmd.view_quotation,
             cmd.current_user_id,
         )
         return updated if isinstance(updated, UserDTO) else target

@@ -7,7 +7,6 @@ Tag = str
 AUTHENTICATION: Tag = "Authentication"
 EXAMPLE: Tag = "Example"
 FILE_MANAGEMENT: Tag = "File Management"
-QUOTATION_GENERATION: Tag = "Quotation Generation"
 DOCUMENT_PROCESSING: Tag = "Document Processing"
 IMAGE_PROCESSING: Tag = "Image Processing"
 PDF_PROCESSING: Tag = "PDF Processing"
@@ -31,10 +30,6 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": FILE_MANAGEMENT,
         "description": "File upload, download, and listing backed by MinIO and DB records.",
-    },
-    {
-        "name": QUOTATION_GENERATION,
-        "description": "Quotation tasks and file handling.",
     },
     {
         "name": DOCUMENT_PROCESSING,
