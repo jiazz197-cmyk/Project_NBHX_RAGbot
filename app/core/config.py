@@ -3,6 +3,7 @@ import os
 import secrets
 from pathlib import Path
 from typing import List, Optional, Union, Any
+from urllib.parse import quote
 import threading
 
 from pydantic import Field, validator, field_validator, model_validator, ValidationInfo
@@ -186,10 +187,10 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
-        """根据单项设置拼接数据库连接串。"""
+        """根据单项设置拼接数据库连接串（用户名/密码做 URL 编码，避免含 @ : / 等字符时解析错位）。"""
         return (
-            f"postgresql://{self.POSTGRES_USER}:"
-            f"{self.POSTGRES_PASSWORD}@"
+            f"postgresql://{quote(self.POSTGRES_USER, safe='')}:"
+            f"{quote(self.POSTGRES_PASSWORD, safe='')}@"
             f"{self.POSTGRES_SERVER}:"
             f"{self.POSTGRES_PORT}/"
             f"{self.POSTGRES_DB}"
@@ -197,10 +198,10 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
 
     @property
     def ASYNC_SQLALCHEMY_DATABASE_URI(self) -> str:
-        """asyncpg 异步数据库连接串。"""
+        """asyncpg 异步数据库连接串（同样对用户名/密码做 URL 编码）。"""
         return (
-            f"postgresql+asyncpg://{self.POSTGRES_USER}:"
-            f"{self.POSTGRES_PASSWORD}@"
+            f"postgresql+asyncpg://{quote(self.POSTGRES_USER, safe='')}:"
+            f"{quote(self.POSTGRES_PASSWORD, safe='')}@"
             f"{self.POSTGRES_SERVER}:"
             f"{self.POSTGRES_PORT}/"
             f"{self.POSTGRES_DB}"
@@ -219,7 +220,9 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
 
     @property
     def REDIS_URL(self) -> str:
-        auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
+        """⚠️ 密码必须 URL 编码：含 `/`（如 base64 口令）会让 urllib 把后半段当端口，
+        redis.from_url 直接抛 ValueError('Port could not be cast to integer value')。"""
+        auth = f":{quote(self.REDIS_PASSWORD, safe='')}@" if self.REDIS_PASSWORD else ""
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     # This process connects to MinIO for put_object / bucket (use loopback or published port when API is on the host).
@@ -234,7 +237,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # Set so minio-py does not call GetBucketLocation on presign; MinIO S3 default is us-east-1
     MINIO_REGION: str = Field("us-east-1", env="MINIO_REGION")
     MINIO_BUCKET_NAME: str = Field("yamatodev", env="MINIO_BUCKET_NAME")
-    CLOSING_FORM_IMAGE_PREFIX: str = Field("form_pic", env="CLOSING_FORM_IMAGE_PREFIX")
     # Presigned GetObject for OCR / temp files (replaces bucket-wide anonymous read by default)
     MINIO_PRESIGN_EXPIRES_HOURS: int = Field(12, ge=1, le=168, env="MINIO_PRESIGN_EXPIRES_HOURS")
     # Override TLS for presign only (e.g. internal MINIO_ON https but public http). None = infer from URL or MINIO_SECURE

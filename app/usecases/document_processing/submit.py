@@ -17,7 +17,7 @@ logger = get_logger("document_processing.uc")
 @dataclass
 class SubmitDocumentProcessingCommand:
     files: List[Any]
-    instance_id: int
+    collection: str
     chunk_size: int
     chunk_overlap: int
     normalized_uploader: str
@@ -48,7 +48,7 @@ class SubmitDocumentProcessingUseCase:
     async def execute(self, cmd: SubmitDocumentProcessingCommand) -> SubmitDocumentProcessingResult:
         if not cmd.files:
             raise ValidationError("至少需要上传一个文件")
-        logger.info("收到文档处理请求: %s 个文件, instance_id=%s", len(cmd.files), cmd.instance_id)
+        logger.info("收到文档处理请求: %s 个文件, collection=%s", len(cmd.files), cmd.collection)
         file_ids = await self._registration.register_uploaded_files(cmd.files, cmd.normalized_uploader)
         if not file_ids:
             raise ValidationError("没有成功上传任何文件")
@@ -56,7 +56,7 @@ class SubmitDocumentProcessingUseCase:
             task_type="doc_process",
             metadata={
                 "file_ids": file_ids,
-                "instance_id": cmd.instance_id,
+                "collection": cmd.collection,
                 "chunk_size": cmd.chunk_size,
                 "chunk_overlap": cmd.chunk_overlap,
                 "uploader": cmd.normalized_uploader,
@@ -69,7 +69,7 @@ class SubmitDocumentProcessingUseCase:
         self._worker.submit_process_documents(
             task_id,
             file_ids,
-            cmd.instance_id,
+            cmd.collection,
             cmd.chunk_size,
             cmd.chunk_overlap,
         )

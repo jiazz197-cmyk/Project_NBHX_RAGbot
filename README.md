@@ -144,7 +144,7 @@ Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定�
 
 ### 对话编排（Dify + 本服务分工）
 
-流量在 Nginx 层按路径拆分（见 [`nginx/nginx.conf.template`](nginx/nginx.conf.template)）：已知的业务前缀（`/auth`、`/closing-form`、`/quotation`、`/document-tasks`、`/retriever`、`/context-compression`、`/chat-summary` 等）反代到 FastAPI 后端；其余 `/api/v1/*` 兜底反代到 Dify（重写为 `/v1/*` 并注入 Dify App API Key），其中即包含 `/chat-messages`、`/conversations`、`/messages` 等对话端点。
+流量在 Nginx 层按路径拆分（见 [`nginx/nginx.conf.template`](nginx/nginx.conf.template)）：已知的业务前缀（`/auth`、`/knowledge`、`/quotation`、`/document-tasks`、`/retriever`、`/context-compression`、`/chat-summary` 等）反代到 FastAPI 后端；其余 `/api/v1/*` 兜底反代到 Dify（重写为 `/v1/*` 并注入 Dify App API Key），其中即包含 `/chat-messages`、`/conversations`、`/messages` 等对话端点。
 
 - **对话主链路**：Dify 负责 SSE 流式作答与工作流编排
 - **RAG 检索**：本服务 `app/adapters/ragsystem/`（BGE-M3 嵌入 + 重排序 + pgvector），经 `app/adapters/retriever.py` facade 暴露，供对话引用
@@ -179,7 +179,6 @@ Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定�
 | 注册页 | `/register` | 公开；新用户默认注册为普通用户 |
 | AI 对话页 | `/chat` | 需登录；侧边栏含知识库文档上传入口 |
 | 报价生成页 | `/files` | 需登录且拥有 `view_quotation` 页面权限；admin / superuser 默认可访问 |
-| 营业订单信息页 | `/closing-form` | 需登录且拥有 `view_closing_form` 页面权限；admin / superuser 默认可访问 |
 | 知识库管理页 | `/collection2` | 需登录且角色为 **admin** 或 **superuser** |
 | 用户管理页 | `/users` | 需登录且角色为 **superuser**；可管理用户角色与页面权限 |
 
@@ -197,7 +196,7 @@ Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定�
 - **MinIO**（对象存储；报价任务 PDF/临时图/结果 xlsx 等依赖桶配置，见 `.env.example`）
 - **SQL Server**（**U8** 与 **PDM** 库；报价流水线与启动时的连通性检查，见 `.env.example`）
 - **Dify**（对话编排；Nginx 兜底反代目标，需配置 Dify App API Key，见 [`nginx/README.md`](nginx/README.md)）
-- Node.js 18+；**pnpm 8.x**（与 [`frontend/package.json`](frontend/package.json) 中 `packageManager` 一致）
+- Node.js 18+；**pnpm 8.15.9**（[`frontend/package.json`](frontend/package.json) 的 `packageManager` 已锁定，直接用 `corepack pnpm` 即可）
 
 ### 后端启动
 
@@ -206,12 +205,11 @@ Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定�
 git clone <your-repo-url>
 cd project-yamato-shanghai
 
-# 2. 创建 Python 环境
-conda create -n yamato python=3.12
-conda activate yamato
+# 2. 安装后端依赖（依赖与缓存全部落在仓库内：./.venv 与 ./.cache，见 CLAUDE.md「本地环境」）
+bash scripts/setup_local_env.sh
 
-# 3. 安装依赖
-pip install -r requirements.txt
+# 3. 激活环境（每个新 shell 都要 source 一次：激活 .venv 并把缓存指向 ./.cache）
+source scripts/env.sh
 
 # 4. 配置环境变量
 cp .env.example .env
@@ -224,21 +222,25 @@ cp .env.example .env
 python main.py          # http://localhost:8000，文档 /api/v1/docs
 ```
 
+> `requirements.txt` 里的 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` 不在 PyPI 上，需带 torch/paddle 官方索引；`scripts/setup_local_env.sh` 已处理索引源、依赖冲突与 `nvidia-nccl` 互斥（详见 [CLAUDE.md](CLAUDE.md) 的「本地环境」）。手动装时请照抄脚本里的参数。
+>
+> **RAG 依赖已拆分**：LangChain / LlamaIndex 那一套在 [`requirements-rag.txt`](requirements-rag.txt)，随「RAG 独立容器」部署（对外只暴露 HTTP 接口），主清单不再包含。仓库里的 RAG 代码尚未搬走，过渡期本地跑完整应用请用 `bash scripts/setup_local_env.sh --with-rag`。
+
 ### 前端启动
 
-前端使用 **pnpm workspace** 与 **Turbo**（`pnpm dev` 等价于 `turbo run dev`）。建议使用与仓库一致的 **pnpm 8.x**（见 [`frontend/package.json`](frontend/package.json) 中 `packageManager`），以减少安装与脚本行为差异。
+前端使用 **pnpm workspace** 与 **Turbo**（`pnpm dev` 等价于 `turbo run dev`）。仓库在 [`frontend/package.json`](frontend/package.json) 锁定 `pnpm@8.15.9`，用 `corepack pnpm` 即可自动匹配版本；不要用 pnpm 10/12（会把 `pnpm-lock.yaml` 从 v6 升到 v9）。
 
 ```bash
 cd frontend
 
-# 安装依赖
-pnpm install
+# 安装依赖（pnpm store / cache 落在仓库内：frontend/.pnpm-store、frontend/.pnpm-cache）
+corepack pnpm install --frozen-lockfile
 
 # 配置前端环境变量
 cp apps/chat/env.example apps/chat/.env
 
 # 启动开发服务器
-pnpm dev
+corepack pnpm dev
 ```
 
 ---
@@ -260,7 +262,6 @@ pnpm dev
 |------|------|------|
 | 认证与用户 | `/api/v1/auth` | 登录、注册、当前用户、superuser 用户/权限管理 |
 | 报价生成 | `/api/v1/quotation` | PDF 报价任务、PDM 审核、U8 查询、直接 U8 查询、结果下载 |
-| 营业订单信息 | `/api/v1/closing-form` | 表单提交、列表、审批、退回修改、图片上传与知识库记录管理 |
 | 文档任务 | `/api/v1/document-tasks` | 知识库文档处理任务与 WebSocket 进度推送 |
 | RAG 检索 | `/api/v1/retriever` | 本地知识库检索（供对话引用） |
 | 上下文压缩 | `/api/v1/context-compression` | 长对话上下文压缩 |
@@ -269,7 +270,7 @@ pnpm dev
 
 > 对话类端点（`/chat-messages`、`/conversations`、`/messages`）由 Dify 提供，经 Nginx 兜底反代，不在本服务路由表中。
 
-报价相关 OpenAPI 标签为 **Quotation Generation**（实现见 `app/api/v1/quotation_generation.py`）。营业订单信息接口实现见 `app/api/v1/closing_form.py`。
+报价相关 OpenAPI 标签为 **Quotation Generation**（实现见 `app/api/v1/quotation_generation.py`）。
 
 ---
 
@@ -279,10 +280,10 @@ pnpm dev
 |------|------|
 | [`main.py`](main.py) | FastAPI 入口、生命周期（报价队列恢复、SQL Server 连通性检查、依赖降级初始化） |
 | [`app/api/v1/`](app/api/v1/) | 路由层（组合根）；`registry.py` 扁平装配各业务 router，`prefixes.py` 集中前缀 |
-| [`app/usecases/`](app/usecases/) | 业务用例编排（auth、quotation、closing_form、chat_summary、context_compression、document_processing 等） |
+| [`app/usecases/`](app/usecases/) | 业务用例编排（auth、quotation、knowledge、chat_summary、context_compression、document_processing 等） |
 | [`app/ports/`](app/ports/) | `Protocol` 契约（`contracts/`、`outbound/`）+ 纯 DTO（`dto/`） |
-| [`app/adapters/`](app/adapters/) | Port 实现，桥接 ORM / 集成 / 配置；driving（`web/`、`workers/`）与 driven（`quotation`、`ocr`、`sqlserver`、`doc_processing`、`closing_form`、`auth`、`pdm_matcher`、`chat_archive`、`ragsystem`、`monitoring`）同层组织 |
-| [`app/domain/`](app/domain/) | 无 IO 纯函数（quotation 关键词映射 / PDM 结果 / U8 分组 / workbook、closing_form 格式化、file_manager 命名等）与共享异常 |
+| [`app/adapters/`](app/adapters/) | Port 实现，桥接 ORM / 集成 / 配置；driving（`web/`、`workers/`）与 driven（`quotation`、`ocr`、`sqlserver`、`doc_processing`、`knowledge`、`auth`、`pdm_matcher`、`chat_archive`、`ragsystem`、`monitoring`）同层组织 |
+| [`app/domain/`](app/domain/) | 无 IO 纯函数（quotation 关键词映射 / PDM 结果 / U8 分组 / workbook、knowledge、file_manager 命名等）与共享异常 |
 | [`app/models/orm/`](app/models/orm/) | SQLAlchemy ORM（对话、消息、报价任务等） |
 | [`app/core/`](app/core/) | 配置、任务管理器、执行器、WS、中间件、安全、仓储（外层工具岛） |
 | [`nginx/`](nginx/) | Nginx 流量拆分模板（业务前缀 → 后端，兜底 → Dify） |
@@ -298,7 +299,7 @@ pnpm dev
 ### v0.2.3（2026-06）
 
 - **营业订单信息**：同步当前页面名称、普通用户页面权限、admin / superuser 审批流程与待修改重新提交机制
-- **权限控制**：补充 `view_quotation`、`view_closing_form` 页面权限与侧边栏可见性说明
+- **权限控制**：补充 `view_quotation` 页面权限与侧边栏可见性说明
 - **API 文档**：补充认证、报价、营业订单、文档任务与 OCR 的常用接口前缀
 
 ### v0.2.2（2026-04）
@@ -309,7 +310,7 @@ pnpm dev
 
 ### v0.2.1（2026-04）
 
-- 文档：同步前端路由（含 `/closing-form`、注册与用户/知识库管理页及权限说明）、Monorepo（pnpm + Turbo）与 `env.example` 说明
+- 文档：同步前端路由（注册与用户/知识库管理页及权限说明）、Monorepo（pnpm + Turbo）与 `env.example` 说明
 
 ### v0.2.0（2026-03）
 

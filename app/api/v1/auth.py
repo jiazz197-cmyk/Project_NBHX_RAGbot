@@ -15,14 +15,12 @@ from app.ports.dto.auth import (
     LoginCommand,
     RegisterCommand,
     ResetUserPasswordCommand,
-    UpdatePagePermissionsCommand,
     UpdateUserRoleCommand,
     UserDTO,
 )
 from app.adapters.web.platform.token import TokenResponse
 from app.adapters.web.platform.user import (
     UserLogin,
-    UserPagePermissionsUpdate,
     UserPasswordReset,
     UserRead,
     UserRoleUpdate,
@@ -35,7 +33,6 @@ from app.usecases.auth.users import (
     GetUserUseCase,
     ListUsersUseCase,
     ResetUserPasswordUseCase,
-    UpdateUserPagePermissionsUseCase,
     UpdateUserRoleUseCase,
 )
 
@@ -168,28 +165,6 @@ async def update_user_role(
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
 
-
-@router.patch(
-    "/users/{user_id}/page-permissions",
-    response_model=UserRead,
-    summary="修改用户页面可见权限（仅 superuser）",
-)
-async def update_user_page_permissions(
-    user_id: uuid.UUID,
-    body: UserPagePermissionsUpdate,
-    current_user: CurrentUserPort = Depends(require_roles(ROLE_SUPERUSER)),
-):
-    """控制普通用户可查看的页面。"""
-    try:
-        uc = UpdateUserPagePermissionsUseCase(_user_repo)
-        dto = await uc.execute(UpdatePagePermissionsCommand(
-            target_user_id=str(user_id),
-            view_closing_form=body.view_closing_form,
-            current_user_id=current_user.id,
-        ))
-        return _dto_to_user_read(dto)
-    except NotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
 
 @router.post(
     "/users/{user_id}/password-reset",

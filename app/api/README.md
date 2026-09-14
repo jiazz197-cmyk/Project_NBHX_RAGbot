@@ -20,7 +20,6 @@
 | OCR (image upload + PDF to image) | `/ocr` | Replaces split `/image2url` and `/pdf2image` for new clients |
 | RAG retriever | `/retriever` | |
 | Chat summary | `/chat-summary` | |
-| Closing form | `/closing-form` | |
 | Context compression | `/context-compression` | |
 | SQL Server | `/sqlserver` | |
 

@@ -12,7 +12,7 @@ IMAGE_PROCESSING: Tag = "Image Processing"
 PDF_PROCESSING: Tag = "PDF Processing"
 RETRIEVER: Tag = "Retriever"
 CHAT_SUMMARY: Tag = "Chat Summary"
-CLOSING_FORM: Tag = "Closing Form"
+KNOWLEDGE: Tag = "Knowledge"
 CONTEXT_COMPRESSION: Tag = "Context Compression"
 OCR: Tag = "OCR"
 
@@ -55,8 +55,8 @@ OPENAPI_TAG_METADATA: list[dict] = [
         "description": "Chat summary storage and read APIs.",
     },
     {
-        "name": CLOSING_FORM,
-        "description": "Smart scale order form submission and approval.",
+        "name": KNOWLEDGE,
+        "description": "Knowledge base (knowledge_chunks) record listing and deletion.",
     },
     {
         "name": CONTEXT_COMPRESSION,

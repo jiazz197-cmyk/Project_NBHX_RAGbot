@@ -89,9 +89,8 @@ async def check_db_connection_async() -> bool:
 
 
 def init_db_tables():
-    """create_all；并尝试给 data_pending 补 status 列；最后写种子 superuser。"""
+    """create_all；并尝试补齐历史表的缺列；最后写种子 superuser。"""
     try:
-        from app.models.orm.closing_form import PendingForm  # noqa: F401
         from app.models.orm.file_resource import FileResource  # noqa: F401
         from app.models.orm.knowledge import KnowledgeInstance  # noqa: F401
         from app.models.orm.platform import (  # noqa: F401
@@ -103,56 +102,6 @@ def init_db_tables():
 
         Base.metadata.create_all(bind=engine)
 
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(
-                    "SELECT column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_name='data_pending' AND column_name='status'"
-                )).fetchone()
-
-                if not result:
-                    logger.info("[info] 发现 data_pending 表缺少 status 列，正在添加...")
-                    conn.execute(text(
-                        "ALTER TABLE data_pending ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'pending'"
-                    ))
-                    conn.commit()
-                    logger.info("[success] 成功向 data_pending 表添加 status 列")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending 表迁移失败（如果表还未创建可忽略此错误）: {mig_e}")
-
-        try:
-            with engine.connect() as conn:
-                for col in ("image_url_1", "image_url_2"):
-                    result = conn.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='data_pending' AND column_name=:col"
-                    ), {"col": col}).fetchone()
-                    if not result:
-                        logger.info(f"[info] 发现 data_pending 表缺少 {col} 列，正在添加...")
-                        conn.execute(text(
-                            f"ALTER TABLE data_pending ADD COLUMN {col} VARCHAR(512)"
-                        ))
-                        conn.commit()
-                        logger.info(f"[success] 成功向 data_pending 表添加 {col} 列")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending image_url 列迁移失败: {mig_e}")
-
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(
-                    "SELECT COUNT(*) FROM data_pending WHERE status = 'rejected'"
-                )).scalar()
-                if result and int(result) > 0:
-                    logger.info("[info] 发现 data_pending 表存在 rejected 状态记录，正在迁移为 pending_revision...")
-                    conn.execute(text(
-                        "UPDATE data_pending SET status = 'pending_revision' WHERE status = 'rejected'"
-                    ))
-                    conn.commit()
-                    logger.info("[success] 成功将 rejected 记录迁移为 pending_revision")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending rejected→pending_revision 迁移失败: {mig_e}")
-
         table_names = [table.name for table in Base.metadata.sorted_tables]
         logger.info(f"[success] 数据库表初始化完成，共 {len(table_names)} 个表: {', '.join(table_names)}")
 
@@ -160,80 +109,6 @@ def init_db_tables():
         logger.error(f"[error] 数据库表初始化失败: {e}", exc_info=True)
 
     _seed_superuser()
-    _seed_rbac_permissions()
-
-
-def _seed_rbac_permissions():
-    """Seed RBAC permissions/roles for page visibility and assign to existing regular users."""
-    try:
-        from app.models.orm.platform.user import User, UserRole
-        from app.models.orm.platform.role import Role
-        from app.models.orm.platform.permission import Permission
-        from app.models.orm.platform.user_role import user_role_table
-        from app.models.orm.platform.role_permission import role_permission_table
-
-        db = SessionLocal()
-        try:
-            perms_spec = [
-                ("view_closing_form", "查看营业订单信息页面"),
-            ]
-            perm_ids = {}
-            for name, desc in perms_spec:
-                p = db.query(Permission).filter(Permission.name == name).first()
-                if not p:
-                    p = Permission(name=name, description=desc)
-                    db.add(p)
-                    db.flush()
-                perm_ids[name] = p.id
-
-            roles_spec = [
-                ("page_closing_form", "可查看营业订单信息", "view_closing_form"),
-            ]
-            role_ids = {}
-            for rname, rdesc, perm_name in roles_spec:
-                r = db.query(Role).filter(Role.name == rname).first()
-                if not r:
-                    r = Role(name=rname, description=rdesc)
-                    db.add(r)
-                    db.flush()
-                role_ids[rname] = r.id
-                exists_rp = db.execute(
-                    role_permission_table.select().where(
-                        (role_permission_table.c.role_id == r.id)
-                        & (role_permission_table.c.permission_id == perm_ids[perm_name])
-                    )
-                ).fetchone()
-                if not exists_rp:
-                    db.execute(
-                        role_permission_table.insert().values(
-                            role_id=r.id, permission_id=perm_ids[perm_name]
-                        )
-                    )
-
-            existing_assignment = db.execute(
-                user_role_table.select().where(
-                    user_role_table.c.role_id.in_(list(role_ids.values()))
-                ).limit(1)
-            ).fetchone()
-            if not existing_assignment:
-                regular_users = db.query(User).filter(User.role == UserRole.user).all()
-                for u in regular_users:
-                    for rname in role_ids:
-                        db.execute(
-                            user_role_table.insert().values(
-                                user_id=u.id, role_id=role_ids[rname]
-                            )
-                        )
-
-            db.commit()
-            logger.info("[success] RBAC 权限种子写入完成")
-        except Exception as inner_e:
-            db.rollback()
-            logger.error(f"[error] RBAC 权限种子写入失败: {inner_e}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"[error] RBAC 权限种子写入失败: {e}", exc_info=True)
 
 
 def _seed_superuser():

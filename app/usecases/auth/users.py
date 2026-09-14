@@ -7,7 +7,6 @@ from app.core.logging import get_logger
 from app.ports.contracts.identity import CurrentUserPort
 from app.ports.outbound.auth import PasswordHasherPort, UserRepositoryPort
 from app.ports.dto.auth import (
-    UpdatePagePermissionsCommand,
     UpdateUserRoleCommand,
     ResetUserPasswordCommand,
     UserDTO,
@@ -120,26 +119,3 @@ class ResetUserPasswordUseCase:
             cmd.current_user_name,
             cmd.current_user_id,
         )
-
-class UpdateUserPagePermissionsUseCase:
-    """Toggle page visibility permissions for a regular user (superuser-only)."""
-
-    def __init__(self, user_repo: UserRepositoryPort):
-        self._user_repo = user_repo
-
-    async def execute(self, cmd: UpdatePagePermissionsCommand) -> UserDTO:
-        target = await self._user_repo.get_by_id(cmd.target_user_id)
-        if not target:
-            raise NotFoundError("用户不存在")
-
-        updated = await self._user_repo.update_page_permissions(
-            cmd.target_user_id,
-            cmd.view_closing_form,
-        )
-        logger.info(
-            "User page permissions updated: %s (closing=%s) by %s",
-            cmd.target_user_id,
-            cmd.view_closing_form,
-            cmd.current_user_id,
-        )
-        return updated if isinstance(updated, UserDTO) else target

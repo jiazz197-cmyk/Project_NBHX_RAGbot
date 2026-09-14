@@ -32,9 +32,6 @@ FIX_USER_PASS="Smoke.5001"
 
 FIX_FILE_ID=""
 
-FIX_CLOSING_IMAGE_OBJECT=""
-FIX_CLOSING_FORM_ID=""
-FIX_CLOSING_CUSTOMER=""
 
 FIX_OCR_IMAGE_TASK_ID=""
 FIX_OCR_PDF_TASK_ID=""
@@ -271,123 +268,6 @@ test_file_manager() {
     fail "文件删除失败"
   fi
 }
-
-test_closing_form() {
-  section "6. Closing Form"
-
-  make_png "$WORKDIR/closing.png" >/dev/null
-
-  curl -sS -D "$WORKDIR/closing_image_upload.headers" \
-    -X POST "$BASE/closing-form/image/upload" \
-    -H "$AUTH" \
-    -F "image=@$WORKDIR/closing.png" \
-    -o "$WORKDIR/closing_image_upload.body"
-
-  cat "$WORKDIR/closing_image_upload.headers"
-  cat "$WORKDIR/closing_image_upload.body" | json_print
-
-  FIX_CLOSING_IMAGE_OBJECT="$(jq -r '.object_name // empty' "$WORKDIR/closing_image_upload.body")"
-  echo "FIX_CLOSING_IMAGE_OBJECT=$FIX_CLOSING_IMAGE_OBJECT"
-
-  if [ -z "$FIX_CLOSING_IMAGE_OBJECT" ] || [ "$FIX_CLOSING_IMAGE_OBJECT" = "null" ]; then
-    fail "Closing Form 图片上传未返回 object_name"
-    return
-  fi
-
-  curl -sS -D "$WORKDIR/closing_image_get.headers" \
-    "$BASE/closing-form/image/$FIX_CLOSING_IMAGE_OBJECT" \
-    -H "$AUTH" \
-    -o "$WORKDIR/closing_get.png"
-
-  cat "$WORKDIR/closing_image_get.headers"
-  file "$WORKDIR/closing_get.png" || true
-
-  FIX_CLOSING_CUSTOMER="FIX_REGRESS_CUSTOMER_$RUN_ID"
-
-  local submit_json
-  submit_json="$(cat <<EOF
-{
-  "date": "2026-06-02",
-  "closing_date": "2026-06-02",
-  "customer_name": "$FIX_CLOSING_CUSTOMER",
-  "product_type": "智能组合秤",
-  "model_spec": "FIX-MODEL-001",
-  "quantity": 1,
-  "price_excluding_tax": 1000,
-  "production_number": "FIX-PROD-$RUN_ID",
-  "material_name": "测试物料",
-  "weighing_spec": "10-100g",
-  "speed": 60,
-  "precision": "±0.1g",
-  "top_cone_type": "标准",
-  "linear_vibration_type": "标准",
-  "material_layer_ring": "无",
-  "feed_hopper": "标准",
-  "metering_hopper": "标准",
-  "memory_hopper": "标准",
-  "chute_angle": "标准",
-  "collection_hopper_type": "标准",
-  "scale_type": "10头",
-  "image_url_1": "$FIX_CLOSING_IMAGE_OBJECT",
-  "image_url_2": null
-}
-EOF
-)"
-
-  curl -sS -D "$WORKDIR/closing_submit.headers" \
-    -X POST "$BASE/closing-form/submit" \
-    -H "$AUTH" \
-    -H "Content-Type: application/json" \
-    -d "$submit_json" \
-    -o "$WORKDIR/closing_submit.body"
-
-  cat "$WORKDIR/closing_submit.headers"
-  cat "$WORKDIR/closing_submit.body" | json_print
-
-  curl -sS "$BASE/closing-form/list" -H "$AUTH" > "$WORKDIR/closing_list.body"
-
-  FIX_CLOSING_FORM_ID="$(jq -r --arg c "$FIX_CLOSING_CUSTOMER" '
-    .records[]? | select(.text | contains($c)) | .id
-  ' "$WORKDIR/closing_list.body" | head -n 1)"
-
-  echo "FIX_CLOSING_FORM_ID=$FIX_CLOSING_FORM_ID"
-
-  if [ -n "$FIX_CLOSING_FORM_ID" ]; then
-    pass "Closing Form 提交后列表可查到记录"
-  else
-    fail "Closing Form 列表未找到提交记录"
-    return
-  fi
-
-  curl -sS -D "$WORKDIR/closing_reject.headers" \
-    -X PATCH "$BASE/closing-form/reject/$FIX_CLOSING_FORM_ID" \
-    -H "$AUTH" \
-    -o "$WORKDIR/closing_reject.body"
-
-  cat "$WORKDIR/closing_reject.headers"
-  cat "$WORKDIR/closing_reject.body" | json_print
-
-  curl -sS -D "$WORKDIR/closing_delete_rejected.headers" \
-    -X DELETE "$BASE/closing-form/rejected/$FIX_CLOSING_FORM_ID" \
-    -H "$AUTH" \
-    -o "$WORKDIR/closing_delete_rejected.body"
-
-  cat "$WORKDIR/closing_delete_rejected.headers"
-  cat "$WORKDIR/closing_delete_rejected.body" | json_print
-
-  pass "Closing Form reject + delete rejected 已执行"
-
-  curl -sS -D "$WORKDIR/closing_image_delete.headers" \
-    -X DELETE "$BASE/closing-form/image?object_name=$FIX_CLOSING_IMAGE_OBJECT" \
-    -H "$AUTH" \
-    -o "$WORKDIR/closing_image_delete.body"
-
-  cat "$WORKDIR/closing_image_delete.headers"
-  cat "$WORKDIR/closing_image_delete.body" | json_print
-
-  pass "Closing Form 图片删除已执行"
-}
-
 poll_status() {
   local name="$1"
   local url="$2"
@@ -672,7 +552,7 @@ test_document_processing() {
   section "8. 文档处理"
 
   curl -sS -D "$WORKDIR/doc_submit.headers" \
-    -X POST "$BASE/document-tasks/process?instance_id=1&chunk_size=500&chunk_overlap=50&uploader=superuser" \
+    -X POST "$BASE/document-tasks/process?collection=knowledge_chunks&chunk_size=500&chunk_overlap=50&uploader=superuser" \
     -H "$AUTH" \
     -F "files=@$TEST_PDF" \
     -o "$WORKDIR/doc_submit.body"
@@ -805,7 +685,7 @@ test_rag() {
   section "10. RAG / Retriever"
 
   curl -sS -D "$WORKDIR/rag_db_1.headers" \
-    -X POST "$BASE/retriever/db?instance_id=1" \
+    -X POST "$BASE/retriever/db?collection=doc_collection_1" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"智能组合秤是什么？"}' \
@@ -815,7 +695,7 @@ test_rag() {
   cat "$WORKDIR/rag_db_1.body" | json_print
 
   curl -sS -D "$WORKDIR/rag_db_2.headers" \
-    -X POST "$BASE/retriever/db?instance_id=2" \
+    -X POST "$BASE/retriever/db?collection=knowledge_chunks" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"U8 API 如何调用？"}' \
@@ -825,7 +705,7 @@ test_rag() {
   cat "$WORKDIR/rag_db_2.body" | json_print
 
   curl -sS -D "$WORKDIR/rag_excel_1.headers" \
-    -X POST "$BASE/retriever/excel?instance_id=1" \
+    -X POST "$BASE/retriever/excel?collection=doc_collection_1" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"智能组合秤和重量分选秤有什么区别？"}' \
@@ -949,14 +829,6 @@ scan_error_logs() {
 cleanup() {
   section "14. 清理测试数据"
 
-  if [ -n "$FIX_CLOSING_FORM_ID" ]; then
-    curl -sS -X DELETE "$BASE/closing-form/rejected/$FIX_CLOSING_FORM_ID" -H "$AUTH" >/dev/null 2>&1 || true
-  fi
-
-  if [ -n "$FIX_CLOSING_IMAGE_OBJECT" ]; then
-    curl -sS -X DELETE "$BASE/closing-form/image?object_name=$FIX_CLOSING_IMAGE_OBJECT" -H "$AUTH" >/dev/null 2>&1 || true
-  fi
-
   if [ -n "$FIX_FILE_ID" ]; then
     curl -sS -X DELETE "$BASE/files/delete/$FIX_FILE_ID" -H "$AUTH" >/dev/null 2>&1 || true
   fi
@@ -1011,7 +883,6 @@ main() {
   test_auth_reject
   test_user_crud
   test_file_manager
-  test_closing_form
   test_ocr_pdf
   test_document_processing
   test_quotation

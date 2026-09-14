@@ -14,5 +14,5 @@
     "sass": "^1.97.3",
     "turbo": "^2.0.0"
   },
-  "packageManager": "pnpm@8.0.0"
+  "packageManager": "pnpm@8.15.9"
 }

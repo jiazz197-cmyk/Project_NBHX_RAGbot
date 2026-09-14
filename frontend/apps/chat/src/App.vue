@@ -16,10 +16,7 @@
         <RouterLink class="sidebar-nav__item" active-class="is-active" to="/chat">
           AI聊天
         </RouterLink>
-        <RouterLink v-if="showClosingForm" class="sidebar-nav__item" active-class="is-active" to="/closing-form">
-          营业订单信息
-        </RouterLink>
-        <RouterLink v-if="isAdminOrSuperuser" class="sidebar-nav__item" active-class="is-active" to="/collection2">
+        <RouterLink v-if="isAdminOrSuperuser" class="sidebar-nav__item" active-class="is-active" to="/knowledge">
           知识库管理
         </RouterLink>
         <RouterLink v-if="isSuperuser" class="sidebar-nav__item" active-class="is-active" to="/users">
@@ -64,7 +61,6 @@ import { readStored } from './services/storage'
 const sidebarUserId = ref('')
 const sidebarUserName = ref('')
 const userRole = ref('')
-const userPermissions = ref<string[]>([])
 
 const readSidebarState = () => {
   const parsed = readStored<{
@@ -73,28 +69,24 @@ const readSidebarState = () => {
     userName?: unknown
     username?: unknown
     role?: unknown
-    permissions?: unknown
   } | null>(config.settingsStorageKey, null)
 
   if (!parsed) {
     sidebarUserId.value = ''
     sidebarUserName.value = ''
     userRole.value = ''
-    userPermissions.value = []
     return
   }
 
   sidebarUserId.value = String(parsed.userId ?? '').trim()
   sidebarUserName.value = String(parsed.userName ?? parsed.user ?? parsed.username ?? '').trim()
   userRole.value = String(parsed.role ?? '').trim()
-  userPermissions.value = Array.isArray(parsed.permissions) ? parsed.permissions as string[] : []
 }
 
 const userName = computed(() => sidebarUserName.value || sidebarUserId.value || config.userName || '')
 const userAvatarUrl = computed(() => config.userAvatarUrl || '')
 const isSuperuser = computed(() => userRole.value === 'superuser')
 const isAdminOrSuperuser = computed(() => userRole.value === 'admin' || userRole.value === 'superuser')
-const showClosingForm = computed(() => isAdminOrSuperuser.value || userPermissions.value.includes('view_closing_form'))
 
 const route = useRoute()
 const router = useRouter()

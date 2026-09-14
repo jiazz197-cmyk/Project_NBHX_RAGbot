@@ -15,7 +15,7 @@ class DocumentProcessWorkerPort(Protocol):
         self,
         task_id: str,
         file_ids: List[int],
-        instance_id: int,
+        collection: str,
         chunk_size: int,
         chunk_overlap: int,
     ) -> None:

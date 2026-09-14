@@ -27,7 +27,6 @@
             <th class="user-table__th">姓名</th>
             <th class="user-table__th">邮箱</th>
             <th class="user-table__th">角色</th>
-            <th class="user-table__th">页面权限</th>
             <th class="user-table__th user-table__th--actions">操作</th>
           </tr>
         </thead>
@@ -40,26 +39,6 @@
               <span class="role-badge" :class="`role-badge--${user.role}`">
                 {{ roleLabel(user.role) }}
               </span>
-            </td>
-            <td class="user-table__td user-table__td--perms">
-              <template v-if="user.role === 'superuser'">
-                <span class="perm-label perm-label--static">—</span>
-              </template>
-              <template v-else-if="user.role === 'admin'">
-                <span class="perm-label perm-label--always">始终可见</span>
-              </template>
-              <template v-else>
-                <label class="perm-toggle">
-                  <span class="perm-toggle__label">营业订单</span>
-                  <input
-                    type="checkbox"
-                    class="perm-toggle__input"
-                    :checked="hasPerm(user, 'view_closing_form')"
-                    :disabled="permPending === user.id"
-                    @change="togglePerm(user)"
-                  />
-                </label>
-              </template>
             </td>
             <td class="user-table__td user-table__td--actions">
               <template v-if="user.role !== 'superuser'">
@@ -147,17 +126,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ConfirmDialog, useToast } from '@yamato/components'
-import { listUsers, deleteUser, updateUserRole, updateUserPagePermissions, resetUserPassword } from '../services/auth'
+import { listUsers, deleteUser, updateUserRole, resetUserPassword } from '../services/auth'
 import type { UserResponse } from '../services/auth'
-import { readStored, patchStored } from '../services/storage'
-import { config } from '../config'
 
 const { showSuccess, showError } = useToast()
 
 const users = ref<UserResponse[]>([])
 const loading = ref(false)
 const actionPending = ref<string | null>(null)
-const permPending = ref<string | null>(null)
 
 const showDeleteDialog = ref(false)
 const pendingDeleteUser = ref<UserResponse | null>(null)
@@ -244,34 +220,6 @@ const confirmResetPassword = async () => {
     showError(error?.message || '密码重置失败')
   } finally {
     actionPending.value = null
-  }
-}
-
-const hasPerm = (user: UserResponse, perm: string): boolean => {
-  return Array.isArray(user.permissions) && user.permissions.includes(perm)
-}
-
-const togglePerm = async (user: UserResponse) => {
-  if (permPending.value) return
-  permPending.value = user.id
-  const viewClosing = !hasPerm(user, 'view_closing_form')
-  try {
-    const updated = await updateUserPagePermissions(user.id, {
-      view_closing_form: viewClosing,
-    })
-    const idx = users.value.findIndex((u) => u.id === user.id)
-    if (idx !== -1) users.value[idx] = updated
-
-    const parsed = readStored<{ userId?: unknown }>(config.settingsStorageKey, {})
-    if (String(parsed.userId ?? '').trim() === user.id) {
-      patchStored(config.settingsStorageKey, { permissions: updated.permissions })
-    }
-
-    showSuccess(`已更新「${user.username}」的页面权限`)
-  } catch (error: any) {
-    showError(error?.message || '权限修改失败')
-  } finally {
-    permPending.value = null
   }
 }
 

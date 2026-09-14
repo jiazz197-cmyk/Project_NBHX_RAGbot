@@ -60,14 +60,6 @@ class UpdateUserRoleCommand:
 
 
 @dataclass
-class UpdatePagePermissionsCommand:
-    """Command to update a user's page visibility permissions."""
-
-    target_user_id: str
-    view_closing_form: bool
-    current_user_id: str
-
-@dataclass
 class ResetUserPasswordCommand:
     """Command for resetting a user's password."""
 
