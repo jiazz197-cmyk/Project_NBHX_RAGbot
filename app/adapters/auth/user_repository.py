@@ -73,20 +73,6 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
             db.add(user)
             await db.flush()
 
-            roles_result = await db.execute(
-                select(Role).filter(Role.name.in_(["page_quotation"]))
-            )
-            existing_roles = {r.name: r.id for r in roles_result.scalars().all()}
-            for rname in ("page_quotation",):
-                role_id = existing_roles.get(rname)
-                if role_id:
-                    from sqlalchemy.dialects.postgresql import insert as pg_insert
-                    await db.execute(
-                        pg_insert(user_role_table)
-                        .values(user_id=user.id, role_id=role_id)
-                        .on_conflict_do_nothing()
-                    )
-
             await db.commit()
             await db.refresh(user)
             perms = await load_user_permissions(db, str(user.id))
@@ -175,49 +161,3 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
             user.password = hashed_password
 
             await db.commit()
-            
-    async def update_page_permissions(
-        self, user_id: str, view_quotation: bool
-    ) -> UserDTO:
-        from app.models.orm.platform.user import User
-        from app.models.orm.platform.role import Role
-        from app.models.orm.platform.user_role import user_role_table
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(User).filter(User.id == uuid.UUID(user_id))
-            )
-            user = result.scalars().first()
-            if not user:
-                raise NotFoundError(f"User not found: {user_id}")
-
-            roles_result = await db.execute(
-                select(Role).filter(Role.name.in_(["page_quotation"]))
-            )
-            role_map = {r.name: r.id for r in roles_result.scalars().all()}
-
-            uid = uuid.UUID(user_id)
-
-            for rname in ("page_quotation",):
-                role_id = role_map.get(rname)
-                if not role_id:
-                    continue
-                if view_quotation:
-                    await db.execute(
-                        pg_insert(user_role_table)
-                        .values(user_id=uid, role_id=role_id)
-                        .on_conflict_do_nothing()
-                    )
-                else:
-                    await db.execute(
-                        user_role_table.delete().where(
-                            (user_role_table.c.user_id == uid)
-                            & (user_role_table.c.role_id == role_id)
-                        )
-                    )
-
-            await db.commit()
-            await db.refresh(user)
-            perms = await load_user_permissions(db, str(user.id))
-            return _orm_user_to_dto(user, perms)

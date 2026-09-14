@@ -40,7 +40,6 @@ class RateLimiter:
             f"{settings.API_V1_STR}/retriever",
             f"{settings.API_V1_STR}/chat-summary/create",
             f"{settings.API_V1_STR}/context-compression",
-            f"{settings.API_V1_STR}/sqlserver",
             f"{settings.API_V1_STR}/ocr",
             f"{settings.API_V1_STR}/document-tasks",
             f"{settings.API_V1_STR}/docs",

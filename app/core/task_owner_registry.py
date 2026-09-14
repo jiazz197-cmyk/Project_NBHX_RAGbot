@@ -4,7 +4,6 @@ Decouples authorization data from executor concurrency lifecycle and from
 TaskManager TTL caches. Each task domain registers a `TaskOwnerLookup`
 provider that points at its real source of truth:
 
-    quotation_generation_*  -> Postgres `quotation_tasks.owner_id`
     doc_process_*           -> TaskManager Redis metadata
     other (e.g. pdf_convert_*, image_upload_*)
                             -> in-memory cache only (no persistent truth)
@@ -18,13 +17,9 @@ import threading
 import time
 from typing import Dict, List, Optional, Protocol, Tuple
 
-from sqlalchemy import select
-
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal
 from app.core.logging import get_logger
 from app.core.task_manager import task_manager
-from app.models.orm.quotation_task import QuotationTask
 
 logger = get_logger("task_owner_registry")
 
@@ -35,34 +30,6 @@ class TaskOwnerLookup(Protocol):
     def matches(self, task_id: str) -> bool: ...
 
     async def get_owner_id(self, task_id: str) -> Optional[str]: ...
-
-
-class _QuotationOwnerLookup:
-    """quotation_generation_* tasks live in `quotation_tasks` table."""
-
-    PREFIX = "quotation_generation_"
-
-    def matches(self, task_id: str) -> bool:
-        return task_id.startswith(self.PREFIX)
-
-    async def get_owner_id(self, task_id: str) -> Optional[str]:
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(QuotationTask.owner_id).where(
-                        QuotationTask.task_id == task_id
-                    )
-                )
-                row = result.scalar()
-            value = str(row or "").strip()
-            return value or None
-        except Exception as exc:
-            logger.warning(
-                "[task_owner_registry] quotation lookup failed: task_id=%s err=%s",
-                task_id,
-                exc,
-            )
-            return None
 
 
 class _DocProcessingOwnerLookup:
@@ -94,8 +61,7 @@ class TaskOwnerRegistry:
 
     The cache stores (owner_id, inserted_ts) and is bounded by a TTL and a hard
     size cap so that long-running processes with many short-lived OCR/doc tasks
-    do not accumulate entries forever (the forget() path only covers quotation
-    tasks purged via retention)."""
+    do not accumulate entries forever."""
 
     def __init__(self, lookups: List[TaskOwnerLookup]):
         # task_id -> (owner_id, monotonic_inserted_ts)
@@ -180,7 +146,6 @@ class TaskOwnerRegistry:
 
 task_owner_registry = TaskOwnerRegistry(
     [
-        _QuotationOwnerLookup(),
         _DocProcessingOwnerLookup(),
     ]
 )

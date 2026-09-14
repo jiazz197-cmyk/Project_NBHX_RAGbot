@@ -1,5 +1,4 @@
-"""OCR external-facing code (image upload, PDF conversion, info extraction)
-backing the OCR/quotation port adapters.
+"""OCR external-facing code (image upload, PDF conversion, info extraction).
 
 Import explicitly from submodules (e.g. ``app.adapters.ocr.pdf2image``).
 """

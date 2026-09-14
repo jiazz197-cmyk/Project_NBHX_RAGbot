@@ -15,13 +15,11 @@
 | Auth | `/auth` | |
 | Example | `/example` | |
 | File storage | `/files` | |
-| Quotation | `/quotation` | |
 | Document async tasks + task WebSocket | `/document-tasks` | Preferred; avoids clashing with Swagger UI at `/api/v1/docs` |
 | OCR (image upload + PDF to image) | `/ocr` | Replaces split `/image2url` and `/pdf2image` for new clients |
 | RAG retriever | `/retriever` | |
 | Chat summary | `/chat-summary` | |
 | Context compression | `/context-compression` | |
-| SQL Server | `/sqlserver` | |
 
 ## Legacy aliases (deprecated)
 

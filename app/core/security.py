@@ -106,40 +106,6 @@ async def get_current_user(
     return _orm_to_dto(user, perms)
 
 
-async def get_current_user_detached(token: str = Depends(oauth2_scheme)) -> CurrentUserDTO:
-    """解析 Bearer 并立即关闭 DB session；适合慢接口避免长时间占用连接。"""
-    from app.models.orm.platform.user import User
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-        )
-        user_id: str | None = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-        user_uuid = uuid.UUID(user_id)
-    except (jwt.PyJWTError, ValueError):
-        raise credentials_exception
-
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(User).filter(User.id == user_uuid))
-        user = result.scalars().first()
-        if user is None or not user.is_active:
-            raise credentials_exception
-        # 密码版本校验：重置密码后旧 token 立即失效
-        token_pv = payload.get("pv")
-        if token_pv is not None and token_pv != password_version(user.password):
-            raise credentials_exception
-        perms = await load_user_permissions(db, user.id)
-        db.expunge(user)
-        return _orm_to_dto(user, perms)
-
-
 def _normalize_identifier(value: object) -> str:
     if value is None:
         return ""

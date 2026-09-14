@@ -92,7 +92,6 @@ def init_db_tables():
     """create_all；并尝试补齐历史表的缺列；最后写种子 superuser。"""
     try:
         from app.models.orm.file_resource import FileResource  # noqa: F401
-        from app.models.orm.quotation_task import QuotationTask  # noqa: F401
         from app.models.orm.knowledge import KnowledgeInstance  # noqa: F401
         from app.models.orm.platform import (  # noqa: F401
             User, UserLoginHistory, UserPreferences, UserSubscription,
@@ -103,57 +102,6 @@ def init_db_tables():
 
         Base.metadata.create_all(bind=engine)
 
-        try:
-            with engine.connect() as conn:
-                owner_ip_column = conn.execute(text(
-                    "SELECT column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_name='quotation_tasks' AND column_name='owner_ip'"
-                )).fetchone()
-                if not owner_ip_column:
-                    logger.info("[info] 发现 quotation_tasks 表缺少 owner_ip 列，正在添加...")
-                    conn.execute(text("ALTER TABLE quotation_tasks ADD COLUMN owner_ip VARCHAR(64)"))
-                    conn.commit()
-                    logger.info("[success] 成功向 quotation_tasks 表添加 owner_ip 列")
-
-                display_name_column = conn.execute(text(
-                    "SELECT column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_name='quotation_tasks' AND column_name='display_name'"
-                )).fetchone()
-                if not display_name_column:
-                    logger.info("[info] 发现 quotation_tasks 表缺少 display_name 列，正在添加...")
-                    conn.execute(text("ALTER TABLE quotation_tasks ADD COLUMN display_name VARCHAR(256)"))
-                    conn.execute(text(
-                        "UPDATE quotation_tasks "
-                        "SET display_name = COALESCE(NULLIF(uploaded_file_name, ''), task_id) "
-                        "WHERE display_name IS NULL"
-                    ))
-                    conn.execute(text("ALTER TABLE quotation_tasks ALTER COLUMN display_name SET NOT NULL"))
-                    conn.commit()
-                    logger.info("[success] 成功向 quotation_tasks 表添加 display_name 列")
-
-                conn.execute(text(
-                    "CREATE INDEX IF NOT EXISTS ix_quotation_tasks_owner_ip "
-                    "ON quotation_tasks (owner_ip)"
-                ))
-                conn.commit()
-
-                awaiting_col = conn.execute(text(
-                    "SELECT column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_name='quotation_tasks' AND column_name='awaiting_approval_at'"
-                )).fetchone()
-                if not awaiting_col:
-                    logger.info("[info] 发现 quotation_tasks 表缺少 awaiting_approval_at 列，正在添加...")
-                    conn.execute(text(
-                        "ALTER TABLE quotation_tasks ADD COLUMN awaiting_approval_at TIMESTAMP NULL"
-                    ))
-                    conn.commit()
-                    logger.info("[success] 成功向 quotation_tasks 表添加 awaiting_approval_at 列")
-        except Exception as mig_e:
-            logger.error(f"[warning] quotation_tasks.owner_ip/display_name 迁移失败（如果表还未创建可忽略此错误）: {mig_e}")
-
         table_names = [table.name for table in Base.metadata.sorted_tables]
         logger.info(f"[success] 数据库表初始化完成，共 {len(table_names)} 个表: {', '.join(table_names)}")
 
@@ -161,80 +109,6 @@ def init_db_tables():
         logger.error(f"[error] 数据库表初始化失败: {e}", exc_info=True)
 
     _seed_superuser()
-    _seed_rbac_permissions()
-
-
-def _seed_rbac_permissions():
-    """Seed RBAC permissions/roles for page visibility and assign to existing regular users."""
-    try:
-        from app.models.orm.platform.user import User, UserRole
-        from app.models.orm.platform.role import Role
-        from app.models.orm.platform.permission import Permission
-        from app.models.orm.platform.user_role import user_role_table
-        from app.models.orm.platform.role_permission import role_permission_table
-
-        db = SessionLocal()
-        try:
-            perms_spec = [
-                ("view_quotation", "查看报价生成页面"),
-            ]
-            perm_ids = {}
-            for name, desc in perms_spec:
-                p = db.query(Permission).filter(Permission.name == name).first()
-                if not p:
-                    p = Permission(name=name, description=desc)
-                    db.add(p)
-                    db.flush()
-                perm_ids[name] = p.id
-
-            roles_spec = [
-                ("page_quotation", "可查看报价生成", "view_quotation"),
-            ]
-            role_ids = {}
-            for rname, rdesc, perm_name in roles_spec:
-                r = db.query(Role).filter(Role.name == rname).first()
-                if not r:
-                    r = Role(name=rname, description=rdesc)
-                    db.add(r)
-                    db.flush()
-                role_ids[rname] = r.id
-                exists_rp = db.execute(
-                    role_permission_table.select().where(
-                        (role_permission_table.c.role_id == r.id)
-                        & (role_permission_table.c.permission_id == perm_ids[perm_name])
-                    )
-                ).fetchone()
-                if not exists_rp:
-                    db.execute(
-                        role_permission_table.insert().values(
-                            role_id=r.id, permission_id=perm_ids[perm_name]
-                        )
-                    )
-
-            existing_assignment = db.execute(
-                user_role_table.select().where(
-                    user_role_table.c.role_id.in_(list(role_ids.values()))
-                ).limit(1)
-            ).fetchone()
-            if not existing_assignment:
-                regular_users = db.query(User).filter(User.role == UserRole.user).all()
-                for u in regular_users:
-                    for rname in role_ids:
-                        db.execute(
-                            user_role_table.insert().values(
-                                user_id=u.id, role_id=role_ids[rname]
-                            )
-                        )
-
-            db.commit()
-            logger.info("[success] RBAC 权限种子写入完成")
-        except Exception as inner_e:
-            db.rollback()
-            logger.error(f"[error] RBAC 权限种子写入失败: {inner_e}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"[error] RBAC 权限种子写入失败: {e}", exc_info=True)
 
 
 def _seed_superuser():

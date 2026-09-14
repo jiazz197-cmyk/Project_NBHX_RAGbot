@@ -296,7 +296,7 @@ def resolve_bucket_for_object(object_name: str) -> str:
     the default bucket). All other objects live in the default bucket. This
     mirrors the upload-side routing in app/integrations/ocr/image2url.py so that
     deletes hit the same bucket the object was written to — without requiring a
-    bucket column on FileResource/QuotationTask.
+    bucket column on FileResource.
     """
     if not object_name:
         return MINIO_BUCKET_NAME

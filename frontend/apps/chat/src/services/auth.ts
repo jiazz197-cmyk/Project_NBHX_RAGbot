@@ -52,10 +52,6 @@ export interface UpdateRoleRequest {
   role: 'admin' | 'user'
 }
 
-export interface UserPagePermissions {
-  view_quotation: boolean
-}
-
 export const login = async (payload: LoginRequest): Promise<LoginResponse> => {
   const response = await fetch(`${config.apiBaseUrl}${config.loginEndpoint}`, {
     method: 'POST',
@@ -104,13 +100,6 @@ export const deleteUser = (userId: string): Promise<void> => {
 
 export const updateUserRole = (userId: string, payload: UpdateRoleRequest): Promise<UserResponse> => {
   return apiRequest<UserResponse>(`${AUTH_BASE}/users/${userId}/role`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export const updateUserPagePermissions = (userId: string, payload: UserPagePermissions): Promise<UserResponse> => {
-  return apiRequest<UserResponse>(`${AUTH_BASE}/users/${userId}/page-permissions`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })

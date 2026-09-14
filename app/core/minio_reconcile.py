@@ -2,9 +2,10 @@
 
 This is the safety net beneath all the per-path cleanup. Even with the upload-path
 compensation and worker cleanup, some objects can still slip through (crashes between
-upload and DB commit, OCR image_upload which never writes a DB row). The sweep lists objects under high-churn prefixes
-(``temp/``, ``images/``), excludes any object whose path is registered
-in the DB (FileResource + QuotationTask), and deletes the rest — but only if the
+upload and DB commit, OCR image_upload which never writes a DB row). The sweep
+lists objects under high-churn prefixes (``temp/``, ``images/``), excludes any
+object whose path is registered in the DB (FileResource), and deletes the rest —
+but only if the
 object is older than a grace window (so in-flight uploads whose DB row has not
 committed yet are not误删).
 
@@ -30,7 +31,6 @@ from app.core.time_utils import utcnow_naive
 from app.core.logging import get_logger
 from app.core.storage import MINIO_BUCKET_NAME, resolve_bucket_for_object
 from app.models.orm.file_resource import FileResource
-from app.models.orm.quotation_task import QuotationTask
 
 logger = get_logger("minio.reconcile")
 
@@ -47,23 +47,6 @@ async def _collect_registered_paths() -> Set[str]:
         for (path,) in rows.all():
             if path:
                 registered.add(path)
-
-        qt_rows = await db.execute(
-            select(
-                QuotationTask.uploaded_file_minio_path,
-                QuotationTask.temp_image_minio_path,
-                QuotationTask.result_payload,
-            )
-        )
-        for uploaded, temp_image, payload in qt_rows.all():
-            if uploaded:
-                registered.add(uploaded)
-            if temp_image:
-                registered.add(temp_image)
-            if isinstance(payload, dict):
-                xlsx = payload.get("u8_result_by_type_xlsx_minio_path")
-                if isinstance(xlsx, str) and xlsx.strip():
-                    registered.add(xlsx.strip())
 
     return registered
 

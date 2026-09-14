@@ -7,7 +7,6 @@ Tag = str
 AUTHENTICATION: Tag = "Authentication"
 EXAMPLE: Tag = "Example"
 FILE_MANAGEMENT: Tag = "File Management"
-QUOTATION_GENERATION: Tag = "Quotation Generation"
 DOCUMENT_PROCESSING: Tag = "Document Processing"
 IMAGE_PROCESSING: Tag = "Image Processing"
 PDF_PROCESSING: Tag = "PDF Processing"
@@ -15,7 +14,6 @@ RETRIEVER: Tag = "Retriever"
 CHAT_SUMMARY: Tag = "Chat Summary"
 KNOWLEDGE: Tag = "Knowledge"
 CONTEXT_COMPRESSION: Tag = "Context Compression"
-SQLSERVER_QUERY: Tag = "SQLServer Query"
 OCR: Tag = "OCR"
 
 # Descriptions for FastAPI `openapi_tags` in main app
@@ -31,10 +29,6 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": FILE_MANAGEMENT,
         "description": "File upload, download, and listing backed by MinIO and DB records.",
-    },
-    {
-        "name": QUOTATION_GENERATION,
-        "description": "Quotation tasks and file handling.",
     },
     {
         "name": DOCUMENT_PROCESSING,
@@ -67,9 +61,5 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": CONTEXT_COMPRESSION,
         "description": "Context compression for long conversations.",
-    },
-    {
-        "name": SQLSERVER_QUERY,
-        "description": "U8 / PDM and other SQL Server backed queries.",
     },
 ]

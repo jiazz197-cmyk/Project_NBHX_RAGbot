@@ -28,11 +28,6 @@ class UserRepositoryPort(Protocol):
     async def update_role(self, user_id: str, role: str) -> object:
         ...
 
-    async def update_page_permissions(
-        self, user_id: str, view_quotation: bool
-    ) -> object:
-        ...
-        
     async def update_password(
         self,
         user_id: str,

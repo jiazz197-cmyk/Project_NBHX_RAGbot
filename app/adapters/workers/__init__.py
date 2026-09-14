@@ -1,6 +1,3 @@
-"""Background workers (no port): long-running jobs that are not interface adapters.
-
-Import explicitly from subpackages (e.g. ``app.adapters.workers.quotation_generation``).
-"""
+"""Background workers (no port): long-running jobs that are not interface adapters."""
 
 __all__: list[str] = []

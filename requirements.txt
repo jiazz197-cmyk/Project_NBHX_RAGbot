@@ -50,7 +50,6 @@ propcache==0.4.1
 # ============================================================
 SQLAlchemy==2.0.43
 psycopg2-binary==2.9.11
-pymssql==2.3.0
 asyncpg==0.31.0
 greenlet==3.2.4
 redis==7.0.1

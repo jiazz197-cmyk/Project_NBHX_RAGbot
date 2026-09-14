@@ -17,7 +17,6 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 CATEGORY_FILES: Dict[str, str] = {
     "app": "app.log",
-    "quotation": "quotation.log",
     "task": "task.log",
     "security": "security.log",
     "database": "database.log",
@@ -37,10 +36,6 @@ CATEGORY_FILES: Dict[str, str] = {
 # key = logger 名去掉 "app." 前缀；value = category
 # 子 logger（含点号）会自动冒泡到已路由的父级，无需单独登记。
 LOGGER_ROUTES: Dict[str, str] = {
-    "quotation": "quotation",
-    "quotation_generation": "quotation",
-    "quotation_dispatcher": "quotation",
-    "u8_grouping": "quotation",
     "task_manager": "task",
     "task_observers": "task",
     "task_owner_registry": "task",

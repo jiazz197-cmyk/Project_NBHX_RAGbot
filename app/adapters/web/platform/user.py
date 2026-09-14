@@ -58,10 +58,6 @@ class UserRead(BaseModel):
     permissions: List[str] = []
 
 
-class UserPagePermissionsUpdate(BaseModel):
-    view_quotation: bool = True
-
-
 class RoleCreate(BaseModel):
     name: str
     description: Optional[str] = None

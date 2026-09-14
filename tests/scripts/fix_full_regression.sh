@@ -579,108 +579,6 @@ test_document_processing() {
   fi
 }
 
-test_quotation() {
-  section "9. 报价 Worker - WebSocket 订阅版"
-
-  curl -sS -D "$WORKDIR/quotation_submit.headers" \
-    -X POST "$BASE/quotation/tasks" \
-    -H "$AUTH" \
-    -F "file=@$TEST_PDF" \
-    -F "task_name=fix-regress-$RUN_ID" \
-    -o "$WORKDIR/quotation_submit.body"
-
-  cat "$WORKDIR/quotation_submit.headers"
-  cat "$WORKDIR/quotation_submit.body" | json_print
-
-  FIX_Q_TASK_ID="$(jq -r '.task_id // empty' "$WORKDIR/quotation_submit.body")"
-  echo "FIX_Q_TASK_ID=$FIX_Q_TASK_ID"
-
-  if [ -z "$FIX_Q_TASK_ID" ]; then
-    fail "报价任务未返回 task_id"
-    return
-  fi
-
-  echo "[quotation] 使用 WebSocket 订阅任务状态，不再 HTTP 轮询"
-  echo "[quotation] ws path: /api/v1/document-tasks/ws/$FIX_Q_TASK_ID"
-  echo "[quotation] 最多等待 180 秒；超时后自动抓 PG / Redis / 日志快照"
-
-  ws_wait_task "quotation" "$FIX_Q_TASK_ID" 180 "$WORKDIR/quotation_ws_events.jsonl"
-  local ws_rc=$?
-
-  echo "[quotation] WebSocket events tail:"
-  tail -n 80 "$WORKDIR/quotation_ws_events.jsonl" 2>/dev/null || true
-
-  local final_status
-  final_status="$(tail -n 300 "$WORKDIR/quotation_ws_events.jsonl" 2>/dev/null \
-    | jq -r 'select(.status? != null) | .status' 2>/dev/null \
-    | tail -n 1)"
-
-  if [ -z "$final_status" ]; then
-    final_status="$(tail -n 300 "$WORKDIR/quotation_ws_events.jsonl" 2>/dev/null \
-      | jq -r 'select(.data?.status? != null) | .data.status' 2>/dev/null \
-      | tail -n 1)"
-  fi
-
-  echo "FIX_Q_FINAL_STATUS=$final_status"
-
-  case "$final_status" in
-    awaiting_approval|completed)
-      pass "报价任务通过 WebSocket 推进到 $final_status"
-      ;;
-    failed)
-      warn "报价任务通过 WebSocket 进入 failed，需要查看业务错误"
-      ;;
-    cancelled)
-      warn "报价任务通过 WebSocket 进入 cancelled"
-      ;;
-    running)
-      warn "报价任务 WebSocket 最后状态仍为 running，可能卡在执行阶段"
-      ;;
-    "")
-      if [ "$ws_rc" -eq 3 ]; then
-        warn "报价任务 WebSocket 等待超时，未收到终态/awaiting_approval"
-      else
-        warn "报价任务未解析到最终状态，ws_rc=$ws_rc"
-      fi
-      ;;
-    *)
-      warn "报价任务 WebSocket 最后状态: $final_status"
-      ;;
-  esac
-
-  echo "[quotation] PG snapshot:"
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT id, task_id, status, progress, message, owner_username, created_at, started_at, updated_at, completed_at, awaiting_approval_at, error
-FROM quotation_tasks
-WHERE task_id = '$FIX_Q_TASK_ID';
-" || true
-
-  echo "[quotation] Redis snapshot:"
-  local suffix
-  suffix="$(echo "$FIX_Q_TASK_ID" | awk -F_ '{print $NF}')"
-  sudo docker exec redis redis-cli --scan --pattern "*$suffix*" | tee "$WORKDIR/quotation_redis_keys.txt" || true
-
-  local redis_key
-  redis_key="$(head -n 1 "$WORKDIR/quotation_redis_keys.txt" 2>/dev/null || true)"
-  if [ -n "$redis_key" ]; then
-    sudo docker exec redis redis-cli TYPE "$redis_key" || true
-    sudo docker exec redis redis-cli TTL "$redis_key" || true
-    sudo docker exec redis redis-cli GET "$redis_key" | jq . 2>/dev/null || true
-  fi
-
-  echo "[quotation] app/diag log snapshot:"
-  sudo grep -n "$FIX_Q_TASK_ID" "$PROJECT_ROOT/logs/app.log" "$PROJECT_ROOT/logs/diag.log" | tail -n 160 || true
-
-  echo "[quotation] quotation error keyword snapshot:"
-  sudo grep -i "$FIX_Q_TASK_ID\|报价任务 Phase1 执行失败\|get_task_payload\|cleanup_task_files_by_id\|different loop\|task_failed\|traceback\|exception" \
-    "$PROJECT_ROOT/logs/app.log" "$PROJECT_ROOT/logs/diag.log" \
-    | tail -n 220 || true
-
-  if sudo grep -i "$FIX_Q_TASK_ID" "$PROJECT_ROOT/logs/app.log" | grep -qi "different loop"; then
-    fail "报价任务仍存在 different loop"
-  fi
-}
-
 test_rag() {
   section "10. RAG / Retriever"
 
@@ -793,21 +691,7 @@ test_retention_pg_redis() {
 
   sudo docker exec redis redis-cli PING || true
 
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT status, count(*)
-FROM quotation_tasks
-GROUP BY status
-ORDER BY count(*) DESC;
-" || true
-
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT id, task_id, status, progress, uploaded_file_name, updated_at, awaiting_approval_at
-FROM quotation_tasks
-WHERE status='awaiting_approval'
-ORDER BY updated_at ASC;
-" || true
-
-  sudo grep -i "retention scheduler started\|retention scheduler stopped\|Global terminal retention\|Awaiting approval expiry" "$PROJECT_ROOT/logs/app.log" | tail -n 120 || true
+  sudo grep -i "MinIO reconcile" "$PROJECT_ROOT/logs/app.log" | tail -n 120 || true
 
   pass "Redis / PG / Retention 检查完成"
 }
@@ -873,7 +757,7 @@ summary() {
   echo
   echo "常用查看命令："
   echo "grep -E \"\\[PASS\\]|\\[WARN\\]|\\[FAIL\\]|\\[RESULT\\]\" \"$LOGFILE\""
-  echo "tail -n 120 \"$WORKDIR/quotation_ws_events.jsonl\" 2>/dev/null | jq ."
+
 }
 
 main() {
@@ -885,7 +769,6 @@ main() {
   test_file_manager
   test_ocr_pdf
   test_document_processing
-  test_quotation
   test_rag
   test_websocket_reject
   test_retention_pg_redis
