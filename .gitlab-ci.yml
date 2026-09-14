@@ -1,0 +1,53 @@
+# GitLab CI：分层架构守卫 + pytest 单元测试
+#
+# 对应原 GitHub Actions（.github/workflows/layered-architecture-guard.yml）——
+# GitHub Actions 在 GitLab 上不会执行，本文件是其 GitLab 等价实现，并额外加了 pytest。
+#
+# Runner: ragchatbot-runner（docker executor，tag: rag）
+#
+# 依赖说明：
+# - pytest job 刻意只装 tests/ 实际 import 的最小依赖集（189 个测试全部通过），
+#   版本与 requirements.txt 的锁定值一致。
+# - 不要改成 `pip install -r requirements.txt`：其中有 torch==2.9.1+cu130 /
+#   paddlepaddle-gpu 等 GPU 专用包，PyPI 上不可直装且体积达数 GB。
+
+stages:
+  - check
+  - test
+
+workflow:
+  rules:
+    # 与原 GitHub Actions 触发条件对齐：MR + 默认分支 push
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "develop"
+    # 允许从 UI 手动触发（Run pipeline），便于验证 CI 自身
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# ---- 1/2 分层架构守卫（8 条规则，见 scripts/check_layered_architecture.sh）----
+arch-guard:
+  stage: check
+  tags: [rag]
+  image: python:3.12-slim
+  script:
+    - bash scripts/check_layered_architecture.sh
+
+# ---- 2/2 单元测试 ----
+pytest:
+  stage: test
+  tags: [rag]
+  image: python:3.12-slim
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  script:
+    - >
+      pip install -q
+      pytest==9.1.1 pytest-asyncio==1.4.0
+      fastapi==0.116.1 starlette==0.47.3 SQLAlchemy==2.0.43 PyJWT==2.10.1
+      pydantic==2.12.3 pydantic-settings==2.10.1 bcrypt==5.0.0
+      psycopg2-binary==2.9.11 redis==7.0.1 asyncpg==0.31.0 openpyxl==3.1.5
+    - pytest -q --junitxml=pytest-report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: pytest-report.xml
