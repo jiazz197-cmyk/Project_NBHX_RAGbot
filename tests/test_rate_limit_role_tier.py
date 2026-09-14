@@ -36,7 +36,7 @@ def _limiter() -> RateLimiter:
 )
 def test_normal_path_limit_tiered_by_role(role, is_admin):
     limiter = _limiter()
-    req = FakeRequest(path=f"{settings.API_V1_STR}/document-tasks")
+    req = FakeRequest(path=f"{settings.API_V1_STR}/files")
     limit = limiter._get_limit_for_request(req, is_authenticated=True, role=role)
     expected = settings.RATE_LIMIT_AUTH_ADMIN if is_admin else settings.RATE_LIMIT_AUTH
     assert limit == expected
@@ -65,7 +65,7 @@ def test_expensive_path_limit_tiered_by_role(role, is_admin):
 
 def test_anon_limits_unchanged():
     limiter = _limiter()
-    normal = FakeRequest(path=f"{settings.API_V1_STR}/document-tasks")
+    normal = FakeRequest(path=f"{settings.API_V1_STR}/files")
     assert limiter._get_limit_for_request(normal, is_authenticated=False, role=None) == settings.RATE_LIMIT_ANON
     expensive = FakeRequest(path=f"{settings.API_V1_STR}/retriever")
     assert (
@@ -83,7 +83,7 @@ def test_get_client_identifier_extracts_role_from_jwt():
     limiter = _limiter()
     token = create_access_token(subject="user-123", role=ROLE_ADMIN)
     req = FakeRequest(
-        path=f"{settings.API_V1_STR}/document-tasks",
+        path=f"{settings.API_V1_STR}/files",
         auth_header=f"Bearer {token}",
     )
     identifier, is_authenticated, role = asyncio.run(limiter._get_client_identifier(req))
@@ -96,7 +96,7 @@ def test_get_client_identifier_role_none_for_old_token():
     limiter = _limiter()
     token = create_access_token(subject="user-123")  # 无 role claim
     req = FakeRequest(
-        path=f"{settings.API_V1_STR}/document-tasks",
+        path=f"{settings.API_V1_STR}/files",
         auth_header=f"Bearer {token}",
     )
     identifier, is_authenticated, role = asyncio.run(limiter._get_client_identifier(req))
@@ -107,7 +107,7 @@ def test_get_client_identifier_role_none_for_old_token():
 
 def test_get_client_identifier_anon_without_token():
     limiter = _limiter()
-    req = FakeRequest(path=f"{settings.API_V1_STR}/document-tasks")
+    req = FakeRequest(path=f"{settings.API_V1_STR}/files")
     identifier, is_authenticated, role = asyncio.run(limiter._get_client_identifier(req))
     assert identifier.startswith("anon:")
     assert is_authenticated is False
