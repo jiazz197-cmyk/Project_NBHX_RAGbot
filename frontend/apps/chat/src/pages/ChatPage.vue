@@ -666,7 +666,7 @@ const handleKnowledgeUploadChange = async (event: Event) => {
 
   try {
     const query = new URLSearchParams({
-      instance_id: '2',
+      collection: 'knowledge_chunks',
       uploader,
     })
 

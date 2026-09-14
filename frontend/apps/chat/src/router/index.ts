@@ -47,9 +47,9 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '用户管理', requiresSuperuser: true },
   },
   {
-    path: '/collection2',
-    name: 'collection2',
-    component: () => import('@/pages/Collection2ManagePage.vue'),
+    path: '/knowledge',
+    name: 'knowledge',
+    component: () => import('@/pages/KnowledgeManagePage.vue'),
     meta: { title: '知识库管理', requiresAdminOrSuperuser: true },
   },
 ]

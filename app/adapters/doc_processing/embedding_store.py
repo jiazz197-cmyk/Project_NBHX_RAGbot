@@ -265,14 +265,14 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
 
 
 class VectorStoreManager:
-    """封装 PGVector 存储"""
+    """封装 PGVector 存储（语义集合名）"""
 
-    def __init__(self, db_config: Dict, table_prefix: str = "doc_collection"):
+    def __init__(self, db_config: Dict):
         self.db_config = db_config
-        self.table_prefix = table_prefix
 
-    def _build_vector_store(self, instance_id: int) -> PGVectorStore:
-        collection_name = f"{self.table_prefix}_{instance_id}"
+    def _build_vector_store(self, collection_name: str) -> PGVectorStore:
+        # PGVector 内部将物理表存为 data_<table_name>；
+        # 这里必须传逻辑表名（如 knowledge_chunks），避免 data_data_* 重复前缀。
         try:
             return PGVectorStore.from_params(
                 database=self.db_config["database"],
@@ -286,14 +286,14 @@ class VectorStoreManager:
         except Exception as exc:
             raise VectorStoreError(f"创建 PGVectorStore 失败: {exc}") from exc
 
-    def upsert_chunks(self, chunks: List[TextNode], instance_id: int, embedding_model: BGEM3EmbeddingWrapper):
+    def upsert_chunks(self, chunks: List[TextNode], collection_name: str, embedding_model: BGEM3EmbeddingWrapper):
         """
         将文档块写入向量存储
 
         当前实现：使用 PGVector（PostgreSQL），数据直接存储在数据库中
         """
         try:
-            vector_store = self._build_vector_store(instance_id)
+            vector_store = self._build_vector_store(collection_name)
 
             storage_context = StorageContext.from_defaults(vector_store=vector_store)
             Settings.embed_model = embedding_model
@@ -306,7 +306,7 @@ class VectorStoreManager:
             )
             index.insert_nodes(chunks)
 
-            logger.info("成功写入 PGVector: %s 条 (instance_id=%s)", len(chunks), instance_id)
+            logger.info("成功写入 PGVector: %s 条 (collection=%s)", len(chunks), collection_name)
 
         except Exception as exc:
             raise VectorStoreError(f"写入 PGVector 失败: {exc}") from exc

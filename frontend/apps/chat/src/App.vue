@@ -22,7 +22,7 @@
         <RouterLink v-if="showClosingForm" class="sidebar-nav__item" active-class="is-active" to="/closing-form">
           营业订单信息
         </RouterLink>
-        <RouterLink v-if="isAdminOrSuperuser" class="sidebar-nav__item" active-class="is-active" to="/collection2">
+        <RouterLink v-if="isAdminOrSuperuser" class="sidebar-nav__item" active-class="is-active" to="/knowledge">
           知识库管理
         </RouterLink>
         <RouterLink v-if="isSuperuser" class="sidebar-nav__item" active-class="is-active" to="/users">

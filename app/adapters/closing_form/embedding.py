@@ -55,13 +55,13 @@ class ClosingFormEmbeddingAdapter:
         }
         try:
             embedding_model = BGEM3EmbeddingWrapper()
-            vector_store_manager = VectorStoreManager(
-                db_config=db_config,
-                table_prefix=CLOSING_FORM_TABLE_PREFIX,
-            )
+            vector_store_manager = VectorStoreManager(db_config=db_config)
+            # closing_form 语义表名：doc_collection_1（物理表 data_doc_collection_1，
+            # closing_form 删除 issue 处理前维持现状）
+            collection_name = f"{CLOSING_FORM_TABLE_PREFIX}_{CLOSING_FORM_INSTANCE_ID}"
             vector_store_manager.upsert_chunks(
                 chunks=[node],
-                instance_id=CLOSING_FORM_INSTANCE_ID,
+                collection_name=collection_name,
                 embedding_model=embedding_model,
             )
         except EmbeddingError as e:

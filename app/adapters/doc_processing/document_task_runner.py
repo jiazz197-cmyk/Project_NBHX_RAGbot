@@ -47,7 +47,7 @@ def process_documents_background(
     token: CancellationToken,
     task_id: str,
     file_ids: List[int],
-    instance_id: int,
+    collection: str,
     chunk_size: int,
     chunk_overlap: int,
 ):
@@ -186,7 +186,7 @@ def process_documents_background(
                 try:
                     one_result = pipeline.process(
                         input_data=[stream],
-                        instance_id=instance_id,
+                        collection=collection,
                     )
                     total_processed += int(one_result.get("processed_files", 0) or 0)
                 except Exception as e:
@@ -230,7 +230,7 @@ def process_documents_background(
                 "processed_files": total_processed,
                 "total_files": len(file_ids),
                 "status": result.get("status"),
-                "instance_id": instance_id,
+                "collection": collection,
             }
             loop.run_until_complete(
                 thread_tm.complete_task(task_id, final_result, "文档处理完成")

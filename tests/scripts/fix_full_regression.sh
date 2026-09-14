@@ -672,7 +672,7 @@ test_document_processing() {
   section "8. 文档处理"
 
   curl -sS -D "$WORKDIR/doc_submit.headers" \
-    -X POST "$BASE/document-tasks/process?instance_id=1&chunk_size=500&chunk_overlap=50&uploader=superuser" \
+    -X POST "$BASE/document-tasks/process?collection=knowledge_chunks&chunk_size=500&chunk_overlap=50&uploader=superuser" \
     -H "$AUTH" \
     -F "files=@$TEST_PDF" \
     -o "$WORKDIR/doc_submit.body"
@@ -805,7 +805,7 @@ test_rag() {
   section "10. RAG / Retriever"
 
   curl -sS -D "$WORKDIR/rag_db_1.headers" \
-    -X POST "$BASE/retriever/db?instance_id=1" \
+    -X POST "$BASE/retriever/db?collection=doc_collection_1" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"智能组合秤是什么？"}' \
@@ -815,7 +815,7 @@ test_rag() {
   cat "$WORKDIR/rag_db_1.body" | json_print
 
   curl -sS -D "$WORKDIR/rag_db_2.headers" \
-    -X POST "$BASE/retriever/db?instance_id=2" \
+    -X POST "$BASE/retriever/db?collection=knowledge_chunks" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"U8 API 如何调用？"}' \
@@ -825,7 +825,7 @@ test_rag() {
   cat "$WORKDIR/rag_db_2.body" | json_print
 
   curl -sS -D "$WORKDIR/rag_excel_1.headers" \
-    -X POST "$BASE/retriever/excel?instance_id=1" \
+    -X POST "$BASE/retriever/excel?collection=doc_collection_1" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"智能组合秤和重量分选秤有什么区别？"}' \

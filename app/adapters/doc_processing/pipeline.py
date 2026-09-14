@@ -41,14 +41,12 @@ class DocumentProcessingPipeline:
         db_config: Dict,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
-        table_prefix: str = "doc_collection",
         device: str = "auto",
         num_tags: int = 5,
     ):
         self.db_config = db_config
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        self.table_prefix = table_prefix
         self.num_tags = num_tags
 
         self.text_splitter = TokenAwareTextSplitter(chunk_size, chunk_overlap)
@@ -58,7 +56,7 @@ class DocumentProcessingPipeline:
         self.document_processor = DocumentProcessor()
         # 嵌入模型改为调用远程 Docker 服务，通过环境变量配置接口地址和模型名
         self.embedding_model = BGEM3EmbeddingWrapper()
-        self.vector_store_manager = VectorStoreManager(db_config, table_prefix=table_prefix)
+        self.vector_store_manager = VectorStoreManager(db_config)
 
     def _prepare_files(self, input_data: Union[FileInput, List[FileInput]]) -> List[FileInput]:
         if isinstance(input_data, (str, os.PathLike)):
@@ -80,7 +78,7 @@ class DocumentProcessingPipeline:
             return input_data
         raise ValueError("input_data 只支持路径、数据流或它们的列表")
 
-    def _documents_to_nodes(self, documents: List, instance_id: int) -> List[TextNode]:
+    def _documents_to_nodes(self, documents: List, collection: str) -> List[TextNode]:
         nodes = []
         for chunk in documents:
             # 清理文本中的 NUL 字符（PostgreSQL 不支持）
@@ -95,7 +93,7 @@ class DocumentProcessingPipeline:
                     metadata[key] = value
             
             metadata.setdefault("chunk_id", str(uuid.uuid4()))
-            metadata["instance_id"] = instance_id
+            metadata["collection"] = collection
             
             node = TextNode(
                 text=cleaned_text,
@@ -107,9 +105,9 @@ class DocumentProcessingPipeline:
     def process(
         self,
         input_data: Union[FileInput, List[FileInput]],
-        instance_id: int = 1,
+        collection: str,
     ):
-        """主入口：读取、切分、向量化并写入 PGVector"""
+        """主入口：读取、切分、向量化并写入 PGVector（data_<collection>）"""
         files = self._prepare_files(input_data)
         if not files:
             logger.warning("未找到可处理的文件")
@@ -128,8 +126,8 @@ class DocumentProcessingPipeline:
                 )
                 if not chunks:
                     continue
-                nodes = self._documents_to_nodes(chunks, instance_id)
-                self.vector_store_manager.upsert_chunks(nodes, instance_id, self.embedding_model)
+                nodes = self._documents_to_nodes(chunks, collection)
+                self.vector_store_manager.upsert_chunks(nodes, collection, self.embedding_model)
                 processed += 1
             except DocumentProcessingError as exc:
                 logger.error("处理文件失败 %s: %s", file_path, exc)

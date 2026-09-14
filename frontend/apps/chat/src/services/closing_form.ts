@@ -52,15 +52,6 @@ export const reviseClosingForm = async (formId: string, payload: Record<string, 
   })
 }
 
-export const listCollection2Records = async (): Promise<ClosingFormRecord[]> => {
-  const data = await apiRequest<ClosingFormListResponse>('/closing-form/collection2/list')
-  return data.records ?? []
-}
-
-export const deleteCollection2Record = async (recordId: string): Promise<void> => {
-  await apiRequest(`/closing-form/collection2/${recordId}`, { method: 'DELETE' })
-}
-
 interface ImageUploadResult { success: boolean; object_name: string }
 
 export const uploadClosingFormImage = async (file: File): Promise<ImageUploadResult> => {

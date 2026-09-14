@@ -141,7 +141,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ConfirmDialog, useToast } from '@yamato/components'
-import { deleteCollection2Record, listCollection2Records, type ClosingFormRecord } from '../services/closing_form'
+import { deleteKnowledgeRecord, listKnowledgeRecords, type KnowledgeRecord } from '../services/knowledge'
 
 interface ParsedField {
   label: string
@@ -151,7 +151,7 @@ interface ParsedField {
 interface FileGroup {
   key: string
   fileName: string
-  items: ClosingFormRecord[]
+  items: KnowledgeRecord[]
   count: number
   latestUploadTime: string | null
   uploaders: string
@@ -159,7 +159,7 @@ interface FileGroup {
 
 const { showSuccess, showError } = useToast()
 
-const records = ref<ClosingFormRecord[]>([])
+const records = ref<KnowledgeRecord[]>([])
 const loadingRecords = ref(false)
 const expandedId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
@@ -181,7 +181,7 @@ const formatUploadTime = (value: string | null | undefined): string => {
 }
 
 const groupedRecords = computed<FileGroup[]>(() => {
-  const groupedMap = new Map<string, ClosingFormRecord[]>()
+  const groupedMap = new Map<string, KnowledgeRecord[]>()
 
   for (const record of records.value) {
     const fileName = String(record.file_name ?? '').trim()
@@ -222,7 +222,7 @@ const groupedRecords = computed<FileGroup[]>(() => {
 const loadRecords = async () => {
   loadingRecords.value = true
   try {
-    records.value = await listCollection2Records()
+    records.value = await listKnowledgeRecords()
   } catch (err: any) {
     showError(err?.message || '加载失败')
   } finally {
@@ -276,7 +276,7 @@ const confirmDelete = async () => {
   const id = recordToDelete.value
   deletingId.value = id
   try {
-    await deleteCollection2Record(id)
+    await deleteKnowledgeRecord(id)
     records.value = records.value.filter((record) => record.id !== id)
     if (expandedId.value === id) {
       expandedId.value = null

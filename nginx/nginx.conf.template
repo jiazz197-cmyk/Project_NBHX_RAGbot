@@ -69,6 +69,10 @@ http {
             proxy_pass http://yamato_backend;
             proxy_read_timeout 300s;
         }
+        location ^~ /api/v1/knowledge/ {
+            proxy_pass http://yamato_backend;
+            proxy_read_timeout 300s;
+        }
 
         # ── WebSocket endpoints ──
         location ^~ /api/v1/docs/ws/ {
@@ -151,6 +155,7 @@ http {
         location = /api/v1/auth { proxy_pass http://yamato_backend; }
         location = /api/v1/chat-summary { proxy_pass http://yamato_backend; }
         location = /api/v1/closing-form { proxy_pass http://yamato_backend; }
+        location = /api/v1/knowledge { proxy_pass http://yamato_backend; }
         location = /api/v1/docs { proxy_pass http://yamato_backend; }
         location = /api/v1/context-compression { proxy_pass http://yamato_backend; }
         location = /api/v1/files { proxy_pass http://yamato_backend; }
