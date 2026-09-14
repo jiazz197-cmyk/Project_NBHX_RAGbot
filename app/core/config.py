@@ -164,6 +164,9 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     DB_POOL_RECYCLE: int = Field(3600, ge=60, le=86400, env="DB_POOL_RECYCLE")
 
     # 后台任务线程池大小（共享 executor 服务 OCR / 文档处理 / 知识库上传任务）。
+    EXECUTOR_MAX_WORKERS: int = Field(
+        30, ge=1, le=512, env="EXECUTOR_MAX_WORKERS"
+    )
 
     # 文档处理重模型有界池上限。PaddleOCR / TagGenerator 各自一个全局池，
     # checkout 互斥（一实例一线程）既绕开 PaddleOCR 线程安全问题，又把 GPU

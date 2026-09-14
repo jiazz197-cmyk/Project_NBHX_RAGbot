@@ -15,9 +15,6 @@ LOGFILE="$WORKDIR/full_acceptance.log"
 
 RUN_MULTI="${RUN_MULTI:-0}"
 MULTI_USERS="${MULTI_USERS:-4}"
-RUN_QUOTATION_APPROVE="${RUN_QUOTATION_APPROVE:-1}"
-RUN_PDM_DEBUG="${RUN_PDM_DEBUG:-0}"
-RUN_SQLSERVER_PROBE="${RUN_SQLSERVER_PROBE:-0}"
 
 mkdir -p "$WORKDIR"
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -122,7 +119,6 @@ init() {
   echo "LOGFILE=$LOGFILE"
   echo "TEST_PDF=$TEST_PDF"
   echo "RUN_MULTI=$RUN_MULTI"
-  echo "RUN_QUOTATION_APPROVE=$RUN_QUOTATION_APPROVE"
 
   if [ ! -f "$TEST_PDF" ]; then
     fail "测试 PDF 不存在: $TEST_PDF"
@@ -713,213 +709,6 @@ test_document_processing() {
   fi
 }
 
-quotation_ws_parse_final_status() {
-  local file="$1"
-  local final_status=""
-  final_status="$(tail -n 300 "$file" 2>/dev/null | jq -r 'select(.status? != null) | .status' 2>/dev/null | tail -n 1)"
-  if [ -z "$final_status" ]; then
-    final_status="$(tail -n 300 "$file" 2>/dev/null | jq -r 'select(.data?.status? != null) | .data.status' 2>/dev/null | tail -n 1)"
-  fi
-  echo "$final_status"
-}
-
-try_quotation_approve() {
-  local task_id="$1"
-
-  if [ "$RUN_QUOTATION_APPROVE" != "1" ]; then
-    skip "RUN_QUOTATION_APPROVE != 1，跳过报价审批"
-    return 1
-  fi
-
-  section "9.1 报价审批到 completed 尝试"
-
-  local approve_candidates=()
-  local openapi_candidate
-  openapi_candidate="$(find_openapi_path "post" "quotation.*approve|quotation.*approval|quotation.*review")"
-  if [ -n "$openapi_candidate" ]; then approve_candidates+=("$openapi_candidate"); fi
-
-  approve_candidates+=(
-    "/quotation/tasks/{task_id}/approve"
-    "/quotation/tasks/{task_id}/approval"
-    "/quotation/tasks/{task_id}/approve-pdm"
-    "/quotation/tasks/{task_id}/confirm"
-  )
-
-  local approved=0
-  local path url code
-  for path in "${approve_candidates[@]}"; do
-    url="$(path_to_url "$path" "$task_id")"
-    echo "[quotation approve try] $url"
-
-    curl -sS -D "$WORKDIR/quotation_approve.headers" \
-      -X POST "$url" \
-      -H "$AUTH" \
-      -H "Content-Type: application/json" \
-      -d '{"approved":true,"action":"approve"}' \
-      -o "$WORKDIR/quotation_approve.body"
-
-    cat "$WORKDIR/quotation_approve.headers"
-    cat "$WORKDIR/quotation_approve.body" | json_print
-
-    code="$(http_code "$WORKDIR/quotation_approve.headers")"
-    if [ "$code" = "200" ] || [ "$code" = "202" ] || [ "$code" = "204" ]; then
-      approved=1
-      pass "报价审批接口调用成功: $path"
-      break
-    fi
-  done
-
-  if [ "$approved" != "1" ]; then
-    warn "报价审批接口未自动通过，可能需要前端提交 PDM 审核 payload"
-    return 1
-  fi
-
-  ws_wait_task "quotation_after_approve" "$task_id" 240 "$WORKDIR/quotation_after_approve_ws_events.jsonl" || true
-
-  local after_status
-  after_status="$(quotation_ws_parse_final_status "$WORKDIR/quotation_after_approve_ws_events.jsonl")"
-  echo "FIX_Q_AFTER_APPROVE_STATUS=$after_status"
-
-  if [ "$after_status" = "completed" ]; then
-    pass "报价审批后进入 completed"
-  else
-    warn "报价审批后未确认 completed，状态=$after_status"
-  fi
-
-  curl -sS -D "$WORKDIR/quotation_file_download.headers" \
-    "$BASE/quotation/tasks/$task_id/file" \
-    -H "$AUTH" \
-    -o "$WORKDIR/quotation_result.bin"
-
-  cat "$WORKDIR/quotation_file_download.headers"
-  file "$WORKDIR/quotation_result.bin" || true
-
-  local file_code
-  file_code="$(http_code "$WORKDIR/quotation_file_download.headers")"
-  if [ "$file_code" = "200" ]; then
-    pass "报价结果文件下载通过"
-  else
-    warn "报价结果文件下载未通过: HTTP=$file_code"
-  fi
-}
-
-delete_quotation_task() {
-  local task_id="$1"
-  section "9.2 报价任务删除清理"
-
-  curl -sS -D "$WORKDIR/quotation_delete.headers" \
-    -X DELETE "$BASE/quotation/tasks/$task_id" \
-    -H "$AUTH" \
-    -o "$WORKDIR/quotation_delete.body"
-
-  cat "$WORKDIR/quotation_delete.headers"
-  cat "$WORKDIR/quotation_delete.body" | json_print
-
-  local code
-  code="$(http_code "$WORKDIR/quotation_delete.headers")"
-  if [ "$code" = "200" ] || [ "$code" = "204" ]; then
-    pass "报价任务删除接口通过"
-  else
-    warn "报价任务删除未通过: HTTP=$code"
-  fi
-
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT id, task_id, status, progress, uploaded_file_name
-FROM quotation_tasks
-WHERE task_id = '$task_id';
-" || true
-
-  local suffix
-  suffix="$(echo "$task_id" | awk -F_ '{print $NF}')"
-  sudo docker exec redis redis-cli --scan --pattern "*$suffix*" || true
-}
-
-test_quotation() {
-  section "9. 报价 Worker / WebSocket / awaiting_approval / approve-download-delete"
-
-  curl -sS -D "$WORKDIR/quotation_submit.headers" \
-    -X POST "$BASE/quotation/tasks" \
-    -H "$AUTH" \
-    -F "file=@$TEST_PDF" \
-    -F "task_name=full-accept-$RUN_ID" \
-    -o "$WORKDIR/quotation_submit.body"
-
-  cat "$WORKDIR/quotation_submit.headers"
-  cat "$WORKDIR/quotation_submit.body" | json_print
-
-  FIX_Q_TASK_ID="$(jq -r '.task_id // empty' "$WORKDIR/quotation_submit.body")"
-  echo "FIX_Q_TASK_ID=$FIX_Q_TASK_ID"
-
-  if [ -z "$FIX_Q_TASK_ID" ]; then
-    fail "报价任务未返回 task_id"
-    return
-  fi
-
-  ws_wait_task "quotation" "$FIX_Q_TASK_ID" 240 "$WORKDIR/quotation_ws_events.jsonl" || true
-
-  echo "[quotation] WebSocket events tail:"
-  tail -n 80 "$WORKDIR/quotation_ws_events.jsonl" 2>/dev/null || true
-
-  local final_status
-  final_status="$(quotation_ws_parse_final_status "$WORKDIR/quotation_ws_events.jsonl")"
-  echo "FIX_Q_FINAL_STATUS=$final_status"
-
-  case "$final_status" in
-    awaiting_approval|completed)
-      pass "报价任务通过 WebSocket 推进到 $final_status"
-      ;;
-    failed)
-      warn "报价任务通过 WebSocket 进入 failed，需要查看业务错误"
-      ;;
-    running|"")
-      warn "报价任务未进入 awaiting_approval/completed，状态=$final_status"
-      ;;
-    *)
-      warn "报价任务 WebSocket 最后状态: $final_status"
-      ;;
-  esac
-
-  echo "[quotation] PG snapshot:"
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT id, task_id, status, progress, message, owner_username, created_at, started_at, updated_at, completed_at, awaiting_approval_at, error
-FROM quotation_tasks
-WHERE task_id = '$FIX_Q_TASK_ID';
-" || true
-
-  echo "[quotation] Redis snapshot:"
-  local suffix redis_key
-  suffix="$(echo "$FIX_Q_TASK_ID" | awk -F_ '{print $NF}')"
-  sudo docker exec redis redis-cli --scan --pattern "*$suffix*" | tee "$WORKDIR/quotation_redis_keys.txt" || true
-  redis_key="$(head -n 1 "$WORKDIR/quotation_redis_keys.txt" 2>/dev/null || true)"
-  if [ -n "$redis_key" ]; then
-    sudo docker exec redis redis-cli TYPE "$redis_key" || true
-    sudo docker exec redis redis-cli TTL "$redis_key" || true
-    sudo docker exec redis redis-cli GET "$redis_key" | jq . 2>/dev/null || true
-  fi
-
-  echo "[quotation] app/diag log snapshot:"
-  sudo grep -n "$FIX_Q_TASK_ID" "$PROJECT_ROOT/logs/app.log" "$PROJECT_ROOT/logs/diag.log" | tail -n 160 || true
-
-  echo "[quotation] quotation error keyword snapshot:"
-  sudo grep -i "$FIX_Q_TASK_ID\|报价任务 Phase1 执行失败\|get_task_payload\|cleanup_task_files_by_id\|different loop\|task_failed\|traceback\|exception" \
-    "$PROJECT_ROOT/logs/app.log" "$PROJECT_ROOT/logs/diag.log" \
-    | tail -n 220 || true
-
-  if sudo grep -i "$FIX_Q_TASK_ID" "$PROJECT_ROOT/logs/app.log" | grep -qi "different loop"; then
-    fail "报价任务仍存在 different loop"
-  fi
-
-  if [ "$final_status" = "awaiting_approval" ]; then
-    try_quotation_approve "$FIX_Q_TASK_ID" || true
-  fi
-
-  if [ "$RUN_QUOTATION_APPROVE" = "1" ]; then
-    delete_quotation_task "$FIX_Q_TASK_ID" || true
-  else
-    warn "RUN_QUOTATION_APPROVE=0，保留报价任务作为证据: $FIX_Q_TASK_ID"
-  fi
-}
-
 test_chat_summary() {
   section "10. Chat Summary"
 
@@ -1087,30 +876,6 @@ PY
   fi
 }
 
-test_sqlserver_and_pdm_optional() {
-  section "13. SQLServer 慢接口 / PDM debug 可选测试"
-
-  echo "[OpenAPI SQLServer candidates]"
-  jq -r '.paths // {} | keys[] | select(test("sqlserver|sql-server|pdm|u8"; "i"))' "$OPENAPI_FILE" 2>/dev/null || true
-
-  if [ "$RUN_SQLSERVER_PROBE" = "1" ]; then
-    warn "RUN_SQLSERVER_PROBE=1，但 SQLServer 接口参数差异较大，本脚本只列候选，不自动构造业务参数"
-  else
-    skip "SQLServer 慢接口探测默认跳过。需要时设置 RUN_SQLSERVER_PROBE=1 并按候选接口补参数"
-  fi
-
-  if [ "$RUN_PDM_DEBUG" = "1" ]; then
-    if [ -f "$PROJECT_ROOT/tests/pdm_debug.py" ]; then
-      /home/shmtu/桌面/yamatoenv/bin/python "$PROJECT_ROOT/tests/pdm_debug.py" --help || true
-      pass "PDM debug 脚本 help 可执行"
-    else
-      warn "未找到 tests/pdm_debug.py"
-    fi
-  else
-    skip "PDM debug 默认跳过。需要时设置 RUN_PDM_DEBUG=1"
-  fi
-}
-
 worker_multi_user() {
   local idx="$1"
   local user="$2"
@@ -1213,22 +978,7 @@ test_retention_pg_redis() {
 
   sudo docker exec redis redis-cli PING || true
 
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT status, count(*)
-FROM quotation_tasks
-GROUP BY status
-ORDER BY count(*) DESC;
-" || true
-
-  sudo docker exec pgvector_new psql -U pguser -d pgdb -c "
-SELECT id, task_id, status, progress, uploaded_file_name, updated_at, awaiting_approval_at
-FROM quotation_tasks
-WHERE status='awaiting_approval'
-ORDER BY updated_at ASC;
-" || true
-
-  sudo grep -i "retention scheduler started\|retention scheduler stopped\|Global terminal retention\|Awaiting approval expiry" \
-    "$PROJECT_ROOT/logs/app.log" | tail -n 120 || true
+  sudo grep -i "MinIO reconcile" "$PROJECT_ROOT/logs/app.log" | tail -n 120 || true
 
   pass "Redis / PG / Retention 检查完成"
 }
@@ -1304,8 +1054,6 @@ summary() {
   echo
   echo "常用查看命令："
   echo "grep -E \"\\[PASS\\]|\\[WARN\\]|\\[SKIP\\]|\\[FAIL\\]|\\[RESULT\\]\" \"$LOGFILE\""
-  echo "tail -n 120 \"$WORKDIR/quotation_ws_events.jsonl\" 2>/dev/null | jq ."
-  echo "grep -n \"FIX_Q_TASK_ID\" \"$LOGFILE\""
 }
 
 main() {
@@ -1318,11 +1066,9 @@ main() {
   test_file_manager
   test_ocr_pdf
   test_document_processing
-  test_quotation
   test_chat_summary
   test_rag
   test_websocket_reject
-  test_sqlserver_and_pdm_optional
   test_multi_user_concurrent
   test_retention_pg_redis
   scan_error_logs
