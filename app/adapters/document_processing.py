@@ -88,7 +88,7 @@ class DocumentProcessWorkerAdapter(DocumentProcessWorkerPort):
         self,
         task_id: str,
         file_ids: List[int],
-        instance_id: int,
+        collection: str,
         chunk_size: int,
         chunk_overlap: int,
     ) -> None:
@@ -97,7 +97,7 @@ class DocumentProcessWorkerAdapter(DocumentProcessWorkerPort):
             process_documents_background,
             task_id,
             file_ids,
-            instance_id,
+            collection,
             chunk_size,
             chunk_overlap,
         )

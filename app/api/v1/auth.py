@@ -184,7 +184,6 @@ async def update_user_page_permissions(
         uc = UpdateUserPagePermissionsUseCase(_user_repo)
         dto = await uc.execute(UpdatePagePermissionsCommand(
             target_user_id=str(user_id),
-            view_closing_form=body.view_closing_form,
             view_quotation=body.view_quotation,
             current_user_id=current_user.id,
         ))

@@ -35,21 +35,15 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '报价生成', requiresPermission: 'view_quotation' },
   },
   {
-    path: '/closing-form',
-    name: 'closing-form',
-    component: () => import('@/pages/PolicyGeneratePage.vue'),
-    meta: { title: '营业订单信息', requiresPermission: 'view_closing_form' },
-  },
-  {
     path: '/users',
     name: 'users',
     component: () => import('@/pages/UserManagePage.vue'),
     meta: { title: '用户管理', requiresSuperuser: true },
   },
   {
-    path: '/collection2',
-    name: 'collection2',
-    component: () => import('@/pages/Collection2ManagePage.vue'),
+    path: '/knowledge',
+    name: 'knowledge',
+    component: () => import('@/pages/KnowledgeManagePage.vue'),
     meta: { title: '知识库管理', requiresAdminOrSuperuser: true },
   },
 ]

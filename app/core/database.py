@@ -89,9 +89,8 @@ async def check_db_connection_async() -> bool:
 
 
 def init_db_tables():
-    """create_all；并尝试给 data_pending 补 status 列；最后写种子 superuser。"""
+    """create_all；并尝试补齐历史表的缺列；最后写种子 superuser。"""
     try:
-        from app.models.orm.closing_form import PendingForm  # noqa: F401
         from app.models.orm.file_resource import FileResource  # noqa: F401
         from app.models.orm.quotation_task import QuotationTask  # noqa: F401
         from app.models.orm.knowledge import KnowledgeInstance  # noqa: F401
@@ -103,56 +102,6 @@ def init_db_tables():
         )
 
         Base.metadata.create_all(bind=engine)
-
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(
-                    "SELECT column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_name='data_pending' AND column_name='status'"
-                )).fetchone()
-
-                if not result:
-                    logger.info("[info] 发现 data_pending 表缺少 status 列，正在添加...")
-                    conn.execute(text(
-                        "ALTER TABLE data_pending ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'pending'"
-                    ))
-                    conn.commit()
-                    logger.info("[success] 成功向 data_pending 表添加 status 列")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending 表迁移失败（如果表还未创建可忽略此错误）: {mig_e}")
-
-        try:
-            with engine.connect() as conn:
-                for col in ("image_url_1", "image_url_2"):
-                    result = conn.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='data_pending' AND column_name=:col"
-                    ), {"col": col}).fetchone()
-                    if not result:
-                        logger.info(f"[info] 发现 data_pending 表缺少 {col} 列，正在添加...")
-                        conn.execute(text(
-                            f"ALTER TABLE data_pending ADD COLUMN {col} VARCHAR(512)"
-                        ))
-                        conn.commit()
-                        logger.info(f"[success] 成功向 data_pending 表添加 {col} 列")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending image_url 列迁移失败: {mig_e}")
-
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(
-                    "SELECT COUNT(*) FROM data_pending WHERE status = 'rejected'"
-                )).scalar()
-                if result and int(result) > 0:
-                    logger.info("[info] 发现 data_pending 表存在 rejected 状态记录，正在迁移为 pending_revision...")
-                    conn.execute(text(
-                        "UPDATE data_pending SET status = 'pending_revision' WHERE status = 'rejected'"
-                    ))
-                    conn.commit()
-                    logger.info("[success] 成功将 rejected 记录迁移为 pending_revision")
-        except Exception as mig_e:
-            logger.error(f"[warning] data_pending rejected→pending_revision 迁移失败: {mig_e}")
 
         try:
             with engine.connect() as conn:
@@ -227,7 +176,6 @@ def _seed_rbac_permissions():
         db = SessionLocal()
         try:
             perms_spec = [
-                ("view_closing_form", "查看营业订单信息页面"),
                 ("view_quotation", "查看报价生成页面"),
             ]
             perm_ids = {}
@@ -240,7 +188,6 @@ def _seed_rbac_permissions():
                 perm_ids[name] = p.id
 
             roles_spec = [
-                ("page_closing_form", "可查看营业订单信息", "view_closing_form"),
                 ("page_quotation", "可查看报价生成", "view_quotation"),
             ]
             role_ids = {}

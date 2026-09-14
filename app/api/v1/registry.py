@@ -6,12 +6,12 @@ from fastapi import APIRouter
 from app.api.v1 import (
     auth,
     chat_summary,
-    closing_form,
     context_compression,
     document_processing,
     example,
     file_manager,
     image2url,
+    knowledge,
     pdf2image,
     quotation_generation,
     retriever,
@@ -61,7 +61,7 @@ def build_api_router() -> APIRouter:
 
     _mount(r, retriever.router, p.RETRIEVER, [t.RETRIEVER])
     _mount(r, chat_summary.router, p.CHAT_SUMMARY, [t.CHAT_SUMMARY])
-    _mount(r, closing_form.router, p.CLOSING_FORM, [t.CLOSING_FORM])
+    _mount(r, knowledge.router, p.KNOWLEDGE, [t.KNOWLEDGE])
     _mount(
         r,
         context_compression.router,

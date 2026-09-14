@@ -2,9 +2,8 @@
 
 This is the safety net beneath all the per-path cleanup. Even with the upload-path
 compensation and worker cleanup, some objects can still slip through (crashes between
-upload and DB commit, OCR image_upload which never writes a DB row, closing_form
-uploads that are never submitted). The sweep lists objects under high-churn prefixes
-(``temp/``, ``images/``, ``form_pic/``), excludes any object whose path is registered
+upload and DB commit, OCR image_upload which never writes a DB row). The sweep lists objects under high-churn prefixes
+(``temp/``, ``images/``), excludes any object whose path is registered
 in the DB (FileResource + QuotationTask), and deletes the rest — but only if the
 object is older than a grace window (so in-flight uploads whose DB row has not
 committed yet are not误删).
@@ -22,9 +21,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Iterable, Set
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from app.adapters.closing_form.constants import CLOSING_FORM_TABLE, PENDING_TABLE
 from app.core.async_storage import async_list_objects, async_delete_from_minio
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
@@ -37,9 +35,8 @@ from app.models.orm.quotation_task import QuotationTask
 logger = get_logger("minio.reconcile")
 
 # High-churn prefixes most likely to accumulate orphans. temp/ and images/ come
-# from OCR/pdf-convert/image-upload; form_pic/ from closing_form uploads that may
-# never be submitted.
-_RECONCILE_PREFIXES = ("temp/", "images/", "form_pic/")
+# from OCR / pdf-convert / image-upload.
+_RECONCILE_PREFIXES = ("temp/", "images/")
 
 
 async def _collect_registered_paths() -> Set[str]:
@@ -68,38 +65,6 @@ async def _collect_registered_paths() -> Set[str]:
                 if isinstance(xlsx, str) and xlsx.strip():
                     registered.add(xlsx.strip())
 
-        # Closing-form images live under form_pic/ (a scanned prefix). Without
-        # registering them, the sweep would delete images still referenced by
-        # live pending/approved forms. Pending rows carry them as columns;
-        # approved rows carry them in metadata_. These app-data tables may be
-        # absent in stripped-down environments, so query best-effort.
-        try:
-            cf_pending = await db.execute(
-                text(f"SELECT image_url_1, image_url_2 FROM {PENDING_TABLE}")
-            )
-            for img1, img2 in cf_pending.all():
-                if img1:
-                    registered.add(img1)
-                if img2:
-                    registered.add(img2)
-        except Exception as exc:
-            logger.warning("MinIO reconcile: 跳过 %s 图片登记: %s", PENDING_TABLE, exc)
-
-        try:
-            cf_approved = await db.execute(
-                text(
-                    f"SELECT metadata_->>'image_url_1' AS img1,"
-                    f" metadata_->>'image_url_2' AS img2"
-                    f" FROM {CLOSING_FORM_TABLE}"
-                )
-            )
-            for img1, img2 in cf_approved.all():
-                if img1:
-                    registered.add(img1)
-                if img2:
-                    registered.add(img2)
-        except Exception as exc:
-            logger.warning("MinIO reconcile: 跳过 %s 图片登记: %s", CLOSING_FORM_TABLE, exc)
     return registered
 
 

@@ -74,10 +74,10 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
             await db.flush()
 
             roles_result = await db.execute(
-                select(Role).filter(Role.name.in_(["page_closing_form", "page_quotation"]))
+                select(Role).filter(Role.name.in_(["page_quotation"]))
             )
             existing_roles = {r.name: r.id for r in roles_result.scalars().all()}
-            for rname in ("page_closing_form", "page_quotation"):
+            for rname in ("page_quotation",):
                 role_id = existing_roles.get(rname)
                 if role_id:
                     from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -177,7 +177,7 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
             await db.commit()
             
     async def update_page_permissions(
-        self, user_id: str, view_closing_form: bool, view_quotation: bool
+        self, user_id: str, view_quotation: bool
     ) -> UserDTO:
         from app.models.orm.platform.user import User
         from app.models.orm.platform.role import Role
@@ -193,18 +193,17 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
                 raise NotFoundError(f"User not found: {user_id}")
 
             roles_result = await db.execute(
-                select(Role).filter(Role.name.in_(["page_closing_form", "page_quotation"]))
+                select(Role).filter(Role.name.in_(["page_quotation"]))
             )
             role_map = {r.name: r.id for r in roles_result.scalars().all()}
 
             uid = uuid.UUID(user_id)
 
-            for rname in ("page_closing_form", "page_quotation"):
+            for rname in ("page_quotation",):
                 role_id = role_map.get(rname)
                 if not role_id:
                     continue
-                enabled = view_closing_form if rname == "page_closing_form" else view_quotation
-                if enabled:
+                if view_quotation:
                     await db.execute(
                         pg_insert(user_role_table)
                         .values(user_id=uid, role_id=role_id)

@@ -33,10 +33,13 @@ from app.usecases.document_processing.submit import (
 router = APIRouter()
 logger = get_logger("document_processing")
 
+# 语义集合名：小写字母开头，仅小写字母 / 数字 / 下划线（PGVector 逻辑表名约束）
+_COLLECTION_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
 
 class DocumentProcessRequest(BaseModel):
     """（表单/文档用）处理参数模型。"""
-    instance_id: int = Field(..., description="知识库实例ID")
+    collection: str = Field(..., description="知识库集合名（如 knowledge_chunks）")
     chunk_size: int = Field(500, ge=100, le=2000, description="文本块大小")
     chunk_overlap: int = Field(50, ge=0, le=500, description="文本块重叠大小")
     uploader: str = Field("anonymous", description="上传者标识")
@@ -81,7 +84,11 @@ def _submit_usecase(db: AsyncSession):
 @router.post("/process", response_model=TaskSubmitResponse, summary="提交文档处理任务")
 async def submit_document_processing(
     files: List[UploadFile] = File(..., description="要处理的文档文件"),
-    instance_id: int = Query(..., description="知识库实例ID"),
+    collection: str = Query(
+        ...,
+        pattern=_COLLECTION_NAME_PATTERN,
+        description="知识库集合名（如 knowledge_chunks，向量写入 data_<collection> 表）",
+    ),
     chunk_size: int = Query(500, ge=100, le=2000, description="文本块大小"),
     chunk_overlap: int = Query(50, ge=0, le=500, description="文本块重叠大小"),
     uploader: str = Query("anonymous", description="上传者标识（仅允许传本人信息）"),
@@ -93,7 +100,7 @@ async def submit_document_processing(
         result = await _submit_usecase(db).execute(
             SubmitDocumentProcessingCommand(
                 files=files,
-                instance_id=instance_id,
+                collection=collection,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 normalized_uploader=normalized_uploader,

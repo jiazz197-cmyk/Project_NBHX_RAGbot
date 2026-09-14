@@ -12,11 +12,8 @@ from app.usecases.retriever.retrieve import ChartAnalysisUseCase, RetrieverUseCa
 
 router = APIRouter()
 
-
-def _collection_name_from_instance_id(instance_id: int) -> str:
-    # PGVector internally stores physical tables as data_<table_name>.
-    # Here we must pass logical table_name to avoid data_data_* mismatch.
-    return f"doc_collection_{instance_id}"
+# 语义集合名：小写字母开头，仅小写字母 / 数字 / 下划线（PGVector 逻辑表名约束）
+_COLLECTION_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 
 
 def _ensure_collection_access(collection_name: str, current_user: CurrentUserPort) -> str:
@@ -40,14 +37,19 @@ def _ensure_collection_access(collection_name: str, current_user: CurrentUserPor
 @router.post("/db")
 def db(
     request: ChatRequest,
-    instance_id: int = Query(..., ge=1, description="RAG instance id"),
+    collection: str = Query(
+        ...,
+        pattern=_COLLECTION_NAME_PATTERN,
+        description="知识库集合名（如 knowledge_chunks，对应 data_<collection> 向量表）",
+    ),
     rag_instance=Depends(get_rag_instance),
     current_user: CurrentUserPort = Depends(get_current_user),
 ):
-    collection_name = _collection_name_from_instance_id(instance_id)
-    collection_name = _ensure_collection_access(collection_name, current_user)
+    # 语义集合名即 PGVector 逻辑表名（物理表 data_<collection>），
+    # 直接传逻辑表名，避免 data_data_* 前缀错位。
+    collection_name = _ensure_collection_access(collection, current_user)
     port = RAGRetrieverAdapter(rag_instance=rag_instance, collection_name=collection_name)
-    q = RetrievalQuery(question=request.question, collection_name=collection_name, instance_id=instance_id)
+    q = RetrievalQuery(question=request.question, collection_name=collection_name)
     result = RetrieverUseCase(port).query_db(q)
     return {"answer": result.answer, "sources": result.sources}
 
@@ -55,14 +57,17 @@ def db(
 @router.post("/excel")
 def excel(
     request: ChatRequest,
-    instance_id: int = Query(..., ge=1, description="RAG instance id"),
+    collection: str = Query(
+        ...,
+        pattern=_COLLECTION_NAME_PATTERN,
+        description="知识库集合名（如 knowledge_chunks，对应 data_<collection> 向量表）",
+    ),
     rag_instance=Depends(get_rag_instance),
     current_user: CurrentUserPort = Depends(get_current_user),
 ):
-    collection_name = _collection_name_from_instance_id(instance_id)
-    collection_name = _ensure_collection_access(collection_name, current_user)
+    collection_name = _ensure_collection_access(collection, current_user)
     port = RAGRetrieverAdapter(rag_instance=rag_instance, collection_name=collection_name)
-    q = RetrievalQuery(question=request.question, collection_name=collection_name, instance_id=instance_id)
+    q = RetrievalQuery(question=request.question, collection_name=collection_name)
     result = RetrieverUseCase(port).query_excel(q)
     return {"answer": result.answer, "sources": result.sources}
 

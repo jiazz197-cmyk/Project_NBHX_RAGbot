@@ -53,7 +53,6 @@ export interface UpdateRoleRequest {
 }
 
 export interface UserPagePermissions {
-  view_closing_form: boolean
   view_quotation: boolean
 }
 

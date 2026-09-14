@@ -2,7 +2,9 @@
 node_modules
 .pnp
 .pnp.js
+# pnpm store / cache 固定在仓库内（见 .npmrc 与 pnpm-workspace.yaml）
 .pnpm-store
+.pnpm-cache
 
 # Build
 dist

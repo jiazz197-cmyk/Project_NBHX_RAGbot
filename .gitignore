@@ -12,7 +12,6 @@ logs/
 *.egg-info/
 dist/
 build/
-index_storage/
 
 # Generated nginx config (from nginx/nginx.conf.template; see scripts/render_nginx_conf.sh)
 nginx/nginx.conf
@@ -41,3 +40,16 @@ understand-anything/
 # macOS / editor junk
 .DS_Store
 **/.DS_Store
+
+# ---------------------------------------------------------------------------
+# 项目内自包含环境（依赖与缓存都落在仓库目录内，但绝不入库）
+# 生成方式： bash scripts/setup_local_env.sh   激活： source scripts/env.sh
+# 详见 CLAUDE.md「本地环境」一节。
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+.cache/
+node_modules/
+.pnpm-store/
+.pnpm-cache/
+.turbo/

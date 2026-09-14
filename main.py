@@ -71,28 +71,6 @@ def require_metrics_access(x_api_key: str | None = Header(default=None, alias="X
         )
 
 
-def _startup_check_sqlserver_connectivity(app: FastAPI) -> None:
-    """Check U8/PDM connectivity at startup without blocking service startup."""
-    try:
-        from app.adapters.sqlserver.connectivity import test_sqlserver_connectivity
-
-        sqlserver_checks = test_sqlserver_connectivity()
-        app.state.sqlserver_connectivity = sqlserver_checks
-        for db_name in ("u8", "pdm"):
-            result = sqlserver_checks.get(db_name, {})
-            if result.get("ok"):
-                print(
-                    f"[success] {db_name.upper()} SQLServer 连接成功 "
-                    f"({result.get('latency_ms')}ms)"
-                )
-            else:
-                print(
-                    f"[warning] {db_name.upper()} SQLServer 连接失败: "
-                    f"{result.get('error')}"
-                )
-    except Exception as e:
-        app.state.sqlserver_connectivity = {}
-        print(f"[warning] SQLServer 连通性检查失败: {e}")
 
 
 async def _startup_resume_quotation_services() -> None:
@@ -327,7 +305,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[warning] 注册任务观察者失败: {e}")
 
-    _startup_check_sqlserver_connectivity(app)
     await _startup_resume_quotation_services()
 
     try:
@@ -367,9 +344,20 @@ async def lifespan(app: FastAPI):
             default_top_n=3
         )
         app.state.rag = rag_system
-        print("[success] RAG 系统初始化完成")
-        print(f"  - BGE-M3 嵌入模型: {settings.BGE_M3_API_URL}")
-        print(f"  - Reranker 重排序器: {settings.RERANKER_API_URL}")
+        print("[success] RAG 系统初始化完成（仅装配组件，连通性以下方探活为准）")
+        # 探活：对 BGE-M3 / Reranker 各发一次最小请求，地址错误在启动阶段即暴露；
+        # 失败仅告警、不阻断启动（与 Redis/MinIO 的降级约定一致）
+        try:
+            for result in await rag_system.probe_services():
+                if result["ok"]:
+                    print(f"  - [success] {result['name']} 探活成功: {result['api_url']}")
+                else:
+                    print(
+                        f"  - [warning] {result['name']} 探活失败: {result['api_url']} "
+                        f"({result['error']})，RAG 检索/文档入库调用时将失败或降级"
+                    )
+        except Exception as probe_exc:
+            print(f"  - [warning] 模型服务探活异常: {probe_exc}")
     except Exception as e:
         print(f"[warning] RAG 系统初始化失败: {e}")
         app.state.rag = None

@@ -59,7 +59,6 @@ class UserRead(BaseModel):
 
 
 class UserPagePermissionsUpdate(BaseModel):
-    view_closing_form: bool = True
     view_quotation: bool = True
 
 

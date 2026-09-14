@@ -11,7 +11,6 @@ class RetrievalQuery:
     """Query for RAG retrieval."""
     question: str
     collection_name: str = ""
-    instance_id: int = 1
     top_k: int = 10
     top_n: int = 5
     metadata: Dict[str, Any] = field(default_factory=dict)

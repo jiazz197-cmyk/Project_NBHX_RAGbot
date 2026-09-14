@@ -1,3 +1,24 @@
+# 主应用（backend）依赖锁定清单。原为 pip freeze 导出，现已人工修补到「可整体求解」。
+#
+# ⚠️ 本文件必须始终能被整体求解，改完请验证（末尾的 --index-strategy 不能省）：
+#      uv pip compile requirements.txt --index-url https://pypi.org/simple \
+#        --extra-index-url https://download.pytorch.org/whl/cu130 \
+#        --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+#        --index-strategy unsafe-best-match
+#    不要靠 `--no-deps` 掩盖冲突——那只是把问题推迟到运行期。
+#
+# 相关文件：
+#   requirements-rag.txt        RAG（LangChain/LlamaIndex）栈，随 RAG 独立容器部署
+#   requirements-dev.txt        测试工具（pytest 等），部署环境不需要
+#   requirements-overrides.txt  nvidia-nccl-cu12 排除项（装了会让 torch 崩）
+#
+# 2026-09 修复记录：
+#   - 3 处自相矛盾的锁定：pycryptodome 3.21.0→3.23.0、argon2-cffi 21.3.0→23.1.0
+#     （均为 miniopy-async==1.23.5 的硬约束）、langchain-openai 0.3.12→0.3.34。
+#   - 补锁漏掉的传递依赖：aiohttp-retry、xlsxwriter、email-validator + dnspython。
+#   - RAG 栈（langchain*/llama-index*/langsmith/openai/tiktoken/pgvector 等 48 个包）
+#     整体移出到 requirements-rag.txt，主应用不再依赖它们。
+#
 # ============================================================
 # Web 框架和 API 服务
 # ============================================================
@@ -31,7 +52,6 @@ SQLAlchemy==2.0.43
 psycopg2-binary==2.9.11
 pymssql==2.3.0
 asyncpg==0.31.0
-pgvector==0.4.1
 greenlet==3.2.4
 redis==7.0.1
 
@@ -40,33 +60,18 @@ redis==7.0.1
 # ============================================================
 minio==7.2.16
 miniopy-async==1.23.5
+# miniopy-async 的传递依赖（此前漏锁，缺了会在 minio 异步调用时报 ModuleNotFoundError）
+aiohttp-retry==2.9.1
 
 # ============================================================
 # AI/ML 框架 - LlamaIndex
 # ============================================================
-llama-index==0.14.8
-llama-index-core==0.14.8
-llama-index-cli==0.5.3
-llama-index-embeddings-openai==0.5.1
-llama-index-llms-openai==0.6.9
-llama-index-indices-managed-llama-cloud==0.9.4
-llama-index-instrumentation==0.4.2
-llama-index-readers-file==0.5.5
-llama-index-readers-llama-parse==0.5.1
-llama-index-vector-stores-postgres==0.7.1
-llama-index-workflows==2.11.5
-llama-cloud==0.1.35
-llama-cloud-services==0.6.54
-llama-parse==0.6.54
+# （LlamaIndex 全套已移出主清单 → requirements-rag.txt，随 RAG 服务独立容器部署）
 
 # ============================================================
 # AI/ML 框架 - LangChain
 # ============================================================
-langchain==0.3.27
-langchain-core==0.3.77
-langchain-text-splitters==0.3.11
-langchain-openai==0.3.12
-langsmith==0.4.32
+# （LangChain 全套已移出主清单 → requirements-rag.txt，随 RAG 服务独立容器部署）
 
 # ============================================================
 # AI/ML 框架 - Transformers 和 Hugging Face
@@ -115,6 +120,10 @@ nvidia-cusparse-cu12==12.5.4.2
 nvidia-cusparselt-cu12==0.6.3
 nvidia-cusparselt-cu13==0.8.0
 nvidia-nccl-cu13==2.27.7
+# ⚠️ 不要再加 nvidia-nccl-cu12（paddlepaddle-gpu 的元数据会要求 ==2.25.1）：
+# 两个包装的是同一个文件 nvidia/nccl/lib/libnccl.so.2，cu12 会覆盖 cu13，
+# 导致 import torch 直接崩（libtorch_cuda.so: undefined symbol: ncclCommWindowDeregister）。
+# paddle 只在多卡分布式时才真正用到 NCCL，本项目的 OCR 推理用不到。
 nvidia-nvjitlink==13.0.39
 nvidia-nvjitlink-cu12==12.6.85
 nvidia-nvshmem-cu13==3.3.24
@@ -131,8 +140,7 @@ paddlex==3.3.10
 # ============================================================
 # AI/ML 框架 - OpenAI 客户端
 # ============================================================
-openai==2.8.1
-tiktoken==0.12.0
+# （openai 客户端已移出主清单 → requirements-rag.txt，RAG 容器专用）
 
 # ============================================================
 # AI/ML 工具 - 关键词提取和文本处理
@@ -146,7 +154,6 @@ sacremoses==0.1.1
 pdf2image==1.17.0
 pdfminer.six==20251107
 pdfplumber==0.11.8
-pypdf==6.4.0
 pypdfium2==5.1.0
 
 # ============================================================
@@ -156,6 +163,8 @@ python-docx==1.2.0
 python-pptx==1.0.2
 openpyxl==3.1.5
 et_xmlfile==2.0.0
+# python-pptx 的传递依赖（此前漏锁，缺了 python-pptx 直接 import 失败）
+xlsxwriter==3.2.9
 
 # ============================================================
 # 文档处理 - HTML 和 Web 内容
@@ -213,21 +222,16 @@ cryptography==46.0.3
 bcrypt==5.0.0
 passlib==1.7.4
 PyJWT==2.10.1
-pycryptodome==3.21.0
+# miniopy-async 要求 pycryptodome>=3.22,<4（原先锁 3.21.0 导致整体无解）
+pycryptodome==3.23.0
 
 # ============================================================
 # 序列化和数据格式
 # ============================================================
-orjson==3.11.4
 ujson==5.11.0
-jiter==0.12.0
 PyYAML==6.0.2
 ruamel.yaml==0.18.16
 ruamel.yaml.clib==0.2.15
-jsonpatch==1.33
-jsonpointer==3.0.0
-dataclasses-json==0.6.7
-marshmallow==3.26.1
 protobuf==6.33.2
 
 # ============================================================
@@ -245,7 +249,6 @@ mdurl==0.1.2
 # ============================================================
 joblib==1.5.2
 threadpoolctl==3.5.0
-nest-asyncio==1.6.0
 
 # ============================================================
 # 百度 AI 平台 SDK
@@ -271,13 +274,16 @@ charset-normalizer==3.4.4
 idna==3.11
 PySocks==1.7.1
 
+# pydantic 的 EmailStr 校验（app/adapters/web/platform/user.py 用到；属 pydantic[email] 可选依赖，
+# 不装的话 import main 时才会炸，uv pip check 也看不出来）
+email-validator==2.3.0
+dnspython==2.8.0
+
 # ============================================================
 # 文件和路径处理
 # ============================================================
-platformdirs==4.5.0
 filelock==3.20.0
 fsspec==2024.12.0
-filetype==1.2.0
 
 # ============================================================
 # 进度条和显示
@@ -295,23 +301,18 @@ tzdata==2025.3
 # ============================================================
 # 通用工具库
 # ============================================================
-tenacity==9.1.2
 packaging==25.0
 jmespath==1.0.1
 six==1.17.0
 attrs==25.4.0
 decorator==5.2.1
-Deprecated==1.2.18
-wrapt==1.17.3
 
 # ============================================================
 # 类型检查和注解
 # ============================================================
 typing-extensions==4.15.0
-typing-inspect==0.9.0
 typing-inspection==0.4.2
 annotated-types==0.6.0
-mypy_extensions==1.1.0
 
 # ============================================================
 # 系统和资源监控
@@ -332,12 +333,10 @@ anyio==4.10.0
 python-bidi==0.6.7
 regex==2025.11.3
 wcwidth==0.2.14
-colorama==0.4.6
 
 # ============================================================
 # 压缩和哈希
 # ============================================================
-zstandard==0.24.0
 xxhash==3.5.0
 
 # ============================================================
@@ -349,17 +348,13 @@ MarkupSafe==3.0.3
 # ============================================================
 # 其他工具
 # ============================================================
-argon2-cffi==21.3.0
+# miniopy-async 要求 argon2-cffi>=23.1,<24（23.1.0 是该区间唯一版本）
+argon2-cffi==23.1.0
 argon2-cffi-bindings==25.1.0
 astor==0.8.1
 chardet==5.2.0
-defusedxml==0.7.1
-dirtyjson==1.0.8
-distro==1.9.0
 future==1.0.0
-griffe==1.15.0
 imagesize==1.4.1
-striprtf==0.0.26
 
 # ============================================================
 # Python C 扩展依赖
