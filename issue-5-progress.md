@@ -17,9 +17,9 @@
 | C | main.py 生命周期 | ⬜ 未开始 |
 | D | 共享基础设施去报价化 | ⬜ 未开始 |
 | E | 配置 | ⬜ 未开始 |
-| F | 前端 | ⬜ 未开始 |
-| G | 测试 | ⬜ 未开始 |
-| H | 网关 | ⬜ 未开始 |
+| F | 前端 | ✅ 完成 |
+| G | 测试 | 🟡 部分（删除完成，改写待阶段4） |
+| H | 网关 | ✅ 完成 |
 | I | 补充项（Issue 清单未覆盖的残留点） | ⬜ 未开始 |
 | 验收 | 验收标准 | ⬜ 未开始 |
 
@@ -94,34 +94,34 @@
 
 ## F. 前端
 
-- [ ] 删除 `frontend/apps/chat/src/pages/FileManagerPage.vue`
-- [ ] 删除 `frontend/apps/chat/src/services/quotation.ts`
-- [ ] 删除 `frontend/apps/chat/src/types/quotation.ts`
-- [ ] `frontend/apps/chat/src/router/index.ts`：删除 `/files` 路由
-- [ ] `frontend/apps/chat/src/App.vue`：删除「报价生成」侧边栏入口、`showQuotation` 计算属性及权限判断
-- [ ] `frontend/apps/chat/src/services/auth.ts`：从 `UserPagePermissions` 删除 `view_quotation`
-- [ ] `frontend/apps/chat/src/pages/UserManagePage.vue`：删除「报价生成」权限开关及相关逻辑
-- [ ] `frontend/apps/chat/vite.config.ts`：删除 `/quotation` 代理
-- [ ] 检查并移除仅这两个页面使用的前端依赖（⚠️ 注意勿误删共享依赖）
-- [ ] 确认后端 `/api/v1/files` API 保留，仅前端 `/files` 页面路由删除
+- [x] 删除 `frontend/apps/chat/src/pages/FileManagerPage.vue`
+- [x] 删除 `frontend/apps/chat/src/services/quotation.ts`
+- [x] 删除 `frontend/apps/chat/src/types/quotation.ts`
+- [x] `frontend/apps/chat/src/router/index.ts`：删除 `/files` 路由
+- [x] `frontend/apps/chat/src/App.vue`：删除「报价生成」侧边栏入口、`showQuotation` 计算属性及权限判断
+- [x] `frontend/apps/chat/src/services/auth.ts`：从 `UserPagePermissions` 删除 `view_quotation`
+- [x] `frontend/apps/chat/src/pages/UserManagePage.vue`：删除「报价生成」权限开关及相关逻辑
+- [x] `frontend/apps/chat/vite.config.ts`：删除 `/quotation` 代理
+- [x] 检查并移除仅这两个页面使用的前端依赖（结论：无需移除，`js-tiktoken` 仍被 `utils/token_counter.ts` 使用）
+- [x] 确认后端 `/api/v1/files` API 保留，仅前端 `/files` 页面路由删除（nginx `files` location 保留，后端未动）
 
 ## G. 测试
 
 删除：
 
-- [ ] `tests/test_quotation_workbook_quantities.py`
-- [ ] `tests/test_quotation_workbook_adapter.py`
-- [ ] `tests/test_quotation_phase2.py`
-- [ ] `tests/test_create_direct_u8_task.py`
-- [ ] `tests/test_pdm_matcher.py`
-- [ ] `tests/test_u8_bom_deadlock_retry.py`
-- [ ] `tests/test_u8_bom_root_failure_isolation.py`
-- [ ] `tests/test_sqlserver_pool_keepalive.py`
-- [ ] `tests/test_pdm.py`
-- [ ] `tests/pdm_debug.py`
-- [ ] `tests/gen_single_sql.py`
-- [ ] `tests/test_pdm_sql.py`
-- [ ] `tests/fixtures/u8_result_by_type_*.json`（确认仅报价 / sqlserver 测试使用后删除）
+- [x] `tests/test_quotation_workbook_quantities.py`
+- [x] `tests/test_quotation_workbook_adapter.py`
+- [x] `tests/test_quotation_phase2.py`
+- [x] `tests/test_create_direct_u8_task.py`
+- [x] `tests/test_pdm_matcher.py`
+- [x] `tests/test_u8_bom_deadlock_retry.py`
+- [x] `tests/test_u8_bom_root_failure_isolation.py`
+- [x] `tests/test_sqlserver_pool_keepalive.py`
+- [x] `tests/test_pdm.py`
+- [x] `tests/pdm_debug.py`
+- [x] `tests/gen_single_sql.py`
+- [x] `tests/test_pdm_sql.py`
+- [x] `tests/fixtures/u8_result_by_type_*.json`（已确认仅报价 / sqlserver 测试使用）
 
 改写：
 
@@ -131,9 +131,9 @@
 
 ## H. 网关
 
-- [ ] `nginx/nginx.conf.template`：删除 `location ^~ /api/v1/quotation/`
-- [ ] `nginx/nginx.conf.template`：删除 `location ^~ /api/v1/sqlserver/` 及对应精确匹配 location
-- [ ] 更新 `/api/v1/sqlserver/` 上方「quotation pipeline 内部调用」过时注释
+- [x] `nginx/nginx.conf.template`：删除 `location ^~ /api/v1/quotation/`
+- [x] `nginx/nginx.conf.template`：删除 `location ^~ /api/v1/sqlserver/` 及对应精确匹配 location
+- [x] 更新 `/api/v1/sqlserver/` 上方「quotation pipeline 内部调用」过时注释
 
 ---
 

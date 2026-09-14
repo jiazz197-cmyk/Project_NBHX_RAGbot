@@ -16,9 +16,6 @@
         <RouterLink class="sidebar-nav__item" active-class="is-active" to="/chat">
           AI聊天
         </RouterLink>
-        <RouterLink v-if="showQuotation" class="sidebar-nav__item" active-class="is-active" to="/files">
-          报价生成
-        </RouterLink>
         <RouterLink v-if="showClosingForm" class="sidebar-nav__item" active-class="is-active" to="/closing-form">
           营业订单信息
         </RouterLink>
@@ -97,7 +94,6 @@ const userName = computed(() => sidebarUserName.value || sidebarUserId.value || 
 const userAvatarUrl = computed(() => config.userAvatarUrl || '')
 const isSuperuser = computed(() => userRole.value === 'superuser')
 const isAdminOrSuperuser = computed(() => userRole.value === 'admin' || userRole.value === 'superuser')
-const showQuotation = computed(() => isAdminOrSuperuser.value || userPermissions.value.includes('view_quotation'))
 const showClosingForm = computed(() => isAdminOrSuperuser.value || userPermissions.value.includes('view_closing_form'))
 
 const route = useRoute()

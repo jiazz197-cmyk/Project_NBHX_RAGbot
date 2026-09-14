@@ -29,12 +29,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'AI聊天' },
   },
   {
-    path: '/files',
-    name: 'files',
-    component: () => import('@/pages/FileManagerPage.vue'),
-    meta: { title: '报价生成', requiresPermission: 'view_quotation' },
-  },
-  {
     path: '/closing-form',
     name: 'closing-form',
     component: () => import('@/pages/PolicyGeneratePage.vue'),

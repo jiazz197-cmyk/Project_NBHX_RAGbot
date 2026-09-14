@@ -76,7 +76,6 @@ export default defineConfig(({ mode }) => {
         [`${apiBase}/ocr`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/image2url`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/pdf2image`]: makeProxy(env.VITE_BACKEND_TARGET),
-        [`${apiBase}/quotation`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/context-compression`]: makeProxy(env.VITE_BACKEND_TARGET),
         [apiBase]: {
           ...makeProxy(env.VITE_DIFY_TARGET, chatProxyApiKey),
