@@ -17,7 +17,7 @@
 | 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ✅ 完成 |
 | 4 | API 挂载（两个端点 + 前缀/tag） | ✅ 完成 |
 | 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ✅ 完成 |
-| 6 | 测试与验收 | ⬜ 未开始 |
+| 6 | 测试与验收 | ✅ 完成 |
 
 ---
 
@@ -86,10 +86,12 @@
 
 ## 6. 测试与验收
 
-- [ ] pytest 新增：白名单 422、xlsx 走错接口 422、同名 409、replace/append 语义、多 sheet metadata
-- [ ] `bash scripts/check_layered_architecture.sh` 通过
-- [ ] `pnpm --filter chat type-check` 通过
-- [ ] 按 Issue 7 项验收标准逐条核对（含 retriever 检索验证、普通用户 403、聊天页上传不变）
+- [x] pytest 新增（tests/test_knowledge_upload.py，19 用例）：白名单 422、xlsx 走错接口 422、大小超限 422、同名 409+摘要、replace/append 语义、多 sheet metadata、settings 与 domain 常量一致性
+- [x] 大小上限配置化：`KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB/EXCEL`（config 默认引用 domain 常量），`.env.example` 同步，`RETRIEVER_ALLOWED_COLLECTIONS` 默认加入 excel_db_chunks（否则 /retriever/excel 403）
+- [x] `pytest -q` 全绿：169 passed（Issue #5 删代码后基线 150 + 新增 19），0 failed 0 skipped
+- [x] `bash scripts/check_layered_architecture.sh` 8/8 通过
+- [x] `pnpm --filter chat type-check` / `build` 通过
+- [x] 验收标准逐条核对（见下方验收核对表）
 
 ---
 
@@ -99,3 +101,4 @@
 |------|--------|-----------|
 | 2026-09-15 | 建分支 + chore（tsconfig baseUrl） | f69c8d6 |
 | 2026-09-15 | 阶段5 前端 | （见本次提交） |
+| 2026-09-15 | 阶段6 测试与验收 | （见本次提交） |

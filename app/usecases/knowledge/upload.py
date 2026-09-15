@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from app.core.config import settings
 from app.core.exceptions import KnowledgeFileNameConflictError, ValidationError
 from app.core.logging import get_logger
 from app.domain.knowledge.collections import (
@@ -14,8 +15,6 @@ from app.domain.knowledge.upload_rules import (
     CONFLICT_REPLACE,
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
-    MAX_DOCUMENT_FILE_SIZE_BYTES,
-    MAX_EXCEL_FILE_SIZE_BYTES,
     VALID_ON_CONFLICT_VALUES,
     is_document_allowed,
     is_excel_db_allowed,
@@ -127,9 +126,10 @@ class UploadKnowledgeDocumentUseCase:
                     )
                 raise ValidationError(f"不支持的文件类型: {name}")
             size = _file_size(upload_file)
-            if size > MAX_DOCUMENT_FILE_SIZE_BYTES:
+            max_document_bytes = settings.KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB * 1024 * 1024
+            if size > max_document_bytes:
                 raise ValidationError(
-                    f"文件「{name}」超过大小上限 {MAX_DOCUMENT_FILE_SIZE_BYTES // (1024 * 1024)}MB"
+                    f"文件「{name}」超过大小上限 {settings.KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB}MB"
                 )
 
         await _resolve_conflicts(
@@ -180,9 +180,10 @@ class UploadExcelDbUseCase:
             if not is_excel_db_allowed(name):
                 raise ValidationError(f"仅支持 xlsx / xls 文件，收到: {name}")
             size = _file_size(upload_file)
-            if size > MAX_EXCEL_FILE_SIZE_BYTES:
+            max_excel_bytes = settings.KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB * 1024 * 1024
+            if size > max_excel_bytes:
                 raise ValidationError(
-                    f"文件「{name}」超过大小上限 {MAX_EXCEL_FILE_SIZE_BYTES // (1024 * 1024)}MB"
+                    f"文件「{name}」超过大小上限 {settings.KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB}MB"
                 )
 
         await _resolve_conflicts(

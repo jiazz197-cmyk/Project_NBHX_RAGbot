@@ -13,6 +13,11 @@ from pydantic._internal._model_construction import ModelMetaclass
 from dotenv import load_dotenv
 import sys
 
+from app.domain.knowledge.upload_rules import (
+    MAX_DOCUMENT_FILE_SIZE_BYTES,
+    MAX_EXCEL_FILE_SIZE_BYTES,
+)
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))))
 sys.path.insert(0, project_root)
@@ -166,6 +171,21 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # 后台任务线程池大小（共享 executor 服务 OCR / 文档处理 / 知识库上传任务）。
     EXECUTOR_MAX_WORKERS: int = Field(
         30, ge=1, le=512, env="EXECUTOR_MAX_WORKERS"
+    )
+
+    # 知识库上传大小上限（MB）：文档与 Excel 分设，超限 422。
+    # 默认值引用 app/domain/knowledge/upload_rules.py 的字节常量（单一事实来源）。
+    KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB: int = Field(
+        MAX_DOCUMENT_FILE_SIZE_BYTES // (1024 * 1024),
+        ge=1,
+        le=2048,
+        env="KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB",
+    )
+    KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB: int = Field(
+        MAX_EXCEL_FILE_SIZE_BYTES // (1024 * 1024),
+        ge=1,
+        le=2048,
+        env="KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB",
     )
 
     # 文档处理重模型有界池上限。PaddleOCR / TagGenerator 各自一个全局池，
