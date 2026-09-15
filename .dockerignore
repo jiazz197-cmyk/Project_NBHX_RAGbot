@@ -1,0 +1,17 @@
+# =============================================================================
+# 构建上下文白名单
+#
+# 本仓库的开发镜像**不含代码**（代码运行时 bind mount 到 /workspace），
+# 所以上下文里只需要「装依赖要用的东西」。用白名单而不是黑名单，是因为
+# 仓库里有 .venv(11G) / .cache(12G) / node_modules，黑名单漏一条就是几 GB。
+#   效果：上下文从 13 GB 降到几 KB。
+#
+# ⚠️ 将来若要做「把代码 COPY 进镜像」的产物镜像（如 OCR/RAG 服务），
+#    需要另写一份 .dockerignore（或换用 --build-context）。
+# =============================================================================
+*
+!requirements.txt
+!requirements-rag.txt
+!requirements-dev.txt
+!requirements-overrides.txt
+!docker/
