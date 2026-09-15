@@ -31,3 +31,13 @@ class KnowledgeRecordDeleteResponse(BaseModel):
     success: bool = True
     message: str = "删除成功"
     deleted_id: str
+
+
+class KnowledgeUploadResponse(BaseModel):
+    """知识上传任务提交响应"""
+
+    task_id: str
+    status: str = "pending"
+    message: str = ""
+    files_count: int
+    collection: str

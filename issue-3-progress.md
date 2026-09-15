@@ -15,7 +15,7 @@
 | 1 | 领域与端口（constants / DTO / Port） | ✅ 完成 |
 | 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ✅ 完成 |
 | 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ✅ 完成 |
-| 4 | API 挂载（两个端点 + 前缀/tag） | ⬜ 未开始 |
+| 4 | API 挂载（两个端点 + 前缀/tag） | ✅ 完成 |
 | 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ⬜ 未开始 |
 | 6 | 测试与验收 | ⬜ 未开始 |
 
@@ -69,8 +69,10 @@
 
 ## 4. API 挂载
 
-- [ ] `app/api/v1/knowledge.py`：`POST /knowledge/documents`、`POST /knowledge/excel-db`（`Depends(get_current_user)`）
-- [ ] `prefixes.py` 加 `KNOWLEDGE`；`registry.py`/`tags.py` 挂载
+- [x] `app/api/v1/knowledge.py`：`POST /knowledge/documents`、`POST /knowledge/excel-db`（`Depends(get_current_user)`，所有登录用户；on_conflict Query 参数 pattern 校验）
+- [x] 组合根装配：`_submit_usecase(db)` 照 document_processing 端点模式装配流水线；`VectorMetadataAdapter` 注入 usecase
+- [x] `KnowledgeUploadResponse` schema（web 层）；409/422 走统一异常处理器
+- [x] 路由挂载：registry/prefixes 已由 Issue #2 挂好，零改动；tags 描述更新含 upload
 
 ## 5. 前端
 

@@ -56,7 +56,7 @@ OPENAPI_TAG_METADATA: list[dict] = [
     },
     {
         "name": KNOWLEDGE,
-        "description": "Knowledge base (knowledge_chunks) record listing and deletion.",
+        "description": "Knowledge base records: listing, deletion, and upload (documents / Excel-db).",
     },
     {
         "name": CONTEXT_COMPRESSION,
