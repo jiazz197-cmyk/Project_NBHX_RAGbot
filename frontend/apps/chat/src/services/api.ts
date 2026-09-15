@@ -88,9 +88,14 @@ export const handleApiError = async (response: Response): Promise<never> => {
   try {
     const payload = await response.json()
     error = {
-      code: String((payload as { code?: unknown })?.code ?? 'api_error'),
+      code: String(
+        (payload as { error_code?: unknown; code?: unknown })?.error_code ??
+          (payload as { code?: unknown })?.code ??
+          'api_error'
+      ),
       message: String((payload as { message?: unknown; detail?: unknown })?.message ?? (payload as { detail?: unknown })?.detail ?? '请求失败'),
       status: response.status,
+      details: (payload as { details?: unknown })?.details,
     }
   } catch {
     error = {

@@ -16,7 +16,7 @@
         <RouterLink class="sidebar-nav__item" active-class="is-active" to="/chat">
           AI聊天
         </RouterLink>
-        <RouterLink v-if="isAdminOrSuperuser" class="sidebar-nav__item" active-class="is-active" to="/knowledge">
+        <RouterLink v-if="isLoggedIn" class="sidebar-nav__item" active-class="is-active" to="/knowledge">
           知识库管理
         </RouterLink>
         <RouterLink v-if="isSuperuser" class="sidebar-nav__item" active-class="is-active" to="/users">
@@ -55,12 +55,13 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Sidebar, ConfirmDialog } from '@yamato/components'
 import { config } from './config'
 import { useIdleTimer } from './composables/useIdleTimer'
-import { clearAuthTokenFromStorage } from './services/token_storage'
+import { clearAuthTokenFromStorage, getAuthTokenFromStorage } from './services/token_storage'
 import { readStored } from './services/storage'
 
 const sidebarUserId = ref('')
 const sidebarUserName = ref('')
 const userRole = ref('')
+const sidebarHasToken = ref(false)
 
 const readSidebarState = () => {
   const parsed = readStored<{
@@ -75,18 +76,21 @@ const readSidebarState = () => {
     sidebarUserId.value = ''
     sidebarUserName.value = ''
     userRole.value = ''
+    sidebarHasToken.value = false
     return
   }
 
   sidebarUserId.value = String(parsed.userId ?? '').trim()
   sidebarUserName.value = String(parsed.userName ?? parsed.user ?? parsed.username ?? '').trim()
   userRole.value = String(parsed.role ?? '').trim()
+  sidebarHasToken.value = Boolean(getAuthTokenFromStorage())
 }
 
 const userName = computed(() => sidebarUserName.value || sidebarUserId.value || config.userName || '')
 const userAvatarUrl = computed(() => config.userAvatarUrl || '')
 const isSuperuser = computed(() => userRole.value === 'superuser')
-const isAdminOrSuperuser = computed(() => userRole.value === 'admin' || userRole.value === 'superuser')
+// 知识库管理对所有登录用户开放（上传能力）；未登录由路由守卫拦截。
+const isLoggedIn = computed(() => sidebarHasToken.value || Boolean(sidebarUserName.value || sidebarUserId.value))
 
 const route = useRoute()
 const router = useRouter()

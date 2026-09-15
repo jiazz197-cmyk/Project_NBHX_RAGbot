@@ -327,7 +327,6 @@ if __name__ == '__main__':
             database=os.getenv("RAG_DB_NAME", "postgres"),
             port=int(os.getenv("RAG_DB_PORT", "5432")),
             table_prefix=os.getenv("RAG_DB_TABLE_PREFIX", "doc_collection"),
-            instance_id=1,
             default_top_k=20,
             default_top_n=3
         )

@@ -109,4 +109,6 @@ export interface ApiError {
   code: string
   message: string
   status: number
+  /** 后端 APIException 的 details 负载（如 409 冲突的既有文件摘要） */
+  details?: unknown
 }

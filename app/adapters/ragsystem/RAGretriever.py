@@ -177,7 +177,11 @@ class VectorStoreManager:
             return vector_store
 
     def list_available_collections_sync(self) -> List[str]:
-        """information_schema 里 data_{prefix}_% 表（同步，供 worker/线程池）。"""
+        """information_schema 里 data_% 表（同步，供 worker/线程池）。
+
+        语义化后统一扫描全部 data_ 前缀表（data_knowledge_chunks / data_excel_db_chunks /
+        历史 data_doc_collection_* 均可见），不再只扫 table_prefix 匹配的旧 instance 表。
+        """
         from app.core.database import engine
 
         try:
@@ -191,7 +195,7 @@ class VectorStoreManager:
             )
             with engine.connect() as conn:
                 result = conn.execute(
-                    query, {"pattern": f"data_{self.table_prefix}_%"}
+                    query, {"pattern": "data_%"}
                 )
                 tables = [row[0] for row in result.fetchall()]
             logger.debug(f"找到 {len(tables)} 个向量存储表")
@@ -201,7 +205,7 @@ class VectorStoreManager:
             return []
 
     async def list_available_collections(self) -> List[str]:
-        """information_schema 里 data_{prefix}_% 表。"""
+        """information_schema 里 data_% 表（语义化后含新集合表）。"""
         try:
             query = """
             SELECT table_name 
@@ -211,7 +215,7 @@ class VectorStoreManager:
             """
             async with self.async_engine.connect() as conn:
                 result = await conn.execute(
-                    text(query), {"pattern": f"data_{self.table_prefix}_%"}
+                    text(query), {"pattern": "data_%"}
                 )
                 tables = [row[0] for row in result.fetchall()]
             logger.debug(f"找到 {len(tables)} 个向量存储表")
@@ -281,7 +285,6 @@ class RAGRetrieverSystem:
             POSTGRES_DB: str,
             POSTGRES_PORT: int,
             table_prefix: str = "doc_collection",
-            instance_id: int = 1,
             bge_m3_api_url: str = None,
             reranker_api_url: str = None,
             default_top_k: int = 10,
@@ -295,7 +298,6 @@ class RAGRetrieverSystem:
             "port": POSTGRES_PORT
         }
 
-        self.instance_id = instance_id
         self.table_prefix = table_prefix
         
         self.bge_m3_api_url = bge_m3_api_url or os.environ.get("BGE_M3_API_URL", "http://localhost:8000/v1/embeddings")
@@ -549,7 +551,6 @@ def create_rag_retriever_system(
         database: str = "postgres",
         port: int = 5432,
         table_prefix: str = "doc_collection",
-        instance_id: int = 1,
         bge_m3_api_url: str = None,
         reranker_api_url: str = None,
         default_top_k: int = 10,
@@ -563,7 +564,6 @@ def create_rag_retriever_system(
         POSTGRES_DB=database,
         POSTGRES_PORT=port,
         table_prefix=table_prefix,
-        instance_id=instance_id,
         bge_m3_api_url=bge_m3_api_url,
         reranker_api_url=reranker_api_url,
         default_top_k=default_top_k,
@@ -581,29 +581,30 @@ if __name__ == "__main__":
         database="postgres",
         port=5432,
         table_prefix="doc_collection",
-        instance_id=1,
         default_top_k=20,
         default_top_n=3
     )
 
     try:
-        retriever = rag_system.get_retriever_by_instance_id(instance_id=1)
+        retriever = rag_system.get_retriever_for_collection(collection_name="knowledge_chunks")
         results = retriever.retrieve("你的查询问题")
         print("检索结果:", results)
 
-        retriever_custom = rag_system.get_retriever_by_instance_id(instance_id=1, top_k=30)
+        retriever_custom = rag_system.get_retriever_for_collection(
+            collection_name="knowledge_chunks", top_k=30
+        )
         results_custom = retriever_custom.retrieve("你的查询问题")
         print("自定义检索结果:", results_custom)
 
         query_engine = rag_system.get_query_engine_for_collection(
-            collection_name="doc_collection_1",
+            collection_name="knowledge_chunks",
             use_reranker=True
         )
         response = query_engine.query("你的查询问题")
         print("查询响应:", response)
 
         query_engine_custom = rag_system.get_query_engine_for_collection(
-            collection_name="doc_collection_1",
+            collection_name="knowledge_chunks",
             top_k=50,
             use_reranker=True,
             reranker_top_n=10

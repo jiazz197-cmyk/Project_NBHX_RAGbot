@@ -68,3 +68,19 @@ class AuthenticationError(APIException):
 
     def __init__(self, message: str = "Authentication failed"):
         super().__init__(message, status_code=401, error_code="AUTHENTICATION_ERROR")
+
+
+class KnowledgeFileNameConflictError(APIException):
+    """知识库上传同名文件冲突（409），details 携带既有记录摘要。"""
+
+    def __init__(
+        self,
+        message: str = "存在同名文件",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code="KNOWLEDGE_FILE_NAME_CONFLICT",
+            details=details,
+        )

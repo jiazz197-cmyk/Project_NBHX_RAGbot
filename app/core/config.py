@@ -13,6 +13,11 @@ from pydantic._internal._model_construction import ModelMetaclass
 from dotenv import load_dotenv
 import sys
 
+from app.domain.knowledge.upload_rules import (
+    MAX_DOCUMENT_FILE_SIZE_BYTES,
+    MAX_EXCEL_FILE_SIZE_BYTES,
+)
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))))
 sys.path.insert(0, project_root)
@@ -143,7 +148,11 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
             raise ValueError("生产环境禁止使用 BACKEND_CORS_ORIGINS=[\"*\"]，请配置明确来源")
         return v
 
-    @validator("RETRIEVER_ALLOWED_COLLECTIONS", pre=True)
+    @validator(
+        "RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS",
+        "RETRIEVER_ALLOWED_EXCEL_COLLECTIONS",
+        pre=True,
+    )
     def split_retriever_allowed_collections(cls, v: Union[str, List[str]]) -> List[str]:
         if isinstance(v, str):
             if not v.strip():
@@ -166,6 +175,21 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # 后台任务线程池大小（共享 executor 服务 OCR / 文档处理 / 知识库上传任务）。
     EXECUTOR_MAX_WORKERS: int = Field(
         30, ge=1, le=512, env="EXECUTOR_MAX_WORKERS"
+    )
+
+    # 知识库上传大小上限（MB）：文档与 Excel 分设，超限 422。
+    # 默认值引用 app/domain/knowledge/upload_rules.py 的字节常量（单一事实来源）。
+    KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB: int = Field(
+        MAX_DOCUMENT_FILE_SIZE_BYTES // (1024 * 1024),
+        ge=1,
+        le=2048,
+        env="KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB",
+    )
+    KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB: int = Field(
+        MAX_EXCEL_FILE_SIZE_BYTES // (1024 * 1024),
+        ge=1,
+        le=2048,
+        env="KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB",
     )
 
     # 文档处理重模型有界池上限。PaddleOCR / TagGenerator 各自一个全局池，
@@ -270,7 +294,17 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     ALGORITHM: str = Field("HS256", env="ALGORITHM")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(360, env="ACCESS_TOKEN_EXPIRE_MINUTES")
     INTERNAL_API_KEY: str = Field("change_me_internal_api_key", env="INTERNAL_API_KEY")
-    RETRIEVER_ALLOWED_COLLECTIONS: List[str] = Field(default_factory=list, env="RETRIEVER_ALLOWED_COLLECTIONS")
+    # 检索白名单按接口分家（非 superuser 限制）：
+    # /retriever/db 仅放行文档集合；/retriever/excel 仅放行 Excel 集合。
+    # 默认值与 app/domain/knowledge/collections.py 的逻辑集合名一致。
+    RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS: List[str] = Field(
+        default_factory=lambda: ["knowledge_chunks"],
+        env="RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS",
+    )
+    RETRIEVER_ALLOWED_EXCEL_COLLECTIONS: List[str] = Field(
+        default_factory=lambda: ["excel_db_chunks"],
+        env="RETRIEVER_ALLOWED_EXCEL_COLLECTIONS",
+    )
 
     BOOTSTRAP_SUPERUSER_USERNAME: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_USERNAME")
     BOOTSTRAP_SUPERUSER_EMAIL: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_EMAIL")
