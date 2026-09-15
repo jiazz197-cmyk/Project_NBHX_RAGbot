@@ -12,3 +12,8 @@ pytest-asyncio==1.4.0
 # 显式列出是为了让 `uv pip sync`（精确同步、不展开依赖）不会把它们误删。
 iniconfig==2.3.0
 pluggy==1.6.0
+# uvicorn --reload 的文件监控后端（inotify）。缺失时退化为 StatReload 轮询：
+# 每 ~0.25s os.walk 整个仓库（含 .venv/.cache/node_modules），单核 100% 空转。
+# 仅本地开发需要；CI 的 pytest job 不跑后端，无需安装。
+# 传递依赖 anyio 已在 requirements.txt（anyio==4.10.0）。
+watchfiles==1.2.0
