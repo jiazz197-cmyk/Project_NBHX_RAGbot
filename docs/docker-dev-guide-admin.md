@@ -28,15 +28,15 @@ bash scripts/dev.sh docker guard
 # ── ③ 用新镜像重建容器，确认能用
 bash scripts/dev.sh docker up
 
-# ── ④ 打标签（本地别名 + registry 两个 tag）
-TAG=py312-cu130-$(sha256sum requirements.txt | cut -c1-8)     # 可追溯、可回滚
-docker tag nbhx-dev:local 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:$TAG
-docker tag nbhx-dev:local 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130   # 「当前版本」移动 tag
-
-# ── ⑤ 推送（约 12GB 传输；分层增量，只改业务代码时镜像层没变，**完全不用推**）
-docker login 10.80.153.12:5050      # 用户名=GitLab 用户名，密码=PAT（scope 含 read_registry+write_registry 或 api）
-docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:$TAG
-docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130
+# ── ④⑤ 打 tag 并推送（一条命令搞定）
+docker login 10.80.153.12:5050      # 首次/凭证过期时：用户名=GitLab 用户名，密码=PAT（scope 含 read_registry+write_registry 或 api）
+bash scripts/dev.sh docker push
+#   它会自动打两个 tag 并推送：
+#     py312-cu130-<依赖指纹12位>   ← 可复现。指纹 = 四个 requirements 文件的 sha256 前 12 位，
+#                                    与镜像内 /opt/venv/.requirements-hash、`docker check` 打印的一致
+#     py312-cu130                 ← 「当前版本」移动 tag，同事 pull 拿到的就是它
+#   ⚠️ 不要用 `sha256sum requirements.txt | cut -c1-8` 那种只哈希主清单的写法：
+#      只改 rag/dev 清单时 tag 不变 → 同一个 tag 指向两个不同镜像。
 
 # ── ⑥ 提交代码 + 通知
 git add requirements*.txt docker/ && git commit -m "chore: 依赖变更" && git push
@@ -58,8 +58,8 @@ git add requirements*.txt docker/ && git commit -m "chore: 依赖变更" && git 
 |---|---|---|
 | 本地镜像 | `nbhx-dev:local` | — |
 | registry 镜像 | `10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:<tag>` | — |
-| 「当前版本」tag | `py312-cu130`（**移动** tag，每次都推） | 同事 `pull` 拿到的就是它 |
-| 可复现 tag | `py312-cu130-<requirements.txt 前 8 位 sha>` | 回滚 / 排查用 |
+| 「当前版本」tag | `py312-cu130`（**移动** tag，每次 push 都更新） | 同事 `pull` 拿到的就是它 |
+| 可复现 tag | `py312-cu130-<依赖指纹 12 位>`（四个 requirements 文件，`dev.sh docker push` 自动算） | 回滚 / 排查用 |
 | compose 项目名 | `nbhx-${USER}`（`dev.sh` 自动加 `-p`） | `nbhx-jiazhenyu` |
 | 容器名 | `nbhx-<user>-dev-1` | `nbhx-jiazhenyu-dev-1` |
 | 数据卷 | `nbhx-<user>_nbhx-{cache,node-modules,pnpm-store}` | 缓存落在 `/var/lib/docker`（NVMe） |

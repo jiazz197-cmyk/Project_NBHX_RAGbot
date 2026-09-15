@@ -186,12 +186,7 @@ bash scripts/dev.sh docker up
 # 改依赖的人：build → 验证 → 打哈希 tag → push
 bash scripts/dev.sh docker build
 bash scripts/dev.sh docker test -q && bash scripts/dev.sh docker guard
-TAG=py312-cu130-$(sha256sum requirements.txt | cut -c1-8)
-docker tag nbhx-dev:local 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:$TAG
-docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:$TAG
-# 再更新「当前版本」这个移动 tag，方便别人直接 pull
-docker tag nbhx-dev:local 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130
-docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130
+bash scripts/dev.sh docker push      # 自动打「依赖指纹 tag」+「移动 tag」并推送（需先 docker login）
 
 # 其他人
 bash scripts/dev.sh docker pull && bash scripts/dev.sh docker up

@@ -18,7 +18,7 @@
 #   bash scripts/dev.sh docker guard       # 容器里跑分层架构守卫
 #   bash scripts/dev.sh docker py <args>   # 容器里的 python
 #   bash scripts/dev.sh docker fe-setup    # 一次性：容器内装前端依赖
-#   bash scripts/dev.sh docker build|pull|down|logs|ps|check
+#   bash scripts/dev.sh docker build|push|pull|down|logs|ps|check
 #   每人一组端口示例：API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up
 #
 # 说明：`backend` / `frontend` 是前台进程，Ctrl-C 结束。
@@ -155,18 +155,54 @@ EOF
     sub="${1:-}"
     shift || true
     case "${sub}" in
-      build)     dc build "$@" ;;
+      build)
+        dc build "$@"
+        # 记下「这个 tag 现在指向我本地刚构建的镜像」，供 up 判断要不要跳过自动 pull。
+        # 血泪教训（2026-09-15）：build 完再 pull（up 里的自动 pull 也算），registry 的旧版本
+        # 会把 tag 抢走，刚构建的镜像变悬空 —— 用户以为推的是新的，其实推的还是旧的。
+        mkdir -p "${ROOT}/.cache"
+        docker image inspect "${IMG}" --format '{{.Id}}' > "${ROOT}/.cache/last-local-build" 2>/dev/null || true
+        echo "[dev] 已构建 ${IMG}（已记录本地构建标记；up 不会用 registry 的旧版本覆盖它）"
+        echo "      改完记得推： bash scripts/dev.sh docker push（见 docs/docker-dev-guide-admin.md §1）"
+        ;;
       pull)
         is_remote_ref "${IMG}" || { echo "[dev] ${IMG} 不是 registry 镜像（本地标签），无需 pull" >&2; exit 2; }
         dc pull "$@"
         exit $?
         ;;
+      push)
+        # 推镜像给同事用：打「requirements 哈希 tag」+ 更新「当前版本」移动 tag，再一起推。
+        # 用法： bash scripts/dev.sh docker push        （需要先 docker login 10.80.153.12:5050）
+        is_remote_ref "${IMG}" || { echo "[dev] ${IMG} 不是 registry 镜像，无法 push" >&2; exit 2; }
+        REG="${IMG%:*}"                      # 去掉 tag，留下 .../nbhx-dev
+        # 用**镜像依赖指纹**（四个 requirements 文件的 sha256 前 12 位，也就是烤进镜像的
+        # /opt/venv/.requirements-hash、dev.sh docker check 打印的那个值）作为可复现 tag。
+        # 不用「只哈希 requirements.txt」——那样只改 rag/dev 清单时 tag 不变，同名不同镜像。
+        HASH_TAG="py312-cu130-$(req_hash_local)"
+        echo "[dev] 推送镜像："
+        echo "        ${REG}:${HASH_TAG}  （依赖指纹，可复现）"
+        echo "        ${IMG}  （移动 tag，同事 pull 拿到的就是它）"
+        docker tag "${IMG}" "${REG}:${HASH_TAG}"
+        docker push "${REG}:${HASH_TAG}" || exit $?
+        docker push "${IMG}" || exit $?
+        # 本地也留个别名，方便以后 build 出来直接对应
+        docker tag "${IMG}" nbhx-dev:local 2>/dev/null || true
+        echo "[dev] ✅ 已推送。同事执行： bash scripts/dev.sh docker pull && bash scripts/dev.sh docker up"
+        ;;
       up)
-        # 来自 registry 的镜像：每次 up 都先对齐一次远端（层都在本地时只是查 manifest，很快）。
-        # 拉不到（registry 未启用/没网）不阻塞，继续用本地镜像。
+        # 来自 registry 的镜像：先对齐一次远端（层都在本地时只是查 manifest，很快）。
+        # ⚠️ 但如果 tag 指向的是**你本地刚构建**的镜像就跳过 —— 否则 registry 的旧版本会把
+        #    tag 抢走、你的构建变成悬空（2026-09-15 实测踩过：以为推的是新的，其实推的旧的）。
         if is_remote_ref "${IMG}"; then
-          echo "[dev] 对齐 registry 镜像 ${IMG} …"
-          dc pull --quiet || echo "[dev] 拉取失败（registry 未启用或网络不通），继续用本地镜像"
+          local_id="$(docker image inspect "${IMG}" --format '{{.Id}}' 2>/dev/null || true)"
+          stamped_id="$(cat "${ROOT}/.cache/last-local-build" 2>/dev/null || true)"
+          if [[ -n "${local_id}" && "${local_id}" == "${stamped_id}" ]]; then
+            echo "[dev] ${IMG} 是你本地刚构建的 → 跳过自动 pull（避免被 registry 旧版本覆盖）"
+            echo "      想强制对齐远端： bash scripts/dev.sh docker pull"
+          else
+            echo "[dev] 对齐 registry 镜像 ${IMG} …"
+            dc pull --quiet || echo "[dev] 拉取失败（registry 未启用或网络不通），继续用本地镜像"
+          fi
         fi
         if ! docker image inspect "${IMG}" >/dev/null 2>&1; then
           echo "[dev] 本地无 ${IMG}，本地构建（首次要下依赖，几分钟）…"
