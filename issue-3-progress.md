@@ -14,7 +14,7 @@
 | 0 | 侦察补齐（knowledge API / VectorStoreManager / 前端结构） | ✅ 完成 |
 | 1 | 领域与端口（constants / DTO / Port） | ✅ 完成 |
 | 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ✅ 完成 |
-| 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ⬜ 未开始 |
+| 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ✅ 完成 |
 | 4 | API 挂载（两个端点 + 前缀/tag） | ⬜ 未开始 |
 | 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ⬜ 未开始 |
 | 6 | 测试与验收 | ⬜ 未开始 |
@@ -60,9 +60,12 @@
 
 ## 3. UseCase 编排
 
-- [ ] `UploadKnowledgeDocumentUseCase`：白名单校验（9 类）→ xlsx/xls 422 → 同名预检（409）→ on_conflict → 复用 SubmitDocumentProcessingUseCase(collection="knowledge_chunks")
-- [ ] `UploadExcelDbUseCase`：类型校验 → 多 sheet 解析 → 行数/chunk 上限 → 同名预检 → collection="excel_db_chunks"
-- [ ] 异常走 `app.core.exceptions` 子类；日志 `get_logger("app.knowledge.*")`
+- [x] `UploadKnowledgeDocumentUseCase`：白名单校验（xlsx/xls 提示走 Excel 入口）、大小上限、同名预检（409）、on_conflict 处理，复用 SubmitDocumentProcessingUseCase(collection=knowledge_chunks)
+- [x] `UploadExcelDbUseCase`：仅 xlsx/xls、大小上限、同名预检，collection=excel_db_chunks（多 sheet 由 collection 驱动）
+- [x] 新增 `KnowledgeFileNameConflictError`（409 + KNOWLEDGE_FILE_NAME_CONFLICT + details 摘要）
+- [x] collection 逻辑名上移到 `domain/knowledge/collections.py`（usecase 不能 import adapters 常量）；adapter constants re-export
+- [x] DTO 的 on_conflict 默认改为 None（未指定时有同名报 409，指定 replace/append 时按策略处理）
+- [x] 日志 `get_logger("knowledge.upload")`；异常全走 `app.core.exceptions` 子类
 
 ## 4. API 挂载
 

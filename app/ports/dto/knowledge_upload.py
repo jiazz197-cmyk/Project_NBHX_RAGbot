@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from app.ports.contracts.identity import CurrentUserPort
@@ -13,7 +13,7 @@ class KnowledgeUploadCommand:
     """文档知识上传命令（对应 POST /knowledge/documents）。"""
 
     files: List[Any]
-    on_conflict: str = field(default="append")  # replace | append
+    on_conflict: Optional[str] = None  # None=有同名报 409；replace|append
     current_user: Optional[CurrentUserPort] = None
 
 
@@ -22,7 +22,7 @@ class ExcelDbUploadCommand:
     """Excel 类数据库上传命令（对应 POST /knowledge/excel-db）。"""
 
     files: List[Any]
-    on_conflict: str = field(default="append")  # replace | append
+    on_conflict: Optional[str] = None  # None=有同名报 409；replace|append
     current_user: Optional[CurrentUserPort] = None
 
 
