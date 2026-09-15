@@ -12,7 +12,7 @@
 | 块 | 内容 | 状态 |
 |----|------|------|
 | 0 | 侦察补齐（knowledge API / VectorStoreManager / 前端结构） | ✅ 完成 |
-| 1 | 领域与端口（constants / DTO / Port） | ⬜ 未开始 |
+| 1 | 领域与端口（constants / DTO / Port） | ✅ 完成 |
 | 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ⬜ 未开始 |
 | 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ⬜ 未开始 |
 | 4 | API 挂载（两个端点 + 前缀/tag） | ⬜ 未开始 |
@@ -46,10 +46,10 @@
 
 ## 1. 领域与端口（纯增）
 
-- [ ] `app/adapters/knowledge/constants.py`：补 `EXCEL_DB_COLLECTION_NAME = "excel_db_chunks"`
-- [ ] domain 层文件类型白名单与冲突语义（replace=先删旧块再写；append=直接写）
-- [ ] `app/ports/dto/knowledge_upload.py`：`KnowledgeUploadCommand`、`ExcelDbUploadCommand`、`KnowledgeFileConflict` DTO
-- [ ] `app/ports/outbound/knowledge_metadata.py`：`KnowledgeMetadataPort`（按 file_name 查 chunk 元数据 / 删旧块）
+- [x] `app/adapters/knowledge/constants.py`：补 `EXCEL_DB_COLLECTION_NAME = "excel_db_chunks"`、`EXCEL_DB_CHUNKS_TABLE`
+- [x] `app/domain/knowledge/upload_rules.py`：文件类型白名单（文档 9 类 / Excel 2 类）、冲突策略 replace|append、默认 chunk 500/50、大小上限、行数/chunk 上限（纯 stdlib）
+- [x] `app/ports/dto/knowledge_upload.py`：`KnowledgeUploadCommand`、`ExcelDbUploadCommand`、`KnowledgeFileConflict`、`KnowledgeUploadResult`
+- [x] `app/ports/outbound/knowledge_metadata.py`：`KnowledgeMetadataPort`（find_conflict / delete_chunks_by_file_name）
 
 ## 2. Adapter 能力
 
