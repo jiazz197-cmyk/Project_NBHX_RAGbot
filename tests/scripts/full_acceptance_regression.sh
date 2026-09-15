@@ -758,15 +758,8 @@ test_chat_summary() {
 test_rag() {
   section "11. RAG / Retriever"
 
-  curl -sS -D "$WORKDIR/rag_db_1.headers" \
-    -X POST "$BASE/retriever/db?collection=doc_collection_1" \
-    -H "$AUTH" \
-    -H "Content-Type: application/json" \
-    -d '{"question":"智能组合秤是什么？"}' \
-    -o "$WORKDIR/rag_db_1.body"
-
-  cat "$WORKDIR/rag_db_1.headers"
-  cat "$WORKDIR/rag_db_1.body" | json_print
+  # 接口分家：/retriever/db 检索文档表 knowledge_chunks；
+  # /retriever/excel 检索 Excel 表 excel_db_chunks（历史 doc_collection_1 已随 closing_form 下线）。
 
   curl -sS -D "$WORKDIR/rag_db_2.headers" \
     -X POST "$BASE/retriever/db?collection=knowledge_chunks" \
@@ -779,7 +772,7 @@ test_rag() {
   cat "$WORKDIR/rag_db_2.body" | json_print
 
   curl -sS -D "$WORKDIR/rag_excel_1.headers" \
-    -X POST "$BASE/retriever/excel?collection=doc_collection_1" \
+    -X POST "$BASE/retriever/excel?collection=excel_db_chunks" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
     -d '{"question":"智能组合秤和重量分选秤有什么区别？"}' \
@@ -788,7 +781,7 @@ test_rag() {
   cat "$WORKDIR/rag_excel_1.headers"
   cat "$WORKDIR/rag_excel_1.body" | json_print
 
-  if grep -qi "handler is closed\|TCPTransport closed" "$WORKDIR/rag_db_1.body" "$WORKDIR/rag_db_2.body"; then
+  if grep -qi "handler is closed\|TCPTransport closed" "$WORKDIR/rag_db_2.body"; then
     fail "RAG DB 检索仍存在 handler closed"
   else
     pass "RAG DB 未出现 handler closed"

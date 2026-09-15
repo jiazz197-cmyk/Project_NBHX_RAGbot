@@ -230,8 +230,9 @@ async def lifespan(app: FastAPI):
             password=settings.POSTGRES_PASSWORD,
             database=settings.POSTGRES_DB,
             port=settings.POSTGRES_PORT,
+            # table_prefix 仅服务于历史 instance 风格表名（{prefix}_{id}）；
+            # 业务检索一律走 retriever 端点的语义 collection 参数（knowledge_chunks / excel_db_chunks）。
             table_prefix="doc_collection",
-            instance_id=1,
             bge_m3_api_url=settings.BGE_M3_API_URL,
             reranker_api_url=settings.RERANKER_API_URL,
             default_top_k=20,
