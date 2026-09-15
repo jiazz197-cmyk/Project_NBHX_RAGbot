@@ -541,7 +541,7 @@ const parseFields = (text: string): ParsedField[] => {
 
 const hasStructuredFields = (text: string): boolean => {
   const fields = parseFields(text)
-  // Closing-form style records have many key-value pairs.
+  // Structured key-value records usually contain many fields.
   return fields.length >= 3
 }
 

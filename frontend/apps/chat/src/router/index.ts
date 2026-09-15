@@ -40,6 +40,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/KnowledgeManagePage.vue'),
     meta: { title: '知识库管理' },
   },
+  {
+    // 兜底：未注册路径（含已下线的 /closing-form）重定向到聊天页
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    redirect: '/chat',
+  },
 ]
 
 const router = createRouter({
