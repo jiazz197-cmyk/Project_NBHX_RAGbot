@@ -38,9 +38,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_CACHE_DIR=/root/.cache/uv
 
 # ---- 系统依赖 ---------------------------------------------------------------
+# procps   = ps / top / pgrep —— 排「端口被占」「进程没退干净」时必需；slim 镜像默认没有，
+#            之前只能靠 /proc 扫（见 docs/docker-dev-guide-colleague.md §7.1）
+# iproute2 = ss —— 看容器内监听端口
+# ⚠️ 改动这一层会让后面所有层失效，**只在下一次因别的原因重建镜像时一起生效**（别为它单独重建）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git build-essential \
+      procps iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- Node 24 + corepack -----------------------------------------------------

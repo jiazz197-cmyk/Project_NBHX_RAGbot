@@ -59,7 +59,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:<你的API_PORT>/api/v
 
 | 我要做什么 | 命令 |
 |---|---|
-| 起容器（开机/重启后） | `bash scripts/dev.sh docker up` |
+| 起容器（**只有首次 / 换机器时需要**） | `bash scripts/dev.sh docker up` |
 | 起后端（前台，改代码自动重载） | `bash scripts/dev.sh docker backend` |
 | 起前端 | `bash scripts/dev.sh docker frontend` |
 | 跑测试 | `bash scripts/dev.sh docker test -q` |
@@ -68,15 +68,32 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:<你的API_PORT>/api/v
 | 进容器 | `bash scripts/dev.sh docker shell` |
 | 用容器的 python 干活 | `bash scripts/dev.sh docker py -c "..."` |
 | 看容器状态 / 日志 | `bash scripts/dev.sh docker ps` / `logs` |
+| **临时停止容器**（只停不删，推荐） | `docker stop nbhx-<你的用户名>-dev-1` |
+| **删除容器**（数据卷保留，之后要 `up`） | `bash scripts/dev.sh docker down` |
 | **拉到别人推的新镜像** | `bash scripts/dev.sh docker pull` |
 | 看环境是否过期 | `bash scripts/dev.sh docker check` |
-| 停容器（数据卷保留） | `bash scripts/dev.sh docker down` |
 | 透传任意命令 | `bash scripts/dev.sh docker nvidia-smi` |
+
+### 3.1 「重启」指哪个？——五种情况，动作完全不同（最容易踩）
+
+**「重启一下环境」这句话在本项目里是有歧义的**，先对号入座再动手：
+
+| 你说的「重启」 | 要做什么 | 要 `up` 吗 |
+|---|---|---|
+| **重开 VS Code / 新开一个 SSH 会话** | **什么都不用做** —— 容器是服务器上的后台进程，跟你的 SSH 会话无关 | ❌ 不用 |
+| **VS Code 的 attach 断了**（容器被重建过） | 重新 `Attach to Running Container` 选 `nbhx-<你>-dev-1` | ❌ 不用 |
+| **重启后端 / 前端进程**（改了代码想干净重来） | 在跑它的终端按 `Ctrl-C`，再 `dev.sh docker backend` / `frontend` | ❌ 不用 |
+| **重启容器本身**（进程卡住、想清干净） | 只停不删：`docker stop nbhx-<你>-dev-1` → `docker start nbhx-<你>-dev-1`<br>彻底重来：`dev.sh docker down && dev.sh docker up`（down **会删掉容器**） | 只有 `down` 之后需要 |
+| **重启宿主机 / 重启 docker** | **什么都不用做**，等 1 分钟它会自己起回来（已设 `restart: unless-stopped`） | ❌ 不用（自动） |
+
+> 记住两条就不会错：
+> 1. **`up` 是幂等的** —— 重复跑只打印 `Container … Running`，不会重复建容器，所以不确定时随手敲一次也没有副作用。
+> 2. **只有 `down` 才会删容器**（`stop` 只是停）。删了才需要 `up` 重建；缓存和依赖在数据卷/镜像里，不会丢。
 
 **日常内循环**（改代码 → 看效果，1~2 秒，不碰镜像）：
 
 ```
-宿主编辑器改文件 ──bind mount──▶ 容器 /workspace 立即可见 ──▶ uvicorn --reload 自动重启
+宿主编辑器改文件 ──bind mount──▶ 容器 /workspace 立即可见 ──▶ uvicorn --reload 自动重载
                                         │
                           满意 → dev.sh docker guard && git commit && git push
 ```
@@ -130,7 +147,7 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 | 症状 | 解决 |
 |---|---|
 | `permission denied ... Docker daemon` | 不在 docker 组：找管理员加，然后**重新登录** |
-| `bind: address already in use` | 端口被占：`dev.sh docker ps` 看自己的旧容器，或 `.env.dev` 换端口 |
+| 起服务报 `[Errno 98] Address already in use` | 容器内端口被占（多半是上次的服务没退干净）→ 见 §7.1 |
 | 访问 `:8000` 打不开 | 容器起了吗？端口是不是你在 `.env.dev` 里设的那个？ |
 | `ModuleNotFoundError` / 缺包 | 依赖过期：`check` → `pull`（或 `build`）→ `up` |
 | `[info] PyTorch CUDA 不可用` | **正常**，开发容器不用 GPU（OCR/模型走独立服务，issue #9/#10） |
@@ -138,7 +155,30 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 | RAG/OCR/嵌入 探活失败 | **预期内**：这些模型服务在外部，`.env` 里的 `localhost:80` 是待替换的占位值 |
 | `dev.sh backend` 报「宿主环境不存在」 | 宿主 `.venv` 已删（容器化后不需要）→ 用 `dev.sh docker backend` |
 | 保存文件后宿主里属主变 root | attach 方式下 `.devcontainer/devcontainer.json` 的 `remoteUser` 要改成你的 `id -u` |
-| 想重启环境 | `dev.sh docker down && dev.sh docker up`（数据卷保留） |
+| **「重启」** | 先看 §3.1 对号入座 —— 大多数情况**什么都不用做** |
+| **每次开 VS Code / 新 SSH 都要 `up` 吗？** | **不用**。容器是服务器上的后台进程，跟 SSH 会话无关；且 `up` 是幂等的，重复跑不会新建。**「重启」的各种含义与对应动作见 §3.1** |
+
+### 7.1 起服务报 `Address already in use` 怎么办
+
+**原因**：容器里已经有进程占着 8000（最常见是**上次的后端没退干净**，或你在两个终端各起了一次）。
+
+⚠️ **dev 容器里没装 `ps`/`ss`**（slim 镜像），所以用 `/proc` 扫：
+
+```bash
+# ① 找出占端口的进程
+bash scripts/dev.sh docker sh -c 'for p in /proc/[0-9]*; do c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in *main.py*|*uvicorn*|*vite*) echo "${p#/proc/} $c";; esac; done'
+
+# ② 优雅停掉它（SIGTERM，应用会走 main.py 的 advanced shutdown 收尾）
+bash scripts/dev.sh docker sh -c 'kill -TERM <上面看到的 PID>'
+
+# ③ 确认端口空闲
+bash scripts/dev.sh docker py -c "import socket; s=socket.socket(); s.bind(('0.0.0.0',8000)); print('8000 空闲')"
+```
+
+实在搞不定就重建容器（缓存和代码都不丢）：`bash scripts/dev.sh docker down && bash scripts/dev.sh docker up`
+
+**怎么避免**：起前后端请用**前台**方式（`dev.sh docker backend`），结束时在同一个终端按 **`Ctrl-C`** —— 这样进程会被正常回收。
+如果你在后台/另一个窗口起过服务，关掉那个终端**不会**杀掉容器里的进程，要按上面的方法手动清理。
 
 ---
 
@@ -170,7 +210,7 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 ## 9. 一页速查
 
 ```bash
-bash scripts/dev.sh docker up                 # 起容器
+bash scripts/dev.sh docker up                 # 起容器（仅首次/换机器；宿主机重启会自动起回）
 bash scripts/dev.sh docker backend            # 起后端（Ctrl-C 停）
 bash scripts/dev.sh docker frontend           # 起前端
 bash scripts/dev.sh docker test -q            # 跑测试

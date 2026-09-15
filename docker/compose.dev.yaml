@@ -39,6 +39,10 @@ services:
     # 以 root 启动：entrypoint 会把缓存卷顶层 chown 成宿主 uid，再用 setpriv 降权。
     # （命名卷默认 root 属主，直接以非 root 跑会写不进缓存）
     user: "0"
+    # 宿主机 / docker 重启后自动把容器带回来（否则每次开机都要手动 up）。
+    # 注意：`dev.sh docker down` 是 compose down，会**删掉容器**，之后仍需 up；
+    # 只想临时停可以 `docker stop nbhx-<user>-dev-1`（restart 策略会尊重手动 stop）。
+    restart: unless-stopped
     init: true
     tty: true
     stdin_open: true

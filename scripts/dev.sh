@@ -189,7 +189,23 @@ EOF
       ps)        dc ps "$@" ;;
       shell)     dexec bash ;;
       backend)   dexec bash scripts/dev.sh backend ;;
-      frontend)  dexec bash scripts/dev.sh frontend ;;
+      frontend)
+        # 前端依赖装在**命名卷** frontend/node_modules 里（刻意遮蔽宿主那份），
+        # 首次为空 → 里面没有 .pnpm 存储，apps/chat/node_modules 的软链会悬空，
+        # vite 会报一个很难懂的 "Cannot find module .../vite/bin/vite.js"。
+        # 这里提前给明确指引。
+        if ! dexec sh -c 'test -e /workspace/frontend/node_modules/.pnpm' 2>/dev/null; then
+          cat >&2 <<'EOF'
+[dev] ❌ 容器内前端依赖还没装（node_modules 是命名卷，首次是空的）
+      先跑一次（约 1–3 分钟）：
+          bash scripts/dev.sh docker fe-setup
+      然后再：
+          bash scripts/dev.sh docker frontend
+EOF
+          exit 1
+        fi
+        dexec bash scripts/dev.sh frontend
+        ;;
       test)      dexec python -m pytest "$@" ;;
       guard)     dexec bash scripts/check_layered_architecture.sh "$@" ;;
       py)
