@@ -148,7 +148,11 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
             raise ValueError("生产环境禁止使用 BACKEND_CORS_ORIGINS=[\"*\"]，请配置明确来源")
         return v
 
-    @validator("RETRIEVER_ALLOWED_COLLECTIONS", pre=True)
+    @validator(
+        "RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS",
+        "RETRIEVER_ALLOWED_EXCEL_COLLECTIONS",
+        pre=True,
+    )
     def split_retriever_allowed_collections(cls, v: Union[str, List[str]]) -> List[str]:
         if isinstance(v, str):
             if not v.strip():
@@ -290,7 +294,17 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     ALGORITHM: str = Field("HS256", env="ALGORITHM")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(360, env="ACCESS_TOKEN_EXPIRE_MINUTES")
     INTERNAL_API_KEY: str = Field("change_me_internal_api_key", env="INTERNAL_API_KEY")
-    RETRIEVER_ALLOWED_COLLECTIONS: List[str] = Field(default_factory=list, env="RETRIEVER_ALLOWED_COLLECTIONS")
+    # 检索白名单按接口分家（非 superuser 限制）：
+    # /retriever/db 仅放行文档集合；/retriever/excel 仅放行 Excel 集合。
+    # 默认值与 app/domain/knowledge/collections.py 的逻辑集合名一致。
+    RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS: List[str] = Field(
+        default_factory=lambda: ["knowledge_chunks"],
+        env="RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS",
+    )
+    RETRIEVER_ALLOWED_EXCEL_COLLECTIONS: List[str] = Field(
+        default_factory=lambda: ["excel_db_chunks"],
+        env="RETRIEVER_ALLOWED_EXCEL_COLLECTIONS",
+    )
 
     BOOTSTRAP_SUPERUSER_USERNAME: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_USERNAME")
     BOOTSTRAP_SUPERUSER_EMAIL: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_EMAIL")

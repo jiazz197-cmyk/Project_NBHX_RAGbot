@@ -446,3 +446,62 @@ def test_env_example_documents_upload_limits():
     source = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
     assert "KNOWLEDGE_MAX_DOCUMENT_FILE_SIZE_MB=50" in source
     assert "KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB=20" in source
+
+
+# ---------------------------------------------------------------------------
+# 6. 接口分家：/retriever/db ↔ 文档集合，/retriever/excel ↔ Excel 集合
+# ---------------------------------------------------------------------------
+
+
+def test_retriever_allowlists_split_by_interface():
+    """settings 默认值即接口分家：db 仅文档集合，excel 仅 Excel 集合。"""
+    from app.core.config import settings
+
+    assert settings.RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS == ["knowledge_chunks"]
+    assert settings.RETRIEVER_ALLOWED_EXCEL_COLLECTIONS == ["excel_db_chunks"]
+
+
+def _plain_user(role: str = "user"):
+    return SimpleNamespace(role=role)
+
+
+def test_collection_access_db_rejects_excel_collection():
+    from fastapi import HTTPException
+    from app.api.v1 import retriever
+
+    with pytest.raises(HTTPException) as exc_info:
+        retriever._ensure_collection_access(
+            "excel_db_chunks", _plain_user(), ["knowledge_chunks"]
+        )
+    assert exc_info.value.status_code == 403
+
+
+def test_collection_access_excel_rejects_document_collection():
+    from fastapi import HTTPException
+    from app.api.v1 import retriever
+
+    with pytest.raises(HTTPException) as exc_info:
+        retriever._ensure_collection_access(
+            "knowledge_chunks", _plain_user(), ["excel_db_chunks"]
+        )
+    assert exc_info.value.status_code == 403
+
+
+def test_collection_access_accepts_matching_collection():
+    from app.api.v1 import retriever
+
+    assert (
+        retriever._ensure_collection_access("knowledge_chunks", _plain_user(), ["knowledge_chunks"])
+        == "knowledge_chunks"
+    )
+    # 白名单兼容 data_ 前缀写法
+    assert (
+        retriever._ensure_collection_access("excel_db_chunks", _plain_user(), ["data_excel_db_chunks"])
+        == "excel_db_chunks"
+    )
+
+
+def test_collection_access_superuser_bypasses_split_allowlists():
+    from app.api.v1 import retriever
+
+    assert retriever._ensure_collection_access("anything", _plain_user("superuser"), []) == "anything"

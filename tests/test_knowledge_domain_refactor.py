@@ -201,11 +201,11 @@ def test_collection_access_superuser_bypasses_whitelist(monkeypatch):
     from app.api.v1 import retriever
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_COLLECTIONS", ["knowledge_chunks"])
+    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS", ["knowledge_chunks"])
     superuser = _retriever_user(ROLE_SUPERUSER)
     # superuser 访问白名单外的集合也放行
     assert (
-        retriever._ensure_collection_access("doc_collection_1", superuser)
+        retriever._ensure_collection_access("doc_collection_1", superuser, ["knowledge_chunks"])
         == "doc_collection_1"
     )
 
@@ -215,14 +215,14 @@ def test_collection_access_regular_user_whitelist_hit(monkeypatch):
     from app.core.config import settings
     from fastapi import HTTPException
 
-    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_COLLECTIONS", ["knowledge_chunks"])
+    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS", ["knowledge_chunks"])
     user = _retriever_user(ROLE_USER)
     assert (
-        retriever._ensure_collection_access("knowledge_chunks", user)
+        retriever._ensure_collection_access("knowledge_chunks", user, ["knowledge_chunks"])
         == "knowledge_chunks"
     )
     with pytest.raises(HTTPException) as exc_info:
-        retriever._ensure_collection_access("doc_collection_1", user)
+        retriever._ensure_collection_access("doc_collection_1", user, ["knowledge_chunks"])
     assert exc_info.value.status_code == 403
 
 
@@ -231,16 +231,19 @@ def test_collection_accepts_data_prefixed_whitelist_entries(monkeypatch):
     from app.api.v1 import retriever
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_COLLECTIONS", ["data_knowledge_chunks"])
+    monkeypatch.setattr(settings, "RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS", ["data_knowledge_chunks"])
     user = _retriever_user(ROLE_USER)
-    assert retriever._ensure_collection_access("knowledge_chunks", user) == "knowledge_chunks"
+    assert retriever._ensure_collection_access("knowledge_chunks", user, ["data_knowledge_chunks"]) == "knowledge_chunks"
 
 
 def test_env_example_whitelist_placeholder_semantic():
     content = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
-    match = re.search(r"RETRIEVER_ALLOWED_COLLECTIONS=(\S+)", content)
+    match = re.search(r"RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS=(\S+)", content)
     assert match is not None
     assert "knowledge_chunks" in match.group(1)
+    match_excel = re.search(r"RETRIEVER_ALLOWED_EXCEL_COLLECTIONS=(\S+)", content)
+    assert match_excel is not None
+    assert "excel_db_chunks" in match_excel.group(1)
 
 
 # ---------------------------------------------------------------------------
