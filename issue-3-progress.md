@@ -16,7 +16,7 @@
 | 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ✅ 完成 |
 | 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ✅ 完成 |
 | 4 | API 挂载（两个端点 + 前缀/tag） | ✅ 完成 |
-| 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ⬜ 未开始 |
+| 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ✅ 完成 |
 | 6 | 测试与验收 | ⬜ 未开始 |
 
 ---
@@ -76,12 +76,13 @@
 
 ## 5. 前端
 
-- [ ] `services/knowledge.ts`：上传 API、进度轮询、on_conflict 参数
-- [ ] `KnowledgeManagePage.vue`：「上传文档」「上传 Excel 数据库」入口 + accept 白名单 + 多文件 + 上传中状态
-- [ ] 任务进度轮询 → 完成自动刷新列表
-- [ ] 409 冲突弹窗三选（替换/追加/取消）
-- [ ] 普通用户视图：列表区隐藏 + 提示；上传与进度可用
-- [ ] `App.vue` 侧边栏知识库入口：`isAdminOrSuperuser` → 所有登录用户
+- [x] `services/knowledge.ts`：上传 API（apiRequestFormData）、进度轮询、on_conflict 参数
+- [x] `KnowledgeManagePage.vue`：「上传文档」「上传 Excel 数据库」入口 + accept 白名单 + 多文件 + 上传中状态
+- [x] 任务进度轮询 → 完成自动刷新列表
+- [x] 409 冲突弹窗三选（替换/追加/取消）
+- [x] 普通用户视图：列表区隐藏 + 提示；上传与进度可用
+- [x] `App.vue` 侧边栏知识库入口：`isAdminOrSuperuser` → 所有登录用户
+- [x] `services/api.ts`：handleApiError 读 error_code/details（409 识别）；router `/knowledge` 守卫放开为登录即可
 
 ## 6. 测试与验收
 
@@ -97,3 +98,4 @@
 | 日期 | 完成项 | 提交 hash |
 |------|--------|-----------|
 | 2026-09-15 | 建分支 + chore（tsconfig baseUrl） | f69c8d6 |
+| 2026-09-15 | 阶段5 前端 | （见本次提交） |

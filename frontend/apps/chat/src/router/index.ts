@@ -38,7 +38,7 @@ const routes: RouteRecordRaw[] = [
     path: '/knowledge',
     name: 'knowledge',
     component: () => import('@/pages/KnowledgeManagePage.vue'),
-    meta: { title: '知识库管理', requiresAdminOrSuperuser: true },
+    meta: { title: '知识库管理' },
   },
 ]
 
@@ -65,14 +65,6 @@ router.beforeEach((to, _from, next) => {
   if (to.meta.requiresSuperuser && readUserRole() !== 'superuser') {
     next('/chat')
     return
-  }
-
-  if (to.meta.requiresAdminOrSuperuser) {
-    const role = readUserRole()
-    if (role !== 'admin' && role !== 'superuser') {
-      next('/chat')
-      return
-    }
   }
 
   if (to.meta.requiresPermission) {

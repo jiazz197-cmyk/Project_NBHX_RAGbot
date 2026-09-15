@@ -4,9 +4,62 @@
       <div class="page-header__left">
         <h1 class="page-header__title">知识库管理</h1>
       </div>
+      <div class="page-header__actions">
+        <input
+          ref="docInputRef"
+          class="upload-input"
+          type="file"
+          multiple
+          accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.json"
+          @change="onDocFilesChosen"
+        />
+        <input
+          ref="excelInputRef"
+          class="upload-input"
+          type="file"
+          multiple
+          accept=".xlsx,.xls"
+          @change="onExcelFilesChosen"
+        />
+        <button
+          class="upload-btn"
+          type="button"
+          :disabled="uploading !== null || conflictDialog.visible"
+          @click="pickDocumentFiles"
+        >
+          上传文档
+        </button>
+        <button
+          class="upload-btn upload-btn--excel"
+          type="button"
+          :disabled="uploading !== null || conflictDialog.visible"
+          @click="pickExcelFiles"
+        >
+          上传 Excel 数据库
+        </button>
+      </div>
+    </div>
+
+    <div v-if="uploading" class="upload-progress" role="status" aria-live="polite">
+      <div class="upload-progress__header">
+        <span class="upload-progress__title" :title="uploading.fileNames.join('、')">
+          {{ uploading.collection === 'documents' ? '文档' : 'Excel 数据库' }}上传
+          · {{ uploading.fileNames.join('、') }}
+        </span>
+        <span class="upload-progress__status">{{ uploadStatusText }}</span>
+      </div>
+      <div class="upload-progress__bar">
+        <div
+          class="upload-progress__fill"
+          :class="{ 'upload-progress__fill--indeterminate': uploading.status === 'submitting' }"
+          :style="uploading.status === 'submitting' ? {} : { width: `${uploading.progress}%` }"
+        ></div>
+      </div>
+      <div v-if="uploading.message" class="upload-progress__message">{{ uploading.message }}</div>
     </div>
 
     <div class="page__content">
+      <template v-if="isAdmin">
       <div class="records">
         <div class="records__toolbar">
           <button class="records__refresh" type="button" :disabled="loadingRecords" @click="loadRecords">
@@ -124,6 +177,14 @@
           </section>
         </div>
       </div>
+      </template>
+
+      <div v-else class="records__restricted">
+        <h2 class="records__restricted-title">知识库记录仅管理员可见</h2>
+        <p class="records__restricted-text">
+          你可以通过右上角「上传文档 / 上传 Excel 数据库」为知识库添加内容，AI 检索将使用这些资料。
+        </p>
+      </div>
     </div>
 
     <ConfirmDialog
@@ -135,13 +196,45 @@
       cancel-text="取消"
       @confirm="confirmDelete"
     />
+
+    <div v-if="conflictDialog.visible" class="conflict-mask" @click.self="cancelConflict">
+      <div class="conflict-dialog" role="dialog" aria-modal="true" aria-label="同名文件冲突">
+        <h3 class="conflict-dialog__title">同名文件已存在</h3>
+        <p class="conflict-dialog__text">以下文件在知识库中已有记录：</p>
+        <ul class="conflict-dialog__list">
+          <li v-for="name in conflictDialog.fileNames" :key="name">{{ name }}</li>
+        </ul>
+        <p class="conflict-dialog__text">请选择处理方式：</p>
+        <div class="conflict-dialog__actions">
+          <button class="conflict-btn conflict-btn--replace" type="button" @click="resolveConflict('replace')">
+            替换（删除旧内容）
+          </button>
+          <button class="conflict-btn conflict-btn--append" type="button" @click="resolveConflict('append')">
+            追加（保留旧内容）
+          </button>
+          <button class="conflict-btn conflict-btn--cancel" type="button" @click="cancelConflict">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ConfirmDialog, useToast } from '@yamato/components'
-import { deleteKnowledgeRecord, listKnowledgeRecords, type KnowledgeRecord } from '../services/knowledge'
+import {
+  deleteKnowledgeRecord,
+  fetchKnowledgeTaskStatus,
+  listKnowledgeRecords,
+  uploadKnowledgeFiles,
+  type KnowledgeConflictStrategy,
+  type KnowledgeRecord,
+  type KnowledgeUploadCollection,
+} from '../services/knowledge'
+import { readStored } from '../services/storage'
+import { config } from '../config'
 
 interface ParsedField {
   label: string
@@ -159,6 +252,15 @@ interface FileGroup {
 
 const { showSuccess, showError } = useToast()
 
+// 角色（列表仅管理员可见，上传对所有登录用户开放）
+const userRole = ref('')
+const isAdmin = computed(() => userRole.value === 'admin' || userRole.value === 'superuser')
+
+const readUserRole = () => {
+  const parsed = readStored<{ role?: unknown } | null>(config.settingsStorageKey, null)
+  userRole.value = String(parsed?.role ?? '').trim()
+}
+
 const records = ref<KnowledgeRecord[]>([])
 const loadingRecords = ref(false)
 const expandedId = ref<string | null>(null)
@@ -167,6 +269,193 @@ const showDeleteDialog = ref(false)
 const recordToDelete = ref<string | null>(null)
 
 const UNTITLED_FILE_KEY = '__untitled_file__'
+
+// ---------- 上传相关 ----------
+
+/** 后端限制：文档 ≤50MB，Excel ≤20MB（与 domain 规则一致） */
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+const MAX_EXCEL_BYTES = 20 * 1024 * 1024
+const UPLOAD_POLL_INTERVAL_MS = 1500
+
+interface UploadingState {
+  taskId: string
+  collection: KnowledgeUploadCollection
+  fileNames: string[]
+  status: 'submitting' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  progress: number
+  message: string
+}
+
+interface ConflictState {
+  visible: boolean
+  collection: KnowledgeUploadCollection
+  files: File[]
+  fileNames: string[]
+}
+
+const docInputRef = ref<HTMLInputElement | null>(null)
+const excelInputRef = ref<HTMLInputElement | null>(null)
+const uploading = ref<UploadingState | null>(null)
+let uploadPollTimer: number | null = null
+const conflictDialog = ref<ConflictState>({
+  visible: false,
+  collection: 'documents',
+  files: [],
+  fileNames: [],
+})
+
+const uploadStatusText = computed(() => {
+  const current = uploading.value
+  if (!current) return ''
+  switch (current.status) {
+    case 'submitting':
+      return '提交中…'
+    case 'processing':
+      return `处理中 ${current.progress}%`
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    case 'cancelled':
+      return '已取消'
+    default:
+      return ''
+  }
+})
+
+const pickDocumentFiles = () => {
+  docInputRef.value?.click()
+}
+
+const pickExcelFiles = () => {
+  excelInputRef.value?.click()
+}
+
+const onDocFilesChosen = (event: Event) => {
+  handleFilesChosen(event, 'documents')
+}
+
+const onExcelFilesChosen = (event: Event) => {
+  handleFilesChosen(event, 'excel-db')
+}
+
+const handleFilesChosen = (event: Event, collection: KnowledgeUploadCollection) => {
+  const input = event.target as HTMLInputElement | null
+  const files = Array.from(input?.files ?? [])
+  if (input) {
+    input.value = ''
+  }
+  if (files.length === 0) return
+
+  const maxBytes = collection === 'documents' ? MAX_DOCUMENT_BYTES : MAX_EXCEL_BYTES
+  const oversized = files.filter((file) => file.size > maxBytes)
+  if (oversized.length > 0) {
+    showError(
+      `以下文件超过大小限制（${Math.round(maxBytes / 1024 / 1024)}MB）：${oversized
+        .map((file) => file.name)
+        .join('、')}`
+    )
+    return
+  }
+
+  void submitUpload(collection, files)
+}
+
+const submitUpload = async (
+  collection: KnowledgeUploadCollection,
+  files: File[],
+  onConflict?: KnowledgeConflictStrategy
+) => {
+  uploading.value = {
+    taskId: '',
+    collection,
+    fileNames: files.map((file) => file.name),
+    status: 'submitting',
+    progress: 0,
+    message: '正在提交…',
+  }
+
+  try {
+    const result = await uploadKnowledgeFiles(collection, files, onConflict)
+    uploading.value.taskId = result.task_id
+    uploading.value.status = 'processing'
+    uploading.value.message = result.message || '任务已创建'
+    void pollTaskStatus(result.task_id)
+  } catch (err: unknown) {
+    const apiErr = err as {
+      status?: number
+      code?: string
+      message?: string
+      details?: unknown
+    }
+    if (apiErr.status === 409 || apiErr.code === 'KNOWLEDGE_FILE_NAME_CONFLICT') {
+      const details = (apiErr.details ?? {}) as {
+        file_name?: unknown
+      }
+      const conflictName = typeof details.file_name === 'string' ? details.file_name : ''
+      conflictDialog.value = {
+        visible: true,
+        collection,
+        files,
+        fileNames: conflictName ? [conflictName] : files.map((file) => file.name),
+      }
+      uploading.value = null
+      return
+    }
+    showError(apiErr.message || '上传失败')
+    uploading.value = null
+  }
+}
+
+const pollTaskStatus = async (taskId: string) => {
+  if (!uploading.value || uploading.value.taskId !== taskId) return
+
+  try {
+    const result = await fetchKnowledgeTaskStatus(taskId)
+    if (!uploading.value || uploading.value.taskId !== taskId) return
+
+    const status = String(result.status ?? '').toLowerCase()
+    uploading.value.progress = result.progress ?? 0
+    uploading.value.message = result.message ?? ''
+
+    if (status === 'completed') {
+      uploading.value.status = 'completed'
+      showSuccess('上传处理完成')
+      uploading.value = null
+      if (isAdmin.value) {
+        void loadRecords()
+      }
+      return
+    }
+
+    if (status === 'failed' || status === 'cancelled') {
+      uploading.value.status = status
+      showError(result.message || '上传处理失败')
+      uploading.value = null
+      return
+    }
+
+    uploading.value.status = 'processing'
+    uploadPollTimer = window.setTimeout(() => {
+      void pollTaskStatus(taskId)
+    }, UPLOAD_POLL_INTERVAL_MS)
+  } catch (err: unknown) {
+    showError((err as { message?: string })?.message || '上传状态查询失败')
+    uploading.value = null
+  }
+}
+
+const cancelConflict = () => {
+  conflictDialog.value.visible = false
+  conflictDialog.value.files = []
+  conflictDialog.value.fileNames = []
+}
+
+const resolveConflict = (strategy: KnowledgeConflictStrategy) => {
+  const { collection, files } = conflictDialog.value
+  cancelConflict()
+  void submitUpload(collection, files, strategy)
+}
 
 const formatUploadTime = (value: string | null | undefined): string => {
   if (!value) return '—'
@@ -292,7 +581,16 @@ const confirmDelete = async () => {
 }
 
 onMounted(() => {
-  void loadRecords()
+  readUserRole()
+  if (isAdmin.value) {
+    void loadRecords()
+  }
+})
+
+onBeforeUnmount(() => {
+  if (uploadPollTimer !== null) {
+    window.clearTimeout(uploadPollTimer)
+  }
 })
 </script>
 
@@ -653,6 +951,239 @@ onMounted(() => {
   text-justify: inter-ideograph;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.upload-input {
+  display: none;
+}
+
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 18px;
+  border-radius: var(--yamato-radius-sm);
+  border: 1px solid var(--yamato-color-accent);
+  background: var(--yamato-color-accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+
+  &:hover:not(:disabled) {
+    filter: brightness(0.92);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--yamato-focus-ring);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  &--excel {
+    background: #2f6b4f;
+    border-color: #2f6b4f;
+  }
+}
+
+.upload-progress {
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border-radius: var(--yamato-radius-md);
+  border: 1px solid var(--yamato-color-border-subtle);
+  background: #ffffff;
+  box-shadow: var(--yamato-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.upload-progress__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-progress__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--yamato-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-progress__status {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--yamato-color-text-secondary);
+}
+
+.upload-progress__bar {
+  height: 8px;
+  border-radius: var(--yamato-radius-pill);
+  background: var(--yamato-color-surface-alt);
+  overflow: hidden;
+}
+
+.upload-progress__fill {
+  height: 100%;
+  border-radius: var(--yamato-radius-pill);
+  background: var(--yamato-color-accent);
+  transition: width 0.4s ease;
+
+  &--indeterminate {
+    width: 40%;
+    animation: upload-slide 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes upload-slide {
+  0% {
+    margin-left: -40%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+.upload-progress__message {
+  font-size: 12px;
+  color: var(--yamato-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.records__restricted {
+  width: 100%;
+  max-width: 960px;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 64px 32px;
+  text-align: center;
+}
+
+.records__restricted-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--yamato-color-text-primary);
+}
+
+.records__restricted-text {
+  margin: 0;
+  max-width: 560px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--yamato-color-text-secondary);
+}
+
+.conflict-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 19, 0.45);
+}
+
+.conflict-dialog {
+  width: min(480px, calc(100vw - 48px));
+  border-radius: var(--yamato-radius-lg);
+  background: #ffffff;
+  box-shadow: var(--yamato-shadow-card);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conflict-dialog__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--yamato-color-text-primary);
+}
+
+.conflict-dialog__text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--yamato-color-text-secondary);
+}
+
+.conflict-dialog__list {
+  margin: 0;
+  padding: 8px 12px 8px 28px;
+  border-radius: var(--yamato-radius-sm);
+  background: var(--yamato-color-surface-alt);
+  font-size: 13px;
+  color: var(--yamato-color-text-primary);
+  max-height: 120px;
+  overflow: auto;
+}
+
+.conflict-dialog__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.conflict-btn {
+  min-height: 38px;
+  border-radius: var(--yamato-radius-sm);
+  border: 1px solid var(--yamato-color-border-subtle);
+  background: var(--yamato-color-surface);
+  color: var(--yamato-color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: var(--yamato-color-surface-alt);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--yamato-focus-ring);
+  }
+
+  &--replace {
+    border-color: var(--yamato-color-accent);
+    background: var(--yamato-color-accent);
+    color: #ffffff;
+
+    &:hover {
+      background: var(--yamato-color-accent);
+      filter: brightness(0.92);
+    }
+  }
+
+  &--cancel {
+    color: var(--yamato-color-text-secondary);
+  }
 }
 
 @media (max-width: 980px) {
