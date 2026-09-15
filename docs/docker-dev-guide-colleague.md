@@ -19,14 +19,17 @@ docker ps >/dev/null 2>&1 && echo "✅ docker 可用" || echo "❌ 找管理员:
 ```
 
 **④ 一份 `.env`（必须找管理员要，git 里没有）** —— 里面有密钥，被 `.gitignore` 排除，新 clone 的目录里没有这个文件，应用起不来。
-> 从模板起手也行：`cp .env.example .env`，但模板缺 `BOOTSTRAP_SUPERUSER_*` 和 `PDM_SQLSERVER_*`。
+> 从模板起手也行：`cp .env.example .env`，但模板缺 `BOOTSTRAP_SUPERUSER_*` .
 
 ---
 
 ## 2. 首次上手（Day 0，约 5 分钟）
 
+
+**先让AI清掉你的本地环境**
+
 ```bash
-# ① clone
+# ① clone  已有仓库可跳过
 cd ~ && git clone http://10.80.153.12/Carl_Jia/ragchatbot.git && cd ragchatbot
 
 # ② 放入 .env（见前置 ④）
