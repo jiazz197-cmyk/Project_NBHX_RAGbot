@@ -106,3 +106,5 @@
 | 2026-09-15 | 评审响应：retriever 白名单按接口分家（评论点③） | 4c11d61 |
 | 2026-09-15 | Issue #3 回复 Carl_Jia（三点对应 + 扫描报告） | 评论 id=90 |
 | 2026-09-15 | 创建 MR（仅创建，目标 develop） | MR !5 |
+| 2026-09-15 | P0 修复：chunk metadata 补写 file_name/uploader/upload_time（契约贯通 + COALESCE 兜底 + 去 monkeypatch 补真实契约测试） | 50c45aa |
+| 2026-09-15 | MR !5 回复 P0 修复说明 | 评论 id=106 |
