@@ -13,7 +13,7 @@
 |----|------|------|
 | 0 | 侦察补齐（knowledge API / VectorStoreManager / 前端结构） | ✅ 完成 |
 | 1 | 领域与端口（constants / DTO / Port） | ✅ 完成 |
-| 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ⬜ 未开始 |
+| 2 | Adapter 能力（ExcelParser 多 sheet / metadata 查删） | ✅ 完成 |
 | 3 | UseCase 编排（白名单 / 同名预检 / on_conflict） | ⬜ 未开始 |
 | 4 | API 挂载（两个端点 + 前缀/tag） | ⬜ 未开始 |
 | 5 | 前端（上传入口 / 进度 / 409 三选 / 普通用户视图） | ⬜ 未开始 |
@@ -53,8 +53,10 @@
 
 ## 2. Adapter 能力
 
-- [ ] `ExcelParser` 多 sheet 扩展（现状 `doc_reader.py:328` 只读 `sheet_idx=0`）：遍历所有 sheet，每个 sheet 独立 `{headers, rows}`；无参数时保持默认单 sheet 行为
-- [ ] `VectorMetadataAdapter`（实现 `KnowledgeMetadataPort`）：按 file_name 查既有 chunk 摘要 + 按 file_name 删旧 chunk
+- [x] `ExcelParser` 多 sheet 扩展：`sheet_idx=None` 遍历所有 sheet（每个 sheet 独立 headers/rows + sheet_name），默认 `sheet_idx=0` 向后兼容
+- [x] `process_document` 加 `excel_all_sheets` 开关；sheet 名写入 chunk metadata（`sheet_name` 键）；行数/chunk 上限保护（超限抛 DocumentProcessingError）
+- [x] `pipeline.process`：`collection == excel_db_chunks` 时自动开启多 sheet 模式（usecase/worker 零改动）
+- [x] `VectorMetadataAdapter`（`adapters/knowledge/metadata.py`）：实现 `KnowledgeMetadataPort`，原生 SQL `metadata_->>'file_name'`，懒建表容错 + collection 名校验防注入
 
 ## 3. UseCase 编排
 

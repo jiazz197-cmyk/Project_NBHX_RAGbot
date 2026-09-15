@@ -11,6 +11,8 @@ from .embedding_store import BGEM3EmbeddingWrapper, VectorStoreManager
 from .exceptions import DocumentProcessingError
 from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPreservingSplitter
 
+from app.adapters.knowledge.constants import EXCEL_DB_COLLECTION_NAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,13 +118,14 @@ class DocumentProcessingPipeline:
         processed = 0
         for file_path in files:
             try:
-                # [note] 传递Excel专用分割器
+                # [note] 传递Excel专用分割器；excel-db 集合开启多 sheet 解析
                 chunks = self.document_processor.process_document(
                     file_path,
                     self.text_splitter,
                     tag_generator=self.tag_generator,
                     num_tags=self.num_tags,
                     excel_splitter=self.excel_splitter,
+                    excel_all_sheets=(collection == EXCEL_DB_COLLECTION_NAME),
                 )
                 if not chunks:
                     continue

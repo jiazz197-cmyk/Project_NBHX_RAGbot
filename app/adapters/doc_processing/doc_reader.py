@@ -8,7 +8,7 @@ import time
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import html_text
 import pandas as pd
@@ -20,12 +20,16 @@ from langchain_core.documents import Document
 
 import langchain_compat  # noqa: F401
 
-from .exceptions import DocumentParseError
+from .exceptions import DocumentParseError, DocumentProcessingError
 from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPreservingSplitter
 from .model_pool import BoundedInstancePool
 
 from app.core.config import settings
 from app.core.time_utils import utc_from_timestamp, utcnow
+from app.domain.knowledge.upload_rules import (
+    MAX_EXCEL_TOTAL_CHUNKS,
+    MAX_EXCEL_TOTAL_ROWS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -326,12 +330,17 @@ class DocParser:
 
 
 class ExcelParser:
-    """Excel 解析为纯文本"""
+    """Excel 解析为纯文本。
+
+    默认读第一个 sheet（``sheet_idx=0``，向后兼容）；
+    传 ``sheet_idx=None`` 时遍历所有 sheet，每个 sheet 独立返回
+    ``{"headers": [...], "rows": [...], "sheet_name": ...}``。
+    """
 
     def __call__(
         self,
         file_input: Union[str, bytes, os.PathLike, BytesIO],
-        sheet_idx: int = 0,
+        sheet_idx: Optional[int] = 0,
     ) -> Tuple[str, List[Dict]]:
         temp_path = None
         try:
@@ -348,11 +357,28 @@ class ExcelParser:
                         tmp.write(file_input.read())
                 path = temp_path
 
-            df = pd.read_excel(path, sheet_name=sheet_idx, header=None)
-            df = df.fillna("")
-            text = "\n".join("\t".join(map(str, row)) for row in df.values.tolist())
-            table = {"headers": df.iloc[0].tolist() if not df.empty else [], "rows": df.iloc[1:].values.tolist()}
-            return text, [table]
+            if sheet_idx is None:
+                raw_sheets = pd.read_excel(path, sheet_name=None, header=None)
+                sheet_frames: List[Tuple[Optional[str], pd.DataFrame]] = list(
+                    (str(name), frame) for name, frame in raw_sheets.items()
+                )
+            else:
+                frame = pd.read_excel(path, sheet_name=sheet_idx, header=None)
+                sheet_frames = [(None, frame)]
+
+            texts: List[str] = []
+            tables: List[Dict] = []
+            for sheet_name, df in sheet_frames:
+                df = df.fillna("")
+                texts.append("\n".join("\t".join(map(str, row)) for row in df.values.tolist()))
+                table = {
+                    "headers": df.iloc[0].tolist() if not df.empty else [],
+                    "rows": df.iloc[1:].values.tolist(),
+                }
+                if sheet_name is not None:
+                    table["sheet_name"] = sheet_name
+                tables.append(table)
+            return "\n".join(texts), tables
         finally:
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -616,6 +642,7 @@ class DocumentProcessor:
         tag_generator: TagGenerator = None,
         num_tags: int = 5,
         excel_splitter: ExcelHeaderPreservingSplitter = None,
+        excel_all_sheets: bool = False,
     ) -> List[Document]:
         try:
             file_ext = self.get_file_extension(file_input)
@@ -639,11 +666,22 @@ class DocumentProcessor:
             if parser is None:
                 raise DocumentParseError(f"无法初始化 {file_ext} 格式的解析器")
             
-            text, tables = parser(file_input)
+            if file_ext in ("xlsx", "xls"):
+                # 多 sheet 模式由 excel_all_sheets 开关控制；默认保持单 sheet（向后兼容）
+                text, tables = parser(
+                    file_input, sheet_idx=None if excel_all_sheets else 0
+                )
+            else:
+                text, tables = parser(file_input)
 
             # [note] Excel文件特殊处理：使用保留表头的分割方式
             if file_ext in ("xlsx", "xls") and tables and excel_splitter:
                 logger.info(f"使用Excel表头保留分割器处理文件: {file_name}")
+                total_rows = sum(len(t.get("rows", [])) for t in tables)
+                if total_rows > MAX_EXCEL_TOTAL_ROWS:
+                    raise DocumentProcessingError(
+                        f"Excel 总行数 {total_rows} 超过上限 {MAX_EXCEL_TOTAL_ROWS}"
+                    )
                 metadata = self.extract_metadata(file_input, text)
                 chunks: List[Document] = []
                 
@@ -660,6 +698,9 @@ class DocumentProcessor:
                                 "table_index": table_idx,
                                 "split_method": "excel_header_preserving",
                             }
+                            sheet_name = table.get("sheet_name")
+                            if sheet_name:
+                                chunk_metadata["sheet_name"] = str(sheet_name)
                             if tag_generator and text_chunk.strip():
                                 chunk_metadata["tags"] = tag_generator.extract_tags(text_chunk, num_tags=num_tags)
                             chunks.append(Document(page_content=text_chunk, metadata=chunk_metadata))
@@ -668,6 +709,10 @@ class DocumentProcessor:
                         continue
                 
                 metadata["chunk_count"] = len(chunks)
+                if len(chunks) > MAX_EXCEL_TOTAL_CHUNKS:
+                    raise DocumentProcessingError(
+                        f"Excel 切分块数 {len(chunks)} 超过上限 {MAX_EXCEL_TOTAL_CHUNKS}"
+                    )
                 logger.info(f"Excel文件分割完成，共生成 {len(chunks)} 个chunk")
                 return chunks
 
