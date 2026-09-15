@@ -45,14 +45,14 @@ class VectorMetadataAdapter(KnowledgeMetadataPort):
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     text(
-                        f"SELECT COALESCE(metadata_->>'file_name', '') AS file_name,"
+                        f"SELECT COALESCE(metadata_->>'file_name', metadata_->>'source', '') AS file_name,"
                         f" COALESCE(metadata_->>'uploader', '') AS uploader,"
                         f" COALESCE(metadata_->>'upload_time', '') AS upload_time,"
                         f" COUNT(*) AS chunk_count"
                         f" FROM {table}"
-                        f" WHERE metadata_->>'file_name' = :file_name"
-                        f" GROUP BY metadata_->>'file_name', metadata_->>'uploader',"
-                        f" metadata_->>'upload_time'"
+                        f" WHERE COALESCE(metadata_->>'file_name', metadata_->>'source', '') = :file_name"
+                        f" GROUP BY COALESCE(metadata_->>'file_name', metadata_->>'source', ''),"
+                        f" metadata_->>'uploader', metadata_->>'upload_time'"
                         f" ORDER BY MAX(id) DESC LIMIT 1"
                     ),
                     {"file_name": file_name},
@@ -78,7 +78,8 @@ class VectorMetadataAdapter(KnowledgeMetadataPort):
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     text(
-                        f"DELETE FROM {table} WHERE metadata_->>'file_name' = :file_name"
+                        f"DELETE FROM {table} WHERE"
+                        f" COALESCE(metadata_->>'file_name', metadata_->>'source', '') = :file_name"
                     ),
                     {"file_name": file_name},
                 )

@@ -12,6 +12,7 @@ from .exceptions import DocumentProcessingError
 from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPreservingSplitter
 
 from app.adapters.knowledge.constants import EXCEL_DB_COLLECTION_NAME
+from app.core.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,13 @@ class DocumentProcessingPipeline:
             return input_data
         raise ValueError("input_data 只支持路径、数据流或它们的列表")
 
-    def _documents_to_nodes(self, documents: List, collection: str) -> List[TextNode]:
+    def _documents_to_nodes(
+        self,
+        documents: List,
+        collection: str,
+        uploader: Optional[str] = None,
+        upload_time: Optional[str] = None,
+    ) -> List[TextNode]:
         nodes = []
         for chunk in documents:
             # 清理文本中的 NUL 字符（PostgreSQL 不支持）
@@ -96,6 +103,12 @@ class DocumentProcessingPipeline:
             
             metadata.setdefault("chunk_id", str(uuid.uuid4()))
             metadata["collection"] = collection
+            # 同名预检 / 列表 / 删除都按 metadata 键读写（issue #3 P0 修复）：
+            # 写入端必须落 uploader / upload_time（file_name 由 extract_metadata 落）。
+            if uploader:
+                metadata.setdefault("uploader", clean_text_for_postgres(uploader))
+            if upload_time:
+                metadata.setdefault("upload_time", upload_time)
             
             node = TextNode(
                 text=cleaned_text,
@@ -108,12 +121,19 @@ class DocumentProcessingPipeline:
         self,
         input_data: Union[FileInput, List[FileInput]],
         collection: str,
+        uploader: Optional[str] = None,
     ):
-        """主入口：读取、切分、向量化并写入 PGVector（data_<collection>）"""
+        """主入口：读取、切分、向量化并写入 PGVector（data_<collection>）。
+
+        uploader 为本次上传者标识，写入每个 chunk 的 metadata（同名预检依赖它）。
+        """
         files = self._prepare_files(input_data)
         if not files:
             logger.warning("未找到可处理的文件")
             return {"status": "empty"}
+
+        # 同一批次（一个上传任务）的所有 chunk 使用同一个 upload_time
+        upload_time = utcnow().isoformat()
 
         processed = 0
         for file_path in files:
@@ -129,7 +149,7 @@ class DocumentProcessingPipeline:
                 )
                 if not chunks:
                     continue
-                nodes = self._documents_to_nodes(chunks, collection)
+                nodes = self._documents_to_nodes(chunks, collection, uploader, upload_time)
                 self.vector_store_manager.upsert_chunks(nodes, collection, self.embedding_model)
                 processed += 1
             except DocumentProcessingError as exc:

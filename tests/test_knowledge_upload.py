@@ -361,7 +361,6 @@ def test_process_document_all_sheets_writes_sheet_name_metadata():
     processor = DocumentProcessor()
     fake_parser = FakeParser()
     processor._get_parser = lambda ext: fake_parser  # type: ignore[method-assign]
-    processor.extract_metadata = lambda file_input, text: {"file_name": "multi.xlsx"}  # type: ignore[method-assign]
 
     buf = io.BytesIO(b"x")
     buf.name = "multi.xlsx"
@@ -374,6 +373,8 @@ def test_process_document_all_sheets_writes_sheet_name_metadata():
     assert {c.metadata["sheet_name"] for c in chunks} == {"s1", "s2"}
     assert {c.metadata["table_index"] for c in chunks} == {0, 1}
     assert all(c.metadata["split_method"] == "excel_header_preserving" for c in chunks)
+    # 真实 extract_metadata（不 monkeypatch）：chunk 必须携带 file_name（同名预检契约）
+    assert all(c.metadata.get("file_name") == "multi.xlsx" for c in chunks)
 
 
 def test_process_document_single_sheet_keeps_backward_compat():
@@ -398,7 +399,6 @@ def test_process_document_single_sheet_keeps_backward_compat():
     processor = DocumentProcessor()
     fake_parser = FakeParser()
     processor._get_parser = lambda ext: fake_parser  # type: ignore[method-assign]
-    processor.extract_metadata = lambda file_input, text: {"file_name": "multi.xlsx"}  # type: ignore[method-assign]
 
     buf = io.BytesIO(b"x")
     buf.name = "multi.xlsx"
@@ -409,6 +409,68 @@ def test_process_document_single_sheet_keeps_backward_compat():
     assert fake_parser.sheet_calls == [0]
     assert len(chunks) == 2
     assert all("sheet_name" not in c.metadata for c in chunks)
+    assert all(c.metadata.get("file_name") == "multi.xlsx" for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# 4.5 真实契约：chunk metadata 携带 file_name / uploader / upload_time
+#     （issue #3 MR 评审 P0：写入端与读取端键名对齐）
+# ---------------------------------------------------------------------------
+
+
+def test_extract_metadata_writes_file_name():
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import DocumentProcessor
+
+    buf = io.BytesIO(b"x")
+    buf.name = "合同.pdf"
+    metadata = DocumentProcessor().extract_metadata(buf, "内容")
+    assert metadata["file_name"] == "合同.pdf"
+    assert metadata["source"] == "合同.pdf"
+    assert metadata["file_type"] == "pdf"
+
+
+def test_pipeline_nodes_carry_uploader_and_upload_time():
+    pytest.importorskip("llama_index_core")
+    from langchain_core.documents import Document
+    from app.adapters.doc_processing.pipeline import DocumentProcessingPipeline
+
+    pipeline = object.__new__(DocumentProcessingPipeline)
+    docs = [
+        Document(page_content="chunk-1", metadata={"file_name": "a.pdf", "source": "a.pdf"}),
+        Document(page_content="chunk-2", metadata={"file_name": "a.pdf", "source": "a.pdf"}),
+    ]
+    nodes = pipeline._documents_to_nodes(
+        docs, "knowledge_chunks", uploader="alice", upload_time="2026-09-15T10:00:00"
+    )
+    assert len(nodes) == 2
+    for node in nodes:
+        assert node.metadata["file_name"] == "a.pdf"
+        assert node.metadata["uploader"] == "alice"
+        assert node.metadata["upload_time"] == "2026-09-15T10:00:00"
+        assert node.metadata["collection"] == "knowledge_chunks"
+
+
+def test_metadata_adapter_coalesces_legacy_source_key():
+    """历史数据只有 source 键，查询/删除须 COALESCE 兜底（与列表端 persistence 一致）。"""
+    source = (REPO_ROOT / "app/adapters/knowledge/metadata.py").read_text(
+        encoding="utf-8"
+    )
+    assert "COALESCE(metadata_->>'file_name', metadata_->>'source'" in source
+    assert "DELETE FROM {table}" in source
+
+
+def test_uploader_from_task_status_extraction():
+    pytest.importorskip("tenacity")
+    from app.adapters.doc_processing.document_task_runner import (
+        _uploader_from_task_status,
+    )
+
+    with_uploader = SimpleNamespace(metadata={"uploader": "alice"})
+    assert _uploader_from_task_status(with_uploader) == "alice"
+    assert _uploader_from_task_status(SimpleNamespace(metadata={})) == ""
+    assert _uploader_from_task_status(SimpleNamespace(metadata=None)) == ""
+    assert _uploader_from_task_status(None) == ""
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,19 @@ def _log_task_status_load_failure(task_id: str):
     return _log
 
 
+def _uploader_from_task_status(task_status) -> str:
+    """从任务状态 metadata 提取 uploader（SubmitDocumentProcessingUseCase 写入）。"""
+    try:
+        metadata = getattr(task_status, "metadata", None) or {}
+        if isinstance(metadata, str):
+            import json
+
+            metadata = json.loads(metadata)
+        return str(metadata.get("uploader") or "")
+    except Exception:  # noqa: BLE001 - 提取失败不阻塞处理
+        return ""
+
+
 def process_documents_background(
     token: CancellationToken,
     task_id: str,
@@ -73,6 +86,7 @@ def process_documents_background(
             return {"status": "cancelled", "message": "任务在启动前被取消"}
 
         task_exists = False
+        task_status = None
 
         @retry(
             stop=stop_after_attempt(5),
@@ -108,6 +122,9 @@ def process_documents_background(
             except Exception as e:
                 logger.warning("[%s] 回写超时失败状态失败: %s", task_id, e)
             return {"status": "error", "message": "任务创建超时"}
+
+        uploader = _uploader_from_task_status(task_status)
+        logger.info("[%s] 上传者: %s", task_id, uploader or "(未提供)")
 
         loop.run_until_complete(thread_tm.start_task(task_id))
 
@@ -187,6 +204,7 @@ def process_documents_background(
                     one_result = pipeline.process(
                         input_data=[stream],
                         collection=collection,
+                        uploader=uploader,
                     )
                     total_processed += int(one_result.get("processed_files", 0) or 0)
                 except Exception as e:

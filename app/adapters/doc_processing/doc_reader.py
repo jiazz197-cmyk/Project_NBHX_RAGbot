@@ -580,6 +580,7 @@ class DocumentProcessor:
     def extract_metadata(self, file_input: Union[str, bytes, os.PathLike], text: str) -> Dict:
         metadata = {
             "source": "",
+            "file_name": "",
             "file_type": "",
             "file_size": 0,
             "created_time": utcnow().isoformat(),
@@ -596,6 +597,7 @@ class DocumentProcessor:
                 metadata.update(
                     {
                         "source": os.path.basename(file_input),
+                        "file_name": os.path.basename(file_input),
                         "file_type": os.path.splitext(file_input)[1][1:].lower(),
                         "file_size": file_stats.st_size,
                         "created_time": utc_from_timestamp(file_stats.st_ctime).isoformat(),
@@ -608,6 +610,7 @@ class DocumentProcessor:
                 metadata.update(
                     {
                         "source": file_name,
+                        "file_name": file_name,
                         "file_type": file_name.split(".")[-1].lower() if "." in file_name else "unknown",
                         "title": file_name.split(".")[0] if "." in file_name else file_name,
                     }
