@@ -53,3 +53,12 @@ node_modules/
 .pnpm-store/
 .pnpm-cache/
 .turbo/
+
+.dsh/
+
+# 容器化开发的「每人本地覆盖」（端口、镜像名等），示例见 .env.dev.example
+.env.dev
+
+infra-migration/
+
+docs/issues

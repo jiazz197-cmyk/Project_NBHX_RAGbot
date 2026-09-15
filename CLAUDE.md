@@ -51,7 +51,8 @@ app/
 frontend/apps/chat/      主前端应用；frontend/packages/components = @yamato/components 共享包
 scripts/                 架构守卫 / 启动 / 环境（env.sh、setup_local_env.sh、dev.sh）/ nginx / 安全 smoke
 tests/                   pytest 单元/回归（无根 conftest，直接 pytest 跑）
-docs/                    架构文档（di-and-layered-architecture.md 等）
+docker/                  开发容器：dev.Dockerfile / compose.dev.yaml / entrypoint.sh
+docs/                    架构文档（di-and-layered-architecture.md、docker-dev-env.md 等）
 requirements*.txt        主应用锁 / RAG 栈（requirements-rag.txt）/ 测试工具 / overrides
 .venv/  .cache/          项目内自包含环境（仅本机，见下节；已被 .gitignore）
 ```
@@ -105,7 +106,7 @@ uv pip list / freeze / tree    # 已装包 / 锁格式输出 / 依赖树
 uv pip check                   # 依赖一致性（预期留 1 条 paddle 的 nccl 提示，见上）
 
 # 装依赖：**只增不减**，不会卸载清单外的包
-uv pip install -r requirements.txt
+uv pip install -r requirements.txt --overrides requirements-overrides.txt   # ⚠️ overrides 不能省
 uv pip install -r requirements-rag.txt        # 过渡期需要 RAG 时
 uv pip install -r requirements-dev.txt
 uv pip uninstall <包名>
@@ -128,6 +129,20 @@ uv venv --python 3.12 .cache/lean-venv
 uv cache dir / size / prune
 ```
 
+**四个 requirements 文件的分工**（实测锁定条数：主 179 / RAG 96 / dev 5 / overrides 1）：
+
+| 文件 | 条数 | 角色 | 什么时候用 |
+|---|---|---|---|
+| `requirements.txt` | 179 | 主应用运行时唯一清单（含 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` 两个**非 PyPI** 包） | 本地后端环境、主应用镜像；**必须配 `--overrides`** |
+| `requirements-rag.txt` | 96（其中 **48 个是 RAG 独有**） | LangChain/LlamaIndex 全套，随「RAG 独立容器」部署 | RAG 容器镜像；过渡期本地 `--with-rag` |
+| `requirements-dev.txt` | 5 | `pytest` / `pytest-asyncio` / `iniconfig` / `pluggy` / `watchfiles`；**部署环境不要装** | 本地开发 + CI |
+| `requirements-overrides.txt` | 1 条 | **不是清单**，是传给 `--overrides` 的冲突排除文件 | 凡装主清单就必须一起带 |
+
+已核对过、不用重新推导的三条事实：
+- **两文件共享的 48 个包（pydantic / sqlalchemy / numpy / httpx / asyncpg / psycopg2-binary …）版本锁定完全一致（逐条比对 0 处差异）** → 「先主清单后 RAG」顺序无关、可重复执行，不会互相翻版本。
+- **`requirements-rag.txt` 里没有 `fastapi` / `uvicorn` / `starlette`，也没有 `torch` / `paddlepaddle-gpu`** → ①RAG 容器要对外暴露 HTTP 得自补 `fastapi`+`uvicorn`；②RAG 镜像不含 GPU wheel，比主镜像小得多（推理走外部服务，不在容器内跑模型）。
+- `requirements-dev.txt` 显式列 `iniconfig` / `pluggy`，是为了 `uv pip sync`（不展开依赖）时不误删；`packaging` / `Pygments` 已在主清单里。
+
 ⚠️ **`install` 与 `sync` 的差别是这里最大的坑**：`uv pip install -r requirements.txt` **不会**卸载「已装但不在清单里」的包——所以把 RAG 移出 `requirements.txt` 后，现有 `.venv` 里的 RAG 包**依然在**（应用照常能启动）；只有 `uv pip sync` 或重建 venv 才会得到精简环境，那时 RAG 代码未搬走的应用会起不来。
 
 - **额外索引源**：`requirements.txt` 里 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` **不在 PyPI**，必须带 torch/paddle 官方索引。另外这两个索引里也有 `fastapi` 等同名包（paddle 索引尤其杂），所以必须加 `--index-strategy unsafe-best-match`，否则 uv 的「命中即锁定首个索引」会把 `fastapi==0.116.1` 判成无解。`scripts/env.sh` 已定义 `TORCH_INDEX` / `PADDLE_INDEX` 并导出 `PIP_EXTRA_INDEX_URL`。
@@ -148,25 +163,58 @@ uv cache dir / size / prune
 
   同时补锁了漏掉的传递依赖：`aiohttp-retry`、`nltk`、`aiosqlite`、`banks`、`xlsxwriter`、`requests-toolbelt`(langsmith 运行时就要)、`email-validator`+`dnspython`（pydantic `EmailStr` 用，**`uv pip check` 查不出来，只有 `import main` 时才会炸**）。
 - **⚠️ 绝不能装 `nvidia-nccl-cu12`**：`paddlepaddle-gpu` 的元数据要求它，但它与 torch 需要的 `nvidia-nccl-cu13` **装的是同一个文件** `nvidia/nccl/lib/libnccl.so.2`——cu12 覆盖 cu13 后 `import torch` 直接崩：`libtorch_cuda.so: undefined symbol: ncclCommWindowDeregister`。已用 [`requirements-overrides.txt`](requirements-overrides.txt) 将其排除（`setup_local_env.sh` 带 `--overrides`）。代价：`uv pip check` 会留 1 条 paddle 的 incompatibility，属**预期**。paddle 只在多卡分布式才用 NCCL，单卡 OCR 推理不受影响。
-- **RAG 栈已整体拆出主清单（2026-09）**：`langchain*`、`llama-index*`、`llama-cloud*`、`llama-parse`、`langsmith`、`openai`、`tiktoken`、`pgvector`、`nltk`、`banks`、`aiosqlite`、`requests-toolbelt` 等 **48 个包**移到 [`requirements-rag.txt`](requirements-rag.txt)（该栈的**完整独立闭包，96 个包**，可单独 `uv pip compile` 通过），随「RAG 独立容器」部署、对外只暴露 HTTP 接口；主清单从 228 → **180 包**。
+- **RAG 栈已整体拆出主清单（2026-09）**：`langchain*`、`llama-index*`、`llama-cloud*`、`llama-parse`、`langsmith`、`openai`、`tiktoken`、`pgvector`、`nltk`、`banks`、`aiosqlite`、`requests-toolbelt` 等 **48 个包**移到 [`requirements-rag.txt`](requirements-rag.txt)（该栈的**完整独立闭包，96 个包**，可单独 `uv pip compile` 通过），随「RAG 独立容器」部署、对外只暴露 HTTP 接口；主清单从 228 → **179 包**（实测 `grep -cE '^[A-Za-z0-9._-]+==' requirements.txt`；早前写的 180 是估算，差 1）。
   - ⚠️ **仓库里的 RAG 代码还没搬走**：`main.py`（第 33 行）与 `app/api/v1/registry.py` 仍会 `import langchain/llama_index`，所以在纯主清单环境下应用起不来。
   - 过渡期本地开发：`bash scripts/setup_local_env.sh --with-rag`（默认不装 RAG 栈）。等 RAG 调用改成 HTTP 客户端后即可去掉该开关。
   - 已用「导入拦截器」模拟验证过：**非 RAG 模块在无 RAG 栈时全部可正常 import**（`app.core.*`、`app.models.orm`、`ocr`、`sqlserver`、`quotation`、`knowledge`、`auth`、`monitoring`）。
   - 搬 RAG 时注意这几个**隐藏依赖**（元数据没声明、代码里才 import，容易被漏掉）：`psycopg2-binary`（`app/core/database.py` 的同步 engine 用，**留在主清单**）、`asyncpg`（`postgresql+asyncpg://` URL 用，主清单）、`greenlet`（SQLAlchemy async 需要）、`beautifulsoup4`/`soupsieve`（`readability`/`html_text` 运行时需要，主清单）。
-- **测试工具在 [`requirements-dev.txt`](requirements-dev.txt)**（`pytest==9.1.1` + `pytest-asyncio==1.4.0`，与 `.gitlab-ci.yml` 的 pytest job 对齐），`setup_local_env.sh` 会自动装。当前 `pytest -q` = **218 passed**。
+- **测试工具在 [`requirements-dev.txt`](requirements-dev.txt)**（`pytest==9.1.1` + `pytest-asyncio==1.4.0`，与 `.gitlab-ci.yml` 的 pytest job 对齐），`setup_local_env.sh` 会自动装。当前分支 `pytest -q` = **150 passed**（容器内 9s / 宿主 36s）；早前记录的 218 / CI 里的 189 是 closing_form、quotation 删除**之前**的数字，别当成回归。
 - **无 GPU 机器**：`TORCH_INDEX=https://download.pytorch.org/whl/cpu bash scripts/setup_local_env.sh`（省约 7GB CUDA wheel）。本机有 RTX 5090（驱动 580 / CUDA 13.0），装的是 cu130 版本，用 `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"` 验证。
 - **解释器只用 `.venv`**：`scripts/start_backend.sh` 按 `VENV_DIR` → `~/桌面/yamatoenv` → `~/yamatoenv` → `<repo>/.venv` → `<repo>/venv` 顺序解析，本仓库命中 `.venv`。
 
 **本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY`/`CHAT_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
 - **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `yamato_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
 - **SQL Server（U8/PDM）**：启动时的连通性检查**已删除**（连同 `app/adapters/sqlserver/connectivity.py`），不再打 `[warning] U8/PDM SQLServer 连接失败`；报价/PDM 相关接口被调用时才会真正连库。
-- **AI 推理服务**（BGE-M3 / Reranker / OCR / LLM，`.env` 里指向 `localhost:80`）：本机没有，RAG/OCR 调用会失败。
+- **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / Qwen3.6-35B / Qwen3-8B / DOTS-OCR）：本机不跑这些模型，走 HTTP API；`.env` 里现有的 `localhost:80` 是**错误占位值**（这台机器的 80 端口是 GitLab），真实网关地址待定。本机**只**跑 `PaddleOCR` 与 `TagGenerator`（两者正在拆成独立容器，见 issue #9 / #10），它们才是 GPU 的用途。
 
 **MinIO 对账只扫 `temp/` 与 `images/`**：`form_pic/` 前缀与 closing_form 遗留登记逻辑（`_LEGACY_*`）已随 closing_form 下线一并删除，不再输出 `跳过 data_doc_collection_1 图片登记` 告警；`form_pic/` 下历史对象现在**不被扫描**（不会被删，也不再纳入对账）。
 
 **pnpm 两个坑（已实测，别再踩）**：
 1. **`.pnpmrc` 不生效**：pnpm 8 与 pnpm 12 都不读它，原先写在里面的 `shamefully-hoist=true` 从未起作用（改到 `.npmrc` 后 `node_modules/.modules.yaml` 才出现 `hoistPattern: '*'`）。该文件已删除，配置写在 [`frontend/.npmrc`](frontend/.npmrc)（pnpm ≤10）与 [`frontend/pnpm-workspace.yaml`](frontend/pnpm-workspace.yaml)（pnpm 11+，camelCase），两处保持一致。
 2. **`package.json` 的 `packageManager` 已从 `pnpm@8.0.0` 升到 `pnpm@8.15.9`**：8.0.0 有 `ERR_INVALID_THIS` bug（node 20/24 都复现，8.6+ 才修）根本装不了包。直接用 `cd frontend && corepack pnpm install --frozen-lockfile` 即可（corepack 按 `packageManager` 自动选版本，缓存固定在 `.cache/corepack`）。**不要用本机全局 pnpm 10/12**：`pnpm-lock.yaml` 是 `lockfileVersion: '6.0'`，它们会报 `ERR_PNPM_LOCKFILE_BREAKING_CHANGE`，加 `--force` 则把锁文件升到 v9。
+
+## 容器化开发（dev 容器）
+
+**环境来自镜像，代码来自 bind mount** → 改代码不用碰镜像，只有 `requirements*.txt` 变化才需要重建。完整说明见 [docs/docker-dev-env.md](docs/docker-dev-env.md)。
+
+```bash
+bash scripts/dev.sh docker up          # 首次：构建镜像 + 起常驻容器
+bash scripts/dev.sh docker backend     # 容器里起后端（前台，uvicorn --reload）
+bash scripts/dev.sh docker frontend    # 容器里起 vite
+bash scripts/dev.sh docker test -q     # 容器里跑 pytest
+bash scripts/dev.sh docker guard       # 容器里跑分层架构守卫
+bash scripts/dev.sh docker shell       # 进容器
+bash scripts/dev.sh docker build       # 改依赖后重建
+bash scripts/dev.sh docker fe-setup    # 一次性：容器内装前端依赖
+API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up   # 每人一组端口
+```
+
+要点（都实测过，别重新推导）：
+
+- **必须经 `dev.sh`**：它带 `-p nbhx-${USER}`，让容器名与三个数据卷按人隔离（共享服务器上多人同用一台 docker daemon，直接 `docker compose` 会互相顶掉）。
+- **代码不进镜像**：`.dockerignore` 是**白名单**，build 上下文 13 GB → 几 KB。`venv` 在 `/opt/venv`（bind mount 之外，不会被宿主 `.venv` 遮蔽），而 `scripts/env.sh` 认 `VENV_DIR` → **脚本零改动**。
+- **缓存是命名卷**，挂在仓库内 `/workspace/.cache`：`env.sh` 那十几个缓存变量（`UV_CACHE_DIR`/`HF_HOME`/`PADDLE_PDX_CACHE_HOME`/`COREPACK_HOME`…）硬编码指向 `${PROJECT_ROOT}/.cache`，挂这里就**全部自动落到 NVMe**（`/var/lib/docker` 在 NVMe，而宿主 `/data` 是 5400rpm HDD，实测顺序读 71 MB/s vs 9.2 GB/s）。
+- **entrypoint 先 chown 缓存卷、再 `setpriv` 降权**到宿主 uid —— 命名卷默认 root 属主（实测挂在 bind mount 内部时 `root:root 0755`，非 root 直接 Permission denied），不降权则容器写进仓库的文件属主会变 root。
+- **PyPI 必须走镜像**：本机 `pypi.org` 实测**超时不可达**；默认 `mirrors.aliyun.com`（`--build-arg PYPI_INDEX=` 可覆盖）。Docker Hub 也不通，但 daemon 已配 `registry-mirrors`。
+- **dev 容器不需要 GPU**：等 `PaddleOCR`/`TagGenerator` 服务化（issue #9 / #10）后镜像可再瘦 ~8.5 GB（实测当前：磁盘 **19 GB**／按层汇总≈推拉传输量 **12.3 GB**；拆掉 paddle+torch 后估算 **~4 GB 量级**），删掉 Dockerfile 里对应两层即可。
+- 容器跑通后宿主 `.venv` + `.cache` 可删，但**必须两个一起删**（硬链接关系，见 docker-dev-env.md §8），每人约回收 12–13 GB。
+- **配置改哪里**：应用配置（DB/密钥/限流…）改仓库根 **`.env`**；容器编排（端口/挂载/容器内覆盖的地址）改 **`docker/compose.dev.yaml`**；只跟你有关的运行时参数（宿主端口、registry 镜像名）写 **`.env.dev`**（gitignored，示例 `.env.dev.example`）。优先级与实测见 [docs/docker-dev-env.md](docs/docker-dev-env.md) §5.5。
+- **依赖变更后必须重建镜像**：`git pull` 只更新代码，**不会**更新环境（venv 在镜像里）。`bash scripts/dev.sh docker check` 自检指纹（镜像内 `/opt/venv/.requirements-hash`），`dev.sh docker up` 也会自动警告；修法是 `docker build && docker up`。
+- **宿主端口**：容器内固定 8000/8888，宿主侧由 `${API_PORT:-8000}` / `${WEB_PORT:-8888}` 决定 —— 可一次性 `API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up`，或持久化写进 `.env.dev`。
+- **容器名 = `nbhx-${USER}-dev-1`**（如 `nbhx-jiazhenyu-dev-1`），数据卷 `nbhx-${USER}_nbhx-*`；由 `dev.sh` 的 `-p nbhx-${USER}` 决定，保证多人同机不冲突。看自己的：`bash scripts/dev.sh docker ps`。
+- **VS Code**：推荐 Remote-SSH 连宿主编辑 + `dev.sh docker ...` 跑命令（编辑与 `git commit/pull/push` 全在宿主，和以前一样）；要看容器用 Docker 面板或 `Dev Containers: Attach to Running Container` 选 `nbhx-<你>-dev-1`。可选 `.devcontainer/devcontainer.json`（注意里面的 `remoteUser` 要改成你的 uid）。详见 [docs/docker-dev-env.md](docs/docker-dev-env.md) §5.8。
+- **GitLab Container Registry 已启用（2026-09-15）**：`http://10.80.153.12:5050`，镜像 `.../carl_jia/ragchatbot/nbhx-dev`，tag `py312-cu130`（移动）+ `py312-cu130-<requirements 哈希>`（可复现）；已实测推/拉双向可用。每台要推拉的机器需 `sudo bash scripts/enable_insecure_registry.sh`（http registry）。踩过的坑见 [docs/docker-dev-guide-admin.md](docs/docker-dev-guide-admin.md) §3.1。
+- **两份操作手册**：同事用 [docs/docker-dev-guide-colleague.md](docs/docker-dev-guide-colleague.md)（前置 / Day 0 / 日常命令 / 配置改哪里 / FAQ / 端口与禁忌）；管理员用 [docs/docker-dev-guide-admin.md](docs/docker-dev-guide-admin.md)（**改 requirements 后更新镜像的完整流程** / registry 运维 / 事故处置 / 回收）。
 
 ## 关键约定（非显而易见，务必遵守）
 

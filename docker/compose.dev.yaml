@@ -1,0 +1,82 @@
+# =============================================================================
+# 开发容器：每人一个，环境来自镜像，代码来自 bind mount
+#
+# ⚠️ 请通过 `bash scripts/dev.sh docker ...` 调用，不要直接 docker compose：
+#    dev.sh 会带上 `-p nbhx-${USER}`，让**容器名与三个数据卷按人隔离**
+#    （共享服务器上多人同用一台 docker daemon，不加 -p 会互相顶掉）。
+#
+# 常用命令（在仓库根目录）：
+#   bash scripts/dev.sh docker up            # 首次：构建镜像 + 起常驻容器
+#   bash scripts/dev.sh docker shell         # 进容器
+#   bash scripts/dev.sh docker backend       # 容器里起后端（宿主端口 API_PORT，默认 8000）
+#   bash scripts/dev.sh docker frontend      # 容器里起 vite（宿主端口 WEB_PORT，默认 8888）
+#   bash scripts/dev.sh docker test -q       # 容器里跑 pytest
+#   bash scripts/dev.sh docker guard         # 分层架构守卫
+#   bash scripts/dev.sh docker build         # 改依赖后重建镜像
+#   bash scripts/dev.sh docker down          # 停容器（数据卷保留）
+#
+# 每人一组端口：API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up
+# =============================================================================
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/dev.Dockerfile
+      # ⚠️ 必须关掉 SLSA provenance 证明清单，否则**推不上 registry**：
+      #   BuildKit 默认会额外产出一个 attestation manifest（内含 OCI 空 blob 与
+      #   in-toto 证明层），而 GitLab registry 校验它时会报
+      #     400 manifest blob unknown（detail 里含 sha256:4f4fb700ef54… OCI 空 blob）
+      #   连带整个 tag 的 push 失败。2026-09-15 实测：23 个层 blob 全部上传成功，
+      #   但 manifest 重试 4 次全部 400 —— 就是这一条造成的。
+      provenance: false
+      sbom: false
+    # 默认用 registry 里的共享镜像；用 dev.sh 时该值由 dev.sh 统一导出（**以 dev.sh 为准**）。
+    # 想钉住某个具体版本（可复现）：在 .env.dev 里写 NBHX_DEV_IMAGE=...:<requirements 哈希>。
+    # registry 尚未启用时，dev.sh 会「pull 失败 → 回退本地 build」，不会卡住。
+    image: ${NBHX_DEV_IMAGE:-10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130}
+    working_dir: /workspace
+    # 以 root 启动：entrypoint 会把缓存卷顶层 chown 成宿主 uid，再用 setpriv 降权。
+    # （命名卷默认 root 属主，直接以非 root 跑会写不进缓存）
+    user: "0"
+    init: true
+    tty: true
+    stdin_open: true
+    # 常驻不退出；具体服务用 `dev.sh docker backend/frontend` 或 exec 进去起
+    command: ["sleep", "infinity"]
+    volumes:
+      - ..:/workspace                                  # 代码：热重载 / git 都在宿主
+      # 下面三个是**命名卷**：落在 /var/lib/docker/volumes/（本机在 NVMe），
+      # 而不是宿主 /data（5400rpm HDD，实测顺序读 71MB/s vs NVMe 9.2GB/s）。
+      # 挂在仓库内部是刻意的：scripts/env.sh 把 UV_CACHE_DIR / HF_HOME /
+      # PADDLE_PDX_CACHE_HOME / COREPACK_HOME 等十几个变量都指向
+      # ${PROJECT_ROOT}/.cache，挂在这里就全部自动落到 NVMe，脚本零改动。
+      - nbhx-cache:/workspace/.cache
+      - nbhx-node-modules:/workspace/frontend/node_modules
+      - nbhx-pnpm-store:/workspace/frontend/.pnpm-store
+    environment:
+      # infra（宿主上的 /data/infra 容器）：宿主的 127.0.0.1 ≠ 容器自己，
+      # 必须走 host-gateway。这些键名与 app/core/config.py 一一对应，
+      # case_sensitive=True，要写全大写原样。
+      # 环境变量优先级高于 .env，所以仓库里的 .env **不用改**。
+      POSTGRES_SERVER: host.docker.internal
+      REDIS_HOST: host.docker.internal
+      MINIO_ENDPOINT: host.docker.internal:9000
+      MINIO_APP_ENDPOINT: host.docker.internal:9000
+      # 外部推理服务（BGE-M3 / Reranker / Qwen / DOTS-OCR）地址待定，
+      # 定了之后加在这里（同样覆盖 .env）；容器里的 localhost 不是宿主。
+      # 过渡期本进程内仍会跑 PaddleOCR / TagGenerator（issue #9 / #10 服务化）：
+      # PADDLE_OCR_ENDPOINT: http://host.docker.internal:8080
+      # TAGGER_ENDPOINT: http://host.docker.internal:8081
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # 容器内端口固定（后端 8000 / vite 8888，与 .env 一致），宿主端口按人分配
+    ports:
+      - "${API_PORT:-8000}:8000"
+      - "${WEB_PORT:-8888}:8888"
+
+volumes:
+  # 名字会被 `-p nbhx-${USER}` 前缀化 → nbhx-<user>_nbhx-cache，天然按人隔离
+  nbhx-cache:
+  nbhx-node-modules:
+  nbhx-pnpm-store:
