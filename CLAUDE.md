@@ -172,7 +172,7 @@ uv cache dir / size / prune
 - **无 GPU 机器**：`TORCH_INDEX=https://download.pytorch.org/whl/cpu bash scripts/setup_local_env.sh`（省约 7GB CUDA wheel）。本机有 RTX 5090（驱动 580 / CUDA 13.0），装的是 cu130 版本，用 `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"` 验证。
 - **解释器只用 `.venv`**：`scripts/start_backend.sh` 按 `VENV_DIR` → `~/桌面/nbhxenv` → `~/nbhxenv` → `<repo>/.venv` → `<repo>/venv` 顺序解析，本仓库命中 `.venv`。
 
-**本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY`/`CHAT_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
+**本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
 - **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `nbhx_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
 - **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / Qwen3.6-35B / Qwen3-8B / DOTS-OCR）：本机不跑这些模型，走 HTTP API；`.env` 里现有的 `localhost:80` 是**错误占位值**（这台机器的 80 端口是 GitLab），真实网关地址待定。本机**只**跑 `PaddleOCR` 与 `TagGenerator`（两者正在拆成独立容器，见 issue #9 / #10），它们才是 GPU 的用途。
 

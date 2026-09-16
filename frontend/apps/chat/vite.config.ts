@@ -11,33 +11,19 @@ export default defineConfig(({ mode }) => {
 
   if (!env.VITE_PORT) throw new Error('VITE_PORT is required in .env file')
   if (!env.VITE_BACKEND_TARGET) throw new Error('VITE_BACKEND_TARGET is required in .env file')
-  if (!env.VITE_DIFY_TARGET) throw new Error('VITE_DIFY_TARGET is required in .env file')
   if (!env.VITE_API_BASE_URL) throw new Error('VITE_API_BASE_URL is required in .env file')
-  if (!env.VITE_DIFY_API_PREFIX) throw new Error('VITE_DIFY_API_PREFIX is required in .env file')
-  const chatProxyApiKey = env.CHAT_PROXY_API_KEY || env.CHAT_API_KEY || env.VITE_CHAT_API_KEY
-  if (!chatProxyApiKey) {
-    throw new Error('CHAT_PROXY_API_KEY (or CHAT_API_KEY) is required in .env file')
-  }
 
   const port = Number(env.VITE_PORT)
   if (isNaN(port) || port <= 0) throw new Error('VITE_PORT must be a valid positive number')
 
   const apiBase = env.VITE_API_BASE_URL
-  const difyApiPrefix = env.VITE_DIFY_API_PREFIX
 
-  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-  const makeProxy = (target: string, injectedApiKey?: string) => ({
+  const makeProxy = (target: string) => ({
     target,
     changeOrigin: true,
     secure: false,
     ws: true,
     configure: (proxy: any) => {
-      if (injectedApiKey) {
-        proxy.on('proxyReq', (proxyReq: any) => {
-          proxyReq.setHeader('Authorization', `Bearer ${injectedApiKey}`)
-        })
-      }
       proxy.on('error', (err: Error, _req: any, res: any) => {
         if (res?.writeHead) {
           res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -69,7 +55,10 @@ export default defineConfig(({ mode }) => {
 
       proxy: {
         [`${apiBase}/auth`]: makeProxy(env.VITE_BACKEND_TARGET),
+        [`${apiBase}/chat-messages`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/chat-summary`]: makeProxy(env.VITE_BACKEND_TARGET),
+        [`${apiBase}/conversations`]: makeProxy(env.VITE_BACKEND_TARGET),
+        [`${apiBase}/messages`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/knowledge`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/docs`]: makeProxy(env.VITE_BACKEND_TARGET), // OpenAPI + legacy /docs/* doc-task routes
         [`${apiBase}/document-tasks`]: makeProxy(env.VITE_BACKEND_TARGET),
@@ -77,10 +66,6 @@ export default defineConfig(({ mode }) => {
         [`${apiBase}/image2url`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/pdf2image`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/context-compression`]: makeProxy(env.VITE_BACKEND_TARGET),
-        [apiBase]: {
-          ...makeProxy(env.VITE_DIFY_TARGET, chatProxyApiKey),
-          rewrite: (path) => path.replace(new RegExp(`^${escapeRegExp(apiBase)}`), difyApiPrefix),
-        },
       },
     },
   }

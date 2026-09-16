@@ -20,7 +20,7 @@ class ContextCompressionRequest(BaseModel):
         ..., min_length=1, max_length=512, description="User ID for fetching conversation"
     )
     conversation_id: str = Field(
-        ..., min_length=1, max_length=128, description="Dify conversation ID"
+        ..., min_length=1, max_length=128, description="Internal conversation ID"
     )
     n_recent: int = Field(
         5, ge=1, le=100, description="Number of recent dialogue turns to keep"
@@ -38,7 +38,7 @@ async def compress_chat_context(
     current_user: CurrentUserPort = Depends(get_current_user),
 ):
     """
-    Compress chat context based on Dify conversation ID.
+    Compress chat context based on the internal conversation ID.
     """
     try:
         result = await CompressContextUseCase(IntegrationContextCompressorAdapter()).execute(

@@ -63,6 +63,28 @@ class ExternalServiceError(APIException):
         )
 
 
+class ChatOrchestratorNotConfiguredError(APIException):
+    """LangChain chat orchestrator is reserved but not configured.
+
+    Raised by the placeholder outbound adapter.  The global APIException
+    handler in ``main.py`` converts it into the agreed 501 JSON payload:
+
+    .. code-block:: json
+
+        {
+          "message": "LangChain chat orchestrator is reserved but not configured",
+          "error_code": "CHAT_ORCHESTRATOR_NOT_CONFIGURED"
+        }
+    """
+
+    def __init__(self):
+        super().__init__(
+            "LangChain chat orchestrator is reserved but not configured",
+            status_code=501,
+            error_code="CHAT_ORCHESTRATOR_NOT_CONFIGURED",
+        )
+
+
 class AuthenticationError(APIException):
     """身份认证失败（用户名、密码错误等）。"""
 

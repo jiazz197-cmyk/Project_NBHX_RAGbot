@@ -4,7 +4,7 @@
 [Unit]
 Description=NBHX AI Backend (uvicorn)
 Documentation=file://__ROOT__/README.md
-# Docker 容器（nginx/postgres/redis/minio/dify）靠 restart=always 自启，
+# Docker 容器（nginx/postgres/redis/minio）靠 restart=always 自启，
 # 这里仅在 docker.service 之后拉起，并等待网络就绪。
 After=network-online.target docker.service
 Wants=network-online.target

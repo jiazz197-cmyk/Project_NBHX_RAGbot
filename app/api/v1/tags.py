@@ -15,6 +15,7 @@ CHAT_SUMMARY: Tag = "Chat Summary"
 KNOWLEDGE: Tag = "Knowledge"
 CONTEXT_COMPRESSION: Tag = "Context Compression"
 OCR: Tag = "OCR"
+LANGCHAIN_CHAT: Tag = "LangChain Chat"
 
 # Descriptions for FastAPI `openapi_tags` in main app
 OPENAPI_TAG_METADATA: list[dict] = [
@@ -61,5 +62,13 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": CONTEXT_COMPRESSION,
         "description": "Context compression for long conversations.",
+    },
+    {
+        "name": LANGCHAIN_CHAT,
+        "description": (
+            "Reserved LangChain chat orchestration endpoints. External paths and "
+            "SSE event names are preserved; until the orchestrator is configured "
+            "they return 501 CHAT_ORCHESTRATOR_NOT_CONFIGURED."
+        ),
     },
 ]

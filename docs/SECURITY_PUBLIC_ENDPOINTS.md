@@ -34,6 +34,8 @@ This document inventories HTTP routes by authentication requirement. Paths are r
 
 All routes under: `/files`, `/document-tasks` (HTTP; legacy `/docs`), `/ocr` (legacy `/image2url` and `/pdf2image` aliases), `/retriever`, `/chat-summary`, `/knowledge`, `/context-compression`.
 
+The reserved LangChain chat routes also require JWT and currently return `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED`: `/chat-messages`, `/chat-messages/{task_id}/stop`, `/conversations`, `/messages`, `/conversations/{conversation_id}/name`, `DELETE /conversations/{conversation_id}`. Normal users are always scoped to the JWT subject; only `admin` / `superuser` may query another user's conversations.
+
 Role-restricted examples:
 
 - `GET /api/v1/document-tasks/ws/stats` (and legacy `GET /api/v1/docs/ws/stats`) — superuser only
@@ -44,7 +46,7 @@ Role-restricted examples:
 Cross-user (same as WebSocket task policy: `admin` or `superuser` may act on other users; normal users are self-only):
 
 - `POST /api/v1/chat-summary/create` and `GET /api/v1/chat-summary/query/{user_id}` — `admin` / `superuser` may use another user’s `user_id` (UUID or username) per handler logic; others restricted to their own aliases.
-- `POST /api/v1/context-compression/compress` — `admin` / `superuser` may pass any business `user_id` for Dify; others restricted to their own aliases.
+- `POST /api/v1/context-compression/compress` — `admin` / `superuser` may pass any business `user_id`; others are restricted to their own aliases. Conversation ids are internal to this service.
 
 ## Review checklist
 

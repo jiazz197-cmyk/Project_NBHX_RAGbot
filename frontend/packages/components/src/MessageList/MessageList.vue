@@ -110,12 +110,10 @@ interface Props {
   editingItemId?: string | null
   editingTitle?: string
   renameApiBaseUrl?: string
-  renameApiToken?: string
+  renameAuthToken?: string
   renameAutoGenerate?: boolean
-  renameUser?: string
   deleteApiBaseUrl?: string
-  deleteApiToken?: string
-  deleteUser?: string
+  deleteAuthToken?: string
 }
 
 const activeItemId = defineModel<string>('activeItemId')
@@ -126,12 +124,10 @@ const props = withDefaults(defineProps<Props>(), {
   editingItemId: null,
   editingTitle: '',
   renameApiBaseUrl: '',
-  renameApiToken: '',
+  renameAuthToken: '',
   renameAutoGenerate: false,
-  renameUser: '',
   deleteApiBaseUrl: '',
-  deleteApiToken: '',
-  deleteUser: '',
+  deleteAuthToken: '',
 })
 
 const emit = defineEmits<{
@@ -153,6 +149,8 @@ const deletingChatId = ref<string | null>(null)
 const internalHistoryItems = ref<HistoryItem[]>([])
 
 const NEW_CHAT_TITLE = '新聊天'
+const CHAT_ORCHESTRATOR_NOT_CONFIGURED_CODE = 'CHAT_ORCHESTRATOR_NOT_CONFIGURED'
+const LANGCHAIN_CHAT_NOT_CONFIGURED_MESSAGE = 'LangChain 聊天编排未配置，请稍后再试'
 
 const buildConversationTitle = (text: string): string => {
   const trimmed = text.trim().replace(/\s+/g, ' ')
@@ -275,9 +273,9 @@ const onRenameCommit = async (chatId: string) => {
     return
   }
 
-  const renameUser = props.renameUser.trim()
-  if (!renameUser) {
-    emit('rename-error', chatId, '缺少用户标识，无法重命名会话')
+  const renameToken = props.renameAuthToken.trim()
+  if (!renameToken) {
+    emit('rename-error', chatId, '登录态已失效，无法重命名会话')
     emit('rename-cancel')
     return
   }
@@ -291,12 +289,11 @@ const onRenameCommit = async (chatId: string) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(props.renameApiToken ? { Authorization: `Bearer ${props.renameApiToken}` } : {}),
+          Authorization: `Bearer ${renameToken}`,
         },
         body: JSON.stringify({
           name: newTitle,
           auto_generate: props.renameAutoGenerate,
-          user: renameUser,
         }),
       }
     )
@@ -305,7 +302,10 @@ const onRenameCommit = async (chatId: string) => {
       let message = '重命名会话失败'
       try {
         const error = await response.json()
-        if (error && typeof error.message === 'string' && error.message) {
+        const errorCode = error?.error_code ?? error?.code
+        if (errorCode === CHAT_ORCHESTRATOR_NOT_CONFIGURED_CODE) {
+          message = LANGCHAIN_CHAT_NOT_CONFIGURED_MESSAGE
+        } else if (error && typeof error.message === 'string' && error.message) {
           message = error.message
         }
       } catch {
@@ -360,9 +360,9 @@ const deleteConversation = async (chatId: string): Promise<boolean> => {
     return false
   }
 
-  const deleteUser = props.deleteUser.trim()
-  if (!deleteUser) {
-    emit('rename-error', chatId, '缺少用户标识，无法删除会话')
+  const deleteToken = props.deleteAuthToken.trim()
+  if (!deleteToken) {
+    emit('rename-error', chatId, '登录态已失效，无法删除会话')
     return false
   }
 
@@ -375,11 +375,8 @@ const deleteConversation = async (chatId: string): Promise<boolean> => {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          ...(props.deleteApiToken ? { Authorization: `Bearer ${props.deleteApiToken}` } : {}),
+          Authorization: `Bearer ${deleteToken}`,
         },
-        body: JSON.stringify({
-          user: deleteUser,
-        }),
       }
     )
 
@@ -387,7 +384,10 @@ const deleteConversation = async (chatId: string): Promise<boolean> => {
       let message = `删除会话失败 (${response.status})`
       try {
         const error = await response.json()
-        if (error && typeof error.message === 'string' && error.message) {
+        const errorCode = error?.error_code ?? error?.code
+        if (errorCode === CHAT_ORCHESTRATOR_NOT_CONFIGURED_CODE) {
+          message = LANGCHAIN_CHAT_NOT_CONFIGURED_MESSAGE
+        } else if (error && typeof error.message === 'string' && error.message) {
           message = error.message
         }
       } catch {

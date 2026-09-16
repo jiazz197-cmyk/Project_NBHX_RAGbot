@@ -1,4 +1,4 @@
-/** 与 Dify 聊天 API 对接用的类型 */
+/** LangChain 预留聊天协议类型。外部路径与 SSE 事件名兼容旧协议。 */
 
 export type MessageRole = 'user' | 'assistant'
 
@@ -23,10 +23,8 @@ export interface Conversation {
 export type SearchMode = '联网搜索' | '本地检索' | '本地&网络'
 
 export interface ChatMessageRequest {
-  user: string
-  user_id: string
-  search: SearchMode
   query: string
+  search_mode: SearchMode
   inputs: Record<string, unknown>
   conversation_id?: string
   response_mode: 'streaming' | 'blocking'
@@ -39,53 +37,72 @@ export type SSEEventType =
   | 'message_file'
   | 'message_end'
   | 'message_replace'
+  | 'workflow_finished'
   | 'error'
   | 'ping'
+
+export interface ChatStreamUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
 
 export interface SSEMessageEvent {
   event: 'message' | 'agent_message' | 'message_replace'
   task_id: string
-  id: string
   conversation_id: string
-  answer: string
-  created_at: number
+  content: string
+  created_at?: number
 }
 
 export interface SSEAgentThoughtEvent {
   event: 'agent_thought'
-  task_id: string
-  id?: string
+  task_id?: string
   conversation_id?: string
   thought?: string
   message?: string
-  answer?: string
+  content?: string
   created_at?: number
 }
 
 export interface SSEMessageEndEvent {
-  event: 'message_end'
+  event: 'message_end' | 'workflow_finished'
   task_id: string
-  id: string
   conversation_id: string
-  metadata: {
-    usage: {
-      prompt_tokens: number
-      completion_tokens: number
-      total_tokens: number
-    }
+  content?: string
+  usage?: ChatStreamUsage
+  metadata?: {
+    usage?: ChatStreamUsage
     retriever_resources?: unknown[]
   }
 }
 
-export interface SSEErrorEvent {
-  event: 'error'
-  task_id: string
-  code: string
-  message: string
-  status: number
+export interface SSEErrorDetail {
+  code?: string
+  message?: string
+  status?: number
 }
 
-export type SSEEvent = SSEMessageEvent | SSEAgentThoughtEvent | SSEMessageEndEvent | SSEErrorEvent
+export interface SSEErrorEvent {
+  event: 'error'
+  task_id?: string
+  conversation_id?: string
+  code?: string
+  message?: string
+  status?: number
+  error?: SSEErrorDetail
+}
+
+export interface SSEPingEvent {
+  event: 'ping'
+}
+
+export type SSEEvent =
+  | SSEMessageEvent
+  | SSEAgentThoughtEvent
+  | SSEMessageEndEvent
+  | SSEErrorEvent
+  | SSEPingEvent
 
 export interface ConversationsResponse {
   data: Conversation[]

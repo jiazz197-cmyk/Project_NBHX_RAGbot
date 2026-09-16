@@ -9,11 +9,9 @@
         :editing-item-id="editingChatId"
         :editing-title="editingChatTitle"
         :rename-api-base-url="config.apiBaseUrl"
-        :rename-api-token="''"
-        :rename-user="chatSettings.user"
+        :rename-auth-token="authToken"
         :delete-api-base-url="config.apiBaseUrl"
-        :delete-api-token="''"
-        :delete-user="chatSettings.user"
+        :delete-auth-token="authToken"
         @update:editingTitle="editingChatTitle = $event"
         @create="createNewChat"
         @select="loadChat"
@@ -378,7 +376,8 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
       normalized.includes('429') ||
       normalized.includes('too many request') ||
       normalized.includes('rate limit') ||
-      normalized.includes('限流')
+      normalized.includes('限流') ||
+      normalized.includes('过于频繁')
 
     if (isRateLimited) {
       return rateLimitMessage
@@ -387,6 +386,9 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   }
   return fallback
 }
+
+const isOrchestratorNotConfiguredError = (error: unknown): boolean =>
+  error instanceof Error && error.message.includes('LangChain 聊天编排未配置')
 
 const stripThinkContent = (raw: string): string => {
   if (!raw) {
@@ -937,8 +939,6 @@ const sendMessage = async () => {
     if (isGenerationStale()) {
       return
     }
-    const normalizedUser = String(chatSettings.value.user ?? '').trim()
-
     const currentBg = currentConversationId.value ? (chatBackgrounds.value[currentConversationId.value] || loadBackground(currentConversationId.value)) : ''
     
     if (currentConversationId.value && currentBg) {
@@ -949,7 +949,6 @@ const sendMessage = async () => {
       currentInput,
       currentConversationId.value,
       {
-        user: normalizedUser,
         search: chatSettings.value.search,
         background: currentBg,
       },
@@ -1090,8 +1089,7 @@ const loadChat = async (chatId: string) => {
   }
 
   try {
-    const normalizedUser = String(chatSettings.value.user ?? '').trim() || 'user'
-    const response = await getMessages(normalizedUser, chatId)
+    const response = await getMessages(chatId)
     
     messages.value = []
     tokenUsage.value = 0
@@ -1157,6 +1155,9 @@ const loadChat = async (chatId: string) => {
     
     await scrollToBottom()
   } catch (error: unknown) {
+    if (isOrchestratorNotConfiguredError(error)) {
+      showError(getErrorMessage(error, 'LangChain 聊天编排未配置'))
+    }
     if (import.meta.env.DEV) {
       console.error('加载会话失败:', error)
     }
@@ -1187,6 +1188,9 @@ const cancelRename = () => {
 }
 
 const handleRenameError = (_chatId: string, errorMessage: string) => {
+  if (errorMessage) {
+    showError(errorMessage)
+  }
   if (import.meta.env.DEV) {
     console.error('重命名失败:', errorMessage)
   }
@@ -1284,8 +1288,7 @@ onMounted(async () => {
   startWelcomeTyping()
 
   try {
-    const normalizedUser = String(chatSettings.value.user ?? '').trim() || 'user'
-    const response = await getConversations(normalizedUser)
+    const response = await getConversations()
     if (response.data && response.data.length > 0) {
       chatHistory.value = response.data.map((conv: Conversation) => ({
         id: conv.id,
@@ -1293,6 +1296,9 @@ onMounted(async () => {
       }))
     }
   } catch (error: unknown) {
+    if (isOrchestratorNotConfiguredError(error)) {
+      showError(getErrorMessage(error, 'LangChain 聊天编排未配置'))
+    }
     if (import.meta.env.DEV) {
       console.error('加载会话列表失败:', error)
     }

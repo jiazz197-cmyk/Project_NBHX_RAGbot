@@ -19,6 +19,7 @@
 | Knowledge records + uploads | `/knowledge` | Record list/delete, document upload, Excel database upload |
 | OCR (image upload + PDF to image) | `/ocr` | Replaces split `/image2url` and `/pdf2image` for new clients |
 | RAG retriever | `/retriever` | |
+| Chat / LangChain reserved | `` (API root) | `/chat-messages`, `/conversations`, `/messages`, etc.; paths preserved, currently 501 until the LangChain adapter is implemented |
 | Chat summary | `/chat-summary` | |
 | Context compression | `/context-compression` | |
 

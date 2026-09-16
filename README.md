@@ -27,7 +27,7 @@
 
 NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内部 AI 工作台，仅服务于宁波华翔自身的业务运转，**不面向外部部署**。它把散落在企业文档、Excel 与员工经验里的知识收敛到一个对话式工作台：员工用自然语言提问，系统从企业知识库中检索依据并作答；文档与 Excel 类数据库上传后自动解析、建库，随后可被对话检索引用。
 
-平台采用 FastAPI（Python 3.12）后端 + Vue 3（pnpm / Turbo monorepo）前端，遵循 **domain ◄ ports ◄ usecases ◄ adapters ◄ api(组合根)** 的 Clean Architecture。对话编排由 **Dify** 承担（SSE 流式），本服务负责其周围的 RAG 检索、文档建库、对话摘要与上下文压缩；所有业务数据落在宁波华翔自有的 PostgreSQL / Redis / MinIO 之中。
+平台采用 FastAPI（Python 3.12）后端 + Vue 3（pnpm / Turbo monorepo）前端，遵循 **domain ◄ ports ◄ usecases ◄ adapters ◄ api(组合根)** 的 Clean Architecture。对话编排由本服务 FastAPI 承接，底层预留 **LangChain + ChatOrchestratorPort**；当前接口已注册且路径不变，但实现未完成前统一返回明确的 501 未配置错误。RAG 检索、文档建库、对话摘要与上下文压缩均由本服务提供；所有业务数据落在宁波华翔自有的 PostgreSQL / Redis / MinIO 之中。
 
 ---
 
@@ -48,12 +48,12 @@ NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内�
 
 ### AI 知识库对话
 
-员工直接用自然语言提问，AI 基于企业内部文档给出有依据的精准回答。对话编排由 **Dify** 承担（`/chat-messages` SSE 流式端点），本服务在其周围提供检索、记忆与归档支撑：
+员工直接用自然语言提问，AI 基于企业内部文档给出有依据的精准回答。对话编排由本服务 FastAPI 承接（`/chat-messages` SSE 流式端点），底层预留 `ChatOrchestratorPort`；未配置 LangChain 实现前，六个聊天接口返回 501 + `CHAT_ORCHESTRATOR_NOT_CONFIGURED`，前端显示明确未配置提示，不会误解为登录失效或网络错误。本服务同时提供检索、记忆与归档支撑：
 
 - **本地知识库检索**：基于已上传企业文档的 RAG（BGE-M3 嵌入 + 重排序 + pgvector），由本服务 `/retriever` 提供，供对话引用依据
-- **联网搜索**：在 Dify 工作流内补充外部信息
+- **联网搜索**：由后续 LangChain 编排按需接入外部搜索
 - **对话历史与会话/消息持久化**：支持重命名与分页回看
-- **长上下文自动压缩**：LangChain + OpenAI 兼容 LLM，从 Dify 拉取对话变量后压缩，超长对话不丢检索与作答质量
+- **长上下文自动压缩**：LangChain + OpenAI 兼容 LLM，从本服务本地消息仓储拼接 recent/older 后压缩，超长对话不丢检索与作答质量
 - **用户画像摘要**：自动分析历史对话，提炼问询习惯与偏好
 - **协作式取消**：客户端可随时停止当前回答流
 
@@ -84,7 +84,7 @@ NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内�
 | 层 | 选型 | 用途 |
 |----|------|------|
 | **后端框架** | FastAPI 0.116 + Uvicorn + Pydantic 2 | 异步 API、配置校验、生命周期管理 |
-| **对话编排** | Dify（外部） | SSE 流式对话工作流（`/chat-messages`），由 Nginx 拆分流量 |
+| **对话编排** | LangChain（预留） | 本服务 FastAPI 承接 SSE 流式对话路径；实现前统一返回 501 预留错误 |
 | **LLM 编排** | LangChain | 上下文压缩、文档切分（非对话主链路） |
 | **LLM 模型** | Qwen3-8B / Qwen3.6-35B（本地 vLLM） | 关键词/意图、流式作答、上下文压缩 |
 | **OCR** | PaddleOCR | PDF 图纸文字识别 |
@@ -114,14 +114,14 @@ NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内�
 
 > `app/core/`、`app/models/` 暂作外层工具岛原位保留，`core` 未纳入内层禁列。
 
-### 对话编排（Dify + 本服务分工）
+### 对话编排（LangChain 预留 + 本服务）
 
-流量在 Nginx 层按路径拆分（见 [`nginx/nginx.conf.template`](nginx/nginx.conf.template)）：已知的业务前缀（`/auth`、`/knowledge`、`/document-tasks`、`/retriever`、`/context-compression`、`/chat-summary` 等）反代到 FastAPI 后端；其余 `/api/v1/*` 兜底反代到 Dify（重写为 `/v1/*` 并注入 Dify App API Key），其中即包含 `/chat-messages`、`/conversations`、`/messages` 等对话端点。
+流量在 Nginx 层按路径拆分（见 [`nginx/nginx.conf.template`](nginx/nginx.conf.template)）：业务前缀（`/auth`、`/chat-messages`、`/conversations`、`/messages`、`/knowledge`、`/document-tasks`、`/retriever`、`/context-compression`、`/chat-summary` 等）都显式反代到 FastAPI 后端；未知 `/api/v1/*` 返回 404，不再兜底外部聊天服务。
 
-- **对话主链路**：Dify 负责 SSE 流式作答与工作流编排
+- **对话主链路**：本服务 API + `ChatOrchestratorPort` 预留，后续由 LangChain 实现 SSE 流式作答与工作流编排
 - **RAG 检索**：本服务 `app/adapters/ragsystem/`（BGE-M3 嵌入 + 重排序 + pgvector），经 `app/adapters/retriever.py` facade 暴露，供对话引用
-- **上下文压缩**：`app/adapters/context_compressor.py`，LangChain + LLM，从 Dify 拉取对话变量后压缩
-- **对话归档**：`app/adapters/chat_archive/`，经 Dify API 抽取历史问询文本，生成用户画像摘要
+- **上下文压缩**：`app/adapters/context_compressor.py`，LangChain + LLM，从本地对话消息仓储拼接 recent/older 后压缩
+- **对话归档**：`app/adapters/chat_archive/`，从本地消息仓储抽取历史问询文本，生成用户画像摘要
 
 ### 任务基础设施
 
@@ -153,7 +153,6 @@ NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内�
 - PostgreSQL 14+（需安装 pgvector 扩展）
 - Redis 6.0+
 - **MinIO**（对象存储；知识库文件、文档处理临时文件与 OCR 产物依赖桶配置，见 `.env.example`）
-- **Dify**（对话编排；Nginx 兜底反代目标，需配置 Dify App API Key，见 [`nginx/README.md`](nginx/README.md)）
 - Node.js 18+；**pnpm 8.15.9**（[`frontend/package.json`](frontend/package.json) 的 `packageManager` 已锁定，直接用 `corepack pnpm` 即可）
 
 ### 后端启动
@@ -171,7 +170,7 @@ source scripts/env.sh
 
 # 4. 配置环境变量
 cp .env.example .env
-# 编辑 .env 填入 PostgreSQL、Redis、MinIO、Dify 及 AI 推理服务地址
+# 编辑 .env 填入 PostgreSQL、Redis、MinIO 及 AI 推理服务地址
 
 # 5. 初始化数据库（首次运行）
 # 在 PostgreSQL 中执行：CREATE EXTENSION IF NOT EXISTS vector;
@@ -182,7 +181,7 @@ python main.py          # http://localhost:8000，文档 /api/v1/docs
 
 > `requirements.txt` 里的 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` 不在 PyPI 上，需带 torch/paddle 官方索引；`scripts/setup_local_env.sh` 已处理索引源、依赖冲突与 `nvidia-nccl` 互斥（详见 [CLAUDE.md](CLAUDE.md) 的「本地环境」）。手动装时请照抄脚本里的参数。
 >
-> **RAG 依赖已拆分**：LangChain / LlamaIndex 那一套在 [`requirements-rag.txt`](requirements-rag.txt)，随「RAG 独立容器」部署（对外只暴露 HTTP 接口），主清单不再包含。仓库里的 RAG 代码尚未搬走，过渡期本地跑完整应用请用 `bash scripts/setup_local_env.sh --with-rag`。
+> **RAG 依赖已拆分**：LangChain / LlamaIndex 那一套在 [`requirements-rag.txt`](requirements-rag.txt)，随「RAG 独立容器」部署（对外只暴露 HTTP 接口），主清单不再包含。仓库里的 RAG 代码尚未搬走，过渡期本地跑完整应用请用 `bash scripts/setup_local_env.sh --with-rag`。RAG 容器与主应用的接口边界见 [`docs/langchain-rag-container-api-contract.md`](docs/langchain-rag-container-api-contract.md)。
 
 ### 前端启动
 
@@ -227,7 +226,9 @@ corepack pnpm dev
 | 对话摘要 | `/api/v1/chat-summary` | 用户画像摘要存储与查询 |
 | OCR | `/api/v1/ocr` | 图片文字识别与 PDF 转图片 |
 
-> 对话类端点（`/chat-messages`、`/conversations`、`/messages`）由 Dify 提供，经 Nginx 兜底反代，不在本服务路由表中。
+> 对话类端点（`/chat-messages`、`/conversations`、`/messages`）现在挂载在本服务 `app/api/v1/chat.py`；LangChain 实现完成前统一返回 `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED`，接入时只需替换 `ChatOrchestratorPort` 实现。
+
+> 接口人工契约见 [`docs/langchain-api-contract.md`](docs/langchain-api-contract.md)；独立 RAG 容器 / LangChain 边界见 [`docs/langchain-rag-container-api-contract.md`](docs/langchain-rag-container-api-contract.md)。
 
 ---
 
@@ -243,7 +244,7 @@ corepack pnpm dev
 | [`app/domain/`](app/domain/) | 无 IO 纯函数与领域规则（knowledge、file_manager、auth 页面权限命名等）及共享异常 |
 | [`app/models/orm/`](app/models/orm/) | SQLAlchemy ORM（用户/角色/权限、对话、消息、文件、知识库等） |
 | [`app/core/`](app/core/) | 配置、任务管理器、执行器、WS、中间件、安全、文件对账（外层工具岛） |
-| [`nginx/`](nginx/) | Nginx 流量拆分模板（业务前缀 → 后端，兜底 → Dify） |
+| [`nginx/`](nginx/) | Nginx 流量拆分模板（业务前缀显式 → FastAPI 后端；未知 `/api/v1/*` 返回 404） |
 | [`frontend/`](frontend/) | pnpm + Turbo Monorepo；业务应用在 [`frontend/apps/chat`](frontend/apps/chat) |
 | [`tests/`](tests/) | 单元/回归测试（知识库上传、RAG 接入、任务并发、鉴权与分层守卫等） |
 | [`scripts/`](scripts/) | 启动脚本、Nginx 渲染、分层架构 guard |

@@ -53,7 +53,6 @@ def _is_insecure_value(value: Any) -> bool:
         "default",
         "minioadmin",
         "superuser.5001",
-        "app-czjvttjp6wyvbbmejlf2khzq",
     )
 
     return any(keyword in normalized for keyword in insecure_keywords)
@@ -377,7 +376,7 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     QWEN3_6_35B_API_URL: str = Field(
         "http://localhost:80/llm/qwen36b/v1",
         env="QWEN3_6_35B_API_URL",
-        description="OpenAI-compatible API root (…/v1) for Qwen3.6-35B; proxy must target vLLM, not Dify/Next static routes.",
+        description="OpenAI-compatible API root (…/v1) for Qwen3.6-35B; the proxy must target the inference service (vLLM), not a web frontend.",
     )
     QWEN3_6_35B_MODEL: str = Field(
         "/models/Qwen3.6-35B-A3B",
@@ -385,7 +384,24 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
         description="Served model id (GET /v1/models on the same base as QWEN3_6_35B_API_URL). vLLM often uses path-style ids, not Hub names.",
     )
 
-    DIFY_BASE_URL: str = Field("http://localhost:80", env="DIFY_BASE_URL")
+    # ---- LangChain 聊天编排预留配置（当前仅预留，未实现） ----
+    LANGCHAIN_CHAT_ENABLED: bool = Field(False, env="LANGCHAIN_CHAT_ENABLED")
+    # OpenAI 兼容 LLM 根地址；默认可复用 QWEN3_6_35B_*，实现时按需改为独立网关。
+    LANGCHAIN_CHAT_BASE_URL: str = Field(
+        "http://localhost:80/llm/qwen36b/v1", env="LANGCHAIN_CHAT_BASE_URL"
+    )
+    LANGCHAIN_CHAT_MODEL: str = Field(
+        "/models/Qwen3.6-35B-A3B", env="LANGCHAIN_CHAT_MODEL"
+    )
+    LANGCHAIN_CHAT_TIMEOUT_SEC: float = Field(
+        300.0, ge=1.0, le=3600.0, env="LANGCHAIN_CHAT_TIMEOUT_SEC"
+    )
+    LANGCHAIN_MAX_CONTEXT_MESSAGES: int = Field(
+        50, ge=1, le=1000, env="LANGCHAIN_MAX_CONTEXT_MESSAGES"
+    )
+    LANGCHAIN_MAX_OUTPUT_TOKENS: int = Field(
+        4096, ge=1, le=32768, env="LANGCHAIN_MAX_OUTPUT_TOKENS"
+    )
 
     LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
     METRICS_REQUIRE_API_KEY: bool = Field(True, env="METRICS_REQUIRE_API_KEY")
@@ -393,12 +409,9 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     ENABLE_HSTS: bool = Field(True, env="ENABLE_HSTS")
     HSTS_MAX_AGE: int = Field(31536000, env="HSTS_MAX_AGE")
 
-    CHAT_API_KEY: str = Field("change_me_chat_api_key", env="CHAT_API_KEY")
-
     @field_validator(
         "SECRET_KEY",
         "INTERNAL_API_KEY",
-        "CHAT_API_KEY",
         "POSTGRES_PASSWORD",
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",

@@ -36,6 +36,10 @@ const logApiDiagError = (event: string, error: unknown, details?: Record<string,
   }
 }
 
+const API_ERROR_MESSAGES: Record<string, string> = {
+  CHAT_ORCHESTRATOR_NOT_CONFIGURED: 'LangChain 聊天编排未配置，请稍后再试',
+}
+
 const handleUnauthorized = (): void => {
   clearAuthTokenFromStorage()
   try {
@@ -53,14 +57,7 @@ const getAuthToken = (): string | null => {
   return getAuthTokenFromStorage()
 }
 
-/** 聊天走代理时只带 JSON，鉴权在网关处理。 */
-export const createChatHeaders = (): HeadersInit => {
-  return {
-    'Content-Type': 'application/json',
-  }
-}
-
-/** 业务 API：Bearer 来自登录，不用 Chat API Key。 */
+/** 业务与聊天 API 统一使用登录 JWT。 */
 export const createHeaders = (): HeadersInit => {
   return createAuthHeaders({ jsonContentType: true })
 }
@@ -103,6 +100,11 @@ export const handleApiError = async (response: Response): Promise<never> => {
       message: '网络请求失败',
       status: response.status,
     }
+  }
+
+  const mappedMessage = API_ERROR_MESSAGES[error.code]
+  if (mappedMessage) {
+    error = { ...error, message: mappedMessage }
   }
 
   const isLoginRequest = response.url.includes(config.loginEndpoint)

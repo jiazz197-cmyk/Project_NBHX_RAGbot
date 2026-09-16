@@ -5,10 +5,10 @@
 #   1. 取消全部代理环境变量（反代在 8080，出站请求不能被代理拦截）
 #   2. 加载根目录 .env
 #   3. 解析 Python 虚拟环境（nbhxenv）
-#   4. 探测并等待依赖服务就绪（PostgreSQL / Redis / MinIO / Dify）
+#   4. 探测并等待依赖服务就绪（PostgreSQL / Redis / MinIO）
 #   5. 启动 uvicorn main:app
 #
-# 依赖的 Docker 容器（nginx 反代、postgres、redis、minio、dify 等）
+# 依赖的 Docker 容器（nginx 反代、postgres、redis、minio 等）
 # 已设置 restart=always，开机自启；本脚本只负责等待它们就绪后拉起后端。
 #
 # 可用环境变量覆盖：
@@ -149,10 +149,6 @@ else
     read -r mh mp < <(parse_endpoint "${MINIO_ENDPOINT}" 9000)
     targets+=("MinIO" "$mh" "$mp")
   fi
-
-  # Dify：DIFY_BASE_URL（默认 http://localhost:80）
-  read -r dh dp < <(parse_endpoint "${DIFY_BASE_URL:-http://localhost:80}" 80)
-  targets+=("Dify" "$dh" "$dp")
 
   unready=0
   # 并发探测所有依赖（避免串行累加等待时间超过单元 TimeoutStartSec）

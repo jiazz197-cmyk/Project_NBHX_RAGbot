@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     auth,
+    chat,
     chat_summary,
     context_compression,
     document_processing,
@@ -35,6 +36,8 @@ def build_api_router() -> APIRouter:
 
     # Core (unchanged names)
     _mount(r, auth.router, p.AUTH, [t.AUTHENTICATION])
+    # Chat routes keep their old external paths at /api/v1 root.
+    _mount(r, chat.router, p.CHAT, [t.LANGCHAIN_CHAT])
     _mount(r, example.router, p.EXAMPLE, [t.EXAMPLE])
     _mount(r, file_manager.router, p.FILES, [t.FILE_MANAGEMENT])
 

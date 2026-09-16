@@ -17,7 +17,6 @@ from app.adapters.chat_summary import (
     SqlAlchemyUserLookupAdapter,
     UserProfileSummaryRepoAdapter,
 )
-from app.core.config import settings
 from app.core.dependencies import get_async_db
 from app.core.security import get_current_user
 from app.ports.contracts.identity import CurrentUserPort
@@ -65,7 +64,7 @@ async def create_chat_summary(
     """
     try:
         user_lookup = SqlAlchemyUserLookupAdapter(db)
-        chat_archive = MessageExtractorChatArchiveAdapter(api_key=settings.CHAT_API_KEY)
+        chat_archive = MessageExtractorChatArchiveAdapter()
         usecase = CreateChatSummaryUseCase(user_lookup=user_lookup, chat_archive=chat_archive)
 
         cmd = CreateChatSummaryCommand(

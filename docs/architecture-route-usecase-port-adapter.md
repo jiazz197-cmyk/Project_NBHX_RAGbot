@@ -102,7 +102,7 @@ Route  ──creates──▶  Adapter  ──implements──▶  Port
 ```66:79:app/api/v1/chat_summary.py
     try:
         user_lookup = SqlAlchemyUserLookupAdapter(db)
-        chat_archive = MessageExtractorChatArchiveAdapter(api_key=settings.CHAT_API_KEY)
+        chat_archive = MessageExtractorChatArchiveAdapter()
         usecase = CreateChatSummaryUseCase(user_lookup=user_lookup, chat_archive=chat_archive)
 
         cmd = CreateChatSummaryCommand(

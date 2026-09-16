@@ -1,6 +1,5 @@
 import { config } from '../config'
-import { createChatHeaders } from './api'
-import { getAuthTokenFromStorage } from './token_storage'
+import { createAuthHeaders, handleApiError } from './api'
 import type {
   SearchMode,
   SSEEvent,
@@ -40,6 +39,7 @@ type RawSSEEvent = Partial<SSEEvent> & {
   content?: string
   data?: unknown
   outputs?: unknown
+  error?: unknown
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -169,55 +169,59 @@ const isUUID = (value: string | undefined): value is string => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
-const getAuthToken = (): string => {
-  return getAuthTokenFromStorage() || ''
-}
+const CHAT_ORCHESTRATOR_NOT_CONFIGURED_CODE = 'CHAT_ORCHESTRATOR_NOT_CONFIGURED'
+const LANGCHAIN_CHAT_NOT_CONFIGURED_MESSAGE = 'LangChain 聊天编排未配置，请稍后再试'
 
-const parseErrorResponseMessage = async (response: Response): Promise<string | undefined> => {
-  const contentType = response.headers.get('content-type') || ''
-  const isJsonResponse = contentType.toLowerCase().includes('application/json')
-
-  if (isJsonResponse) {
-    const payload = (await response.json().catch(() => null)) as
-      | { message?: unknown; detail?: unknown; error?: unknown }
+/** Convert any non-OK chat HTTP response into an Error with a clear message. */
+const throwChatResponseError = async (
+  response: Response,
+  fallbackMessage: string
+): Promise<never> => {
+  let responseCode: string | undefined
+  try {
+    const payload = (await response.clone().json()) as
+      | { error_code?: unknown; code?: unknown }
       | null
-    return pickFirstString([payload?.message, payload?.detail, payload?.error])
+    responseCode = pickFirstString([payload?.error_code, payload?.code])
+  } catch {
+    // Response body may be empty or not JSON; fall through to handleApiError.
   }
 
-  const rawText = await response.text().catch(() => '')
-  return rawText.trim() || undefined
+  if (responseCode === CHAT_ORCHESTRATOR_NOT_CONFIGURED_CODE) {
+    throw new Error(LANGCHAIN_CHAT_NOT_CONFIGURED_MESSAGE)
+  }
+
+  try {
+    await handleApiError(response)
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error
+    }
+    const message = (error as { message?: unknown })?.message
+    throw new Error(
+      typeof message === 'string' && message.length > 0 ? message : fallbackMessage
+    )
+  }
+
+  throw new Error(fallbackMessage)
 }
 
 /** POST /chat-messages，解析 SSE。 */
 export const sendChatMessage = async (
   query: string,
   conversationId: string | undefined,
-  settings: { user: string; search: SearchMode; background?: string },
+  settings: { search: SearchMode; background?: string },
   callbacks: SSECallbacks,
   signal?: AbortSignal
 ): Promise<{ taskId: string; conversationId: string }> => {
   const url = `${config.apiBaseUrl}/chat-messages`
-  const user = settings.user.trim()
-
-  if (!user) {
-    throw new Error('Arg user must be provided.')
-  }
-
   const normalizedConversationId = isUUID(conversationId) ? conversationId : undefined
 
-  const token = getAuthToken()
-
   const requestBody = {
-    user,
-    user_id: user,
-    token,
-    search: settings.search,
     query,
+    search_mode: settings.search,
     inputs: {
-      search: settings.search,
-      user_id: user,
-      token,
-      background: settings.background || "",
+      background: settings.background || '',
     },
     ...(normalizedConversationId ? { conversation_id: normalizedConversationId } : {}),
     response_mode: 'streaming',
@@ -225,18 +229,13 @@ export const sendChatMessage = async (
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: createChatHeaders(),
+    headers: createAuthHeaders(),
     body: JSON.stringify(requestBody),
     signal,
   })
-  
+
   if (!response.ok) {
-    const backendMessage = await parseErrorResponseMessage(response)
-    if (response.status === 429) {
-      const rateLimitHint = backendMessage ? `429 ${backendMessage}` : '429 Too Many Requests'
-      throw new Error(rateLimitHint)
-    }
-    throw new Error(backendMessage || `HTTP ${response.status} 发送消息失败`)
+    await throwChatResponseError(response, `HTTP ${response.status} 发送消息失败`)
   }
   
   const reader = response.body?.getReader()
@@ -330,7 +329,14 @@ export const sendChatMessage = async (
       }
       emitEndEvent(data)
     } else if (eventType === 'error') {
-      callbacks.onError?.(new Error(typeof data.message === 'string' ? data.message : '请求失败'))
+      const errorPayload = isRecord(data.error) ? data.error : undefined
+      const errorMessage =
+        pickFirstString([
+          errorPayload?.message,
+          !isRecord(data.error) ? data.error : undefined,
+          data.message,
+        ]) || '请求失败'
+      callbacks.onError?.(new Error(errorMessage))
     }
   }
   
@@ -396,14 +402,10 @@ export const compressContext = async (
   nRecent: number = 5
 ): Promise<CompressContextResponse> => {
   const url = `${config.apiBaseUrl}/context-compression/compress`
-  const token = getAuthToken()
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers: createAuthHeaders(),
     body: JSON.stringify({
       user_id: userId,
       conversation_id: conversationId,
@@ -412,8 +414,7 @@ export const compressContext = async (
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || error.detail || '压缩上下文失败')
+    await throwChatResponseError(response, '压缩上下文失败')
   }
 
   return response.json()
@@ -424,55 +425,48 @@ export const stopChatMessage = async (taskId: string): Promise<void> => {
   
   const response = await fetch(url, {
     method: 'POST',
-    headers: createChatHeaders(),
+    headers: createAuthHeaders(),
   })
-  
+
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || '停止消息生成失败')
+    await throwChatResponseError(response, '停止消息生成失败')
   }
 }
 
 export const getConversations = async (
-  user: string,
   page = 1,
   limit = 20
 ): Promise<ConversationsResponse> => {
-  const normalizedUser = user.trim() || 'user'
-  const url = `${config.apiBaseUrl}/conversations?user=${encodeURIComponent(normalizedUser)}&page=${page}&limit=${limit}`
-  
+  const url = `${config.apiBaseUrl}/conversations?page=${page}&limit=${limit}`
+
   const response = await fetch(url, {
     method: 'GET',
-    headers: createChatHeaders(),
+    headers: createAuthHeaders({ jsonContentType: false }),
   })
-  
+
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || '获取会话列表失败')
+    await throwChatResponseError(response, '获取会话列表失败')
   }
-  
+
   return response.json()
 }
 
 export const getMessages = async (
-  user: string,
   conversationId: string,
   page = 1,
   limit = 20
 ): Promise<MessagesResponse> => {
-  const normalizedUser = user.trim() || 'user'
-  const url = `${config.apiBaseUrl}/messages?user=${encodeURIComponent(normalizedUser)}&conversation_id=${conversationId}&page=${page}&limit=${limit}`
-  
+  const url = `${config.apiBaseUrl}/messages?conversation_id=${encodeURIComponent(conversationId)}&page=${page}&limit=${limit}`
+
   const response = await fetch(url, {
     method: 'GET',
-    headers: createChatHeaders(),
+    headers: createAuthHeaders({ jsonContentType: false }),
   })
-  
+
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || '获取消息列表失败')
+    await throwChatResponseError(response, '获取消息列表失败')
   }
-  
+
   return response.json()
 }
 
@@ -490,14 +484,13 @@ export const renameConversation = async (
   
   const response = await fetch(url, {
     method: 'POST',
-    headers: createChatHeaders(),
+    headers: createAuthHeaders(),
     body: JSON.stringify(requestBody),
   })
-  
+
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || '重命名会话失败')
+    await throwChatResponseError(response, '重命名会话失败')
   }
-  
+
   return response.json()
 }

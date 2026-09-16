@@ -27,6 +27,7 @@ interface UseChatSummaryOptions {
 
 interface ArchiveConversationPayload {
   userId: string
+  /** 本服务内部会话 ID；不是外部聊天服务的会话标识。 */
   conversationId: string
   limit?: number
 }
@@ -40,9 +41,17 @@ const createHeaders = (apiToken?: string): HeadersInit => {
   }
 }
 
+const API_ERROR_MESSAGES: Record<string, string> = {
+  CHAT_ORCHESTRATOR_NOT_CONFIGURED: 'LangChain 聊天编排未配置，请稍后再试',
+}
+
 const resolveErrorMessage = async (response: Response, fallback: string): Promise<string> => {
   try {
     const json = await response.json()
+    const errorCode = json?.error_code ?? json?.code
+    if (typeof errorCode === 'string' && API_ERROR_MESSAGES[errorCode]) {
+      return API_ERROR_MESSAGES[errorCode]
+    }
     if (json && typeof json.message === 'string' && json.message) {
       return json.message
     }
