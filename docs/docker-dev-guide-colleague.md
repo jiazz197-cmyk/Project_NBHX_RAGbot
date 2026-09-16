@@ -138,6 +138,7 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 
 - **推荐**：`Remote - SSH` 扩展连宿主 → 打开仓库 → 编辑 / Source Control 全在宿主；要跑服务就在终端敲 `dev.sh docker ...`
 - **想在容器里编辑**：`Dev Containers` 扩展 → `Attach to Running Container` → 选 **`nbhx-<你的用户名>-dev-1`**
+- **⚠️ 不要点「Reopen in Container」**：仓库已移除 `.devcontainer/devcontainer.json`（2026-09-16）。VS Code 若自己起 compose，会用 project 名 `docker` 新建一个平行容器 `docker-dev-1`（外加 4 个空卷），并因 8000/8888 已被你的 `nbhx-<你>-dev-1` 占着而**起不来**（`port is already allocated`），还会把共享镜像 tag 顶掉。误触后的清理命令见 [docker-dev-env.md](docker-dev-env.md) §5.8。
 - 环境更新后（`build && up` 会重建容器）→ 重新 Attach 一次
 
 ---
@@ -154,7 +155,7 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 | 前端报 `Proxy target unavailable: http://127.0.0.1:8000` | 后端没起：另开终端 `dev.sh docker backend` |
 | RAG/OCR/嵌入 探活失败 | **预期内**：这些模型服务在外部，`.env` 里的 `localhost:80` 是待替换的占位值 |
 | `dev.sh backend` 报「宿主环境不存在」 | 宿主 `.venv` 已删（容器化后不需要）→ 用 `dev.sh docker backend` |
-| 保存文件后宿主里属主变 root | attach 方式下 `.devcontainer/devcontainer.json` 的 `remoteUser` 要改成你的 `id -u` |
+| 保存文件后宿主里属主变 root | 容器里的 VS Code 以 compose 配的用户（`user: "0"`，即 root）运行，entrypoint 的降权只作用于 `dev.sh docker ...` —— 所以**尽量在宿主编辑**；已经变 root 的文件在宿主 `sudo chown -R $USER:$USER <路径>` 修回 |
 | **「重启」** | 先看 §3.1 对号入座 —— 大多数情况**什么都不用做** |
 | **每次开 VS Code / 新 SSH 都要 `up` 吗？** | **不用**。容器是服务器上的后台进程，跟 SSH 会话无关；且 `up` 是幂等的，重复跑不会新建。**「重启」的各种含义与对应动作见 §3.1** |
 

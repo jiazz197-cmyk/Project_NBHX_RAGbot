@@ -215,13 +215,27 @@ VS Code ──Remote-SSH──▶ 10.80.153.12（宿主）──打开仓库目�
                                                           └─ 终端：bash scripts/dev.sh docker backend|test|guard
 ```
 
-三条路径，按省事程度排：
+两条路径，按省事程度排：
 
 | 方式 | 做法 | 适用 |
 |---|---|---|
 | **A. Remote-SSH（推荐）** | 扩展 `Remote - SSH` → 连宿主 → 打开仓库；编辑与 `git commit/pull/push` 全在宿主，跟以前没区别 | 所有人，零配置、零属主风险 |
 | **B. Attach 进容器** | 扩展 `Dev Containers` → 命令面板 `Dev Containers: Attach to Running Container` → 选 **`nbhx-<你的用户名>-dev-1`** | 想在容器内用 VS Code 的终端/调试器 |
-| **C. Reopen in Container** | 用仓库里的 `.devcontainer/devcontainer.json` | 想一键进容器；注意文件头的 3 个注意点（`remoteUser` 要改成你的 uid 等） |
+
+> ⚠️ **不要用 `Dev Containers: Reopen in Container`**（原「方式 C」已废弃）：仓库里**不再提供** `.devcontainer/devcontainer.json`（2026-09-16 移除）。
+> 原因：这份 compose 只给 `dev.sh` 用 —— `dev.sh` 会带 `-p nbhx-${USER}` 并导出 `NBHX_DEV_IMAGE`；VS Code 自己起 compose 时 project 名取 compose 文件所在目录名（**`docker`**），也拿不到 `NBHX_DEV_IMAGE`。于是每次「Reopen / Run in Container」都会：
+> 1. 整份重建镜像（改依赖后确实该重建，但它把镜像打在**共享移动 tag** `.../nbhx-dev:py312-cu130` 上）；
+> 2. 新建一个**平行的** `docker-dev-1` 容器 + 4 个全新空卷（`docker_nbhx-{cache,node-modules,pnpm-store}` + `vscode`）；
+> 3. 因 8000/8888 已被你的 `nbhx-<你>-dev-1` 占用而**起不来**：`Bind for 0.0.0.0:8000 failed: port is already allocated`（ExitCode 128）。
+>
+> 误触后的清理（顺序要紧：先删容器，镜像才删得掉；全程不影响正在跑的容器）：
+> ```bash
+> docker rm docker-dev-1
+> docker volume rm docker_nbhx-cache docker_nbhx-node-modules docker_nbhx-pnpm-store vscode
+> docker rmi 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-dev:py312-cu130   # 删掉这次构建的产物
+> bash scripts/dev.sh docker pull                                        # 把移动 tag 拉回 registry 版本（可选）
+> ```
+> 2026-09-16 上午实测误触两次（第二次构建纯缓存命中，产出的镜像 digest 与第一次相同，包集合与线上镜像逐条一致 → 无实际收益）。
 
 **怎么确认「我现在用的是哪个容器」**：
 
