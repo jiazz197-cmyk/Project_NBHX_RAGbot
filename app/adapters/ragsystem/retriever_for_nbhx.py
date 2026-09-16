@@ -11,7 +11,7 @@ from app.core.storage import save_file_from_minio
 from app.adapters.ragsystem.data_analyze import excel_to_json
 from app.adapters.ragsystem.RAGretriever import create_rag_retriever_system, HTTPReranker
 
-logger = get_logger("ragsystem.retriever_for_yamato")
+logger = get_logger("ragsystem.retriever_for_nbhx")
 
 
 def format_docs(docs):

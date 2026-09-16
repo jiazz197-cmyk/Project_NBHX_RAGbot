@@ -216,7 +216,7 @@ import {
   Input,
   useToast,
   useChatSummary,
-} from '@yamato/components'
+} from '@nbhx/components'
 import { config } from '../config'
 import { sendChatMessage, getConversations, getMessages, stopChatMessage, compressContext } from '../services/chat'
 import { getAuthTokenFromStorage } from '../services/token_storage'
@@ -274,7 +274,7 @@ const tokenUsage = ref<number>(0)
 const isCompressing = ref(false)
 const chatBackgrounds = ref<Record<string, string>>({})
 
-const BACKGROUND_STORAGE_KEY_PREFIX = 'yamato_chat_background_'
+const BACKGROUND_STORAGE_KEY_PREFIX = 'nbhx_chat_background_'
 
 const getConversationBackgroundKey = (conversationId: string, userId: string): string => {
   return `${BACKGROUND_STORAGE_KEY_PREFIX}${userId}_${conversationId}`
@@ -309,7 +309,7 @@ const saveBackground = (conversationId: string, background: string) => {
   }
 }
 
-const TOKEN_USAGE_STORAGE_KEY_PREFIX = 'yamato_chat_token_usage_'
+const TOKEN_USAGE_STORAGE_KEY_PREFIX = 'nbhx_chat_token_usage_'
 
 const getConversationTokenKey = (conversationId: string, userId: string): string => {
   return `${TOKEN_USAGE_STORAGE_KEY_PREFIX}${userId}_${conversationId}`
@@ -351,7 +351,7 @@ const tokenBarColor = computed(() => {
   return '#ef4444' // 红
 })
 
-const SETTINGS_STORAGE_KEY = 'yamato_chat_settings'
+const SETTINGS_STORAGE_KEY = 'nbhx_chat_settings'
 const chatSettings = ref<ChatSettings>({ user: '', search: '本地&网络' })
 
 type CachedChatSettings = {
@@ -1319,7 +1319,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
 }
 
 .chat-body {
@@ -1351,7 +1351,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
 }
 
 .chat-history-toggle svg {
@@ -1382,17 +1382,17 @@ onBeforeUnmount(() => {
   width: 100%;
 
   :deep(.input) {
-    border: 1px solid var(--yamato-color-border-subtle);
-    background: var(--yamato-color-surface);
-    box-shadow: var(--yamato-shadow-card);
-    border-radius: var(--yamato-radius-lg);
+    border: 1px solid var(--nbhx-color-border-subtle);
+    background: var(--nbhx-color-surface);
+    box-shadow: var(--nbhx-shadow-card);
+    border-radius: var(--nbhx-radius-lg);
     padding: 14px 54px 54px 16px;
     min-height: 92px;
   }
 
   :deep(.input:focus) {
-    border-color: var(--yamato-color-accent);
-    box-shadow: var(--yamato-focus-ring);
+    border-color: var(--nbhx-color-accent);
+    box-shadow: var(--nbhx-focus-ring);
   }
 }
 
@@ -1419,13 +1419,13 @@ onBeforeUnmount(() => {
   height: 24px;
   padding: 0 8px;
   font-size: 11px;
-  background: var(--yamato-color-surface);
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-pill);
+  background: var(--nbhx-color-surface);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-pill);
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
   opacity: 1;
@@ -1439,7 +1439,7 @@ onBeforeUnmount(() => {
 
   &:disabled {
     cursor: not-allowed;
-    color: var(--yamato-color-text-muted);
+    color: var(--nbhx-color-text-muted);
     opacity: 0.7;
   }
 }
@@ -1453,7 +1453,7 @@ onBeforeUnmount(() => {
   height: 36px;
   border: none;
   border-radius: 50%;
-  background: var(--yamato-color-accent);
+  background: var(--nbhx-color-accent);
   color: white;
   cursor: pointer;
   display: flex;
@@ -1463,7 +1463,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 
   &:hover:not(:disabled) {
-    background: var(--yamato-color-accent-hover);
+    background: var(--nbhx-color-accent-hover);
   }
 
   &:disabled {
@@ -1473,7 +1473,7 @@ onBeforeUnmount(() => {
   }
 
   &--stop {
-    background: var(--yamato-color-danger);
+    background: var(--nbhx-color-danger);
 
     &:hover {
       filter: brightness(1.05);
@@ -1483,7 +1483,7 @@ onBeforeUnmount(() => {
 
 .chat-input-hint {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   text-align: center;
   margin: 0;
 }
@@ -1505,11 +1505,11 @@ onBeforeUnmount(() => {
 
 .chat-welcome__text {
   margin: 0;
-  font-family: var(--yamato-font-display);
+  font-family: var(--nbhx-font-display);
   font-size: 40px;
   font-weight: 500;
   line-height: 1.2;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   letter-spacing: 0;
   text-align: center;
 }
@@ -1521,10 +1521,10 @@ onBeforeUnmount(() => {
 .search-mode-btn {
   height: 30px;
   padding: 0 10px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-pill);
-  background: var(--yamato-color-surface);
-  color: var(--yamato-color-text-primary);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-pill);
+  background: var(--nbhx-color-surface);
+  color: var(--nbhx-color-text-primary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1537,7 +1537,7 @@ onBeforeUnmount(() => {
   &:hover {
     background: rgba(0, 0, 0, 0.04);
     border-color: rgba(201, 100, 66, 0.35);
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
   }
 }
 
@@ -1548,10 +1548,10 @@ onBeforeUnmount(() => {
 .knowledge-upload-btn {
   height: 30px;
   padding: 0 12px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-pill);
-  background: var(--yamato-color-surface);
-  color: var(--yamato-color-text-primary);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-pill);
+  background: var(--nbhx-color-surface);
+  color: var(--nbhx-color-text-primary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1565,7 +1565,7 @@ onBeforeUnmount(() => {
   &:hover:not(:disabled) {
     background: rgba(0, 0, 0, 0.04);
     border-color: rgba(201, 100, 66, 0.35);
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
   }
 
   &:disabled {
@@ -1583,10 +1583,10 @@ onBeforeUnmount(() => {
 }
 
 .knowledge-upload-btn--uploading {
-  border-color: var(--yamato-color-accent);
-  background: var(--yamato-color-accent);
+  border-color: var(--nbhx-color-accent);
+  background: var(--nbhx-color-accent);
   color: #ffffff;
-  box-shadow: var(--yamato-focus-ring);
+  box-shadow: var(--nbhx-focus-ring);
   animation: knowledge-upload-pulse 1.3s ease-in-out infinite;
 }
 
@@ -1612,9 +1612,9 @@ onBeforeUnmount(() => {
 .token-indicator {
   height: 30px;
   padding: 0 10px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-pill);
-  background: var(--yamato-color-surface);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-pill);
+  background: var(--nbhx-color-surface);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1623,7 +1623,7 @@ onBeforeUnmount(() => {
   .token-indicator-label {
     font-size: 11px;
     font-weight: 600;
-    color: var(--yamato-color-text-secondary);
+    color: var(--nbhx-color-text-secondary);
     white-space: nowrap;
   }
 
@@ -1652,10 +1652,10 @@ onBeforeUnmount(() => {
 
 .search-mode-menu {
   position: fixed;
-  background: var(--yamato-color-surface);
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-sm);
-  box-shadow: var(--yamato-shadow-overlay);
+  background: var(--nbhx-color-surface);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-sm);
+  box-shadow: var(--nbhx-shadow-overlay);
   padding: 4px;
   min-width: 110px;
   z-index: 9999;
@@ -1668,7 +1668,7 @@ onBeforeUnmount(() => {
   background: transparent;
   text-align: left;
   font-size: 13px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   cursor: pointer;
   border-radius: 4px;
   transition: background 0.15s ease;
@@ -1680,7 +1680,7 @@ onBeforeUnmount(() => {
   }
 
   &--active {
-    color: var(--yamato-color-accent);
+    color: var(--nbhx-color-accent);
     font-weight: 600;
 
     &::before {

@@ -5,49 +5,49 @@
 }
 
 :root {
-  --yamato-font-display: 'Anthropic Serif', Georgia, 'Times New Roman', serif;
-  --yamato-font-text: 'Anthropic Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --nbhx-font-display: 'Anthropic Serif', Georgia, 'Times New Roman', serif;
+  --nbhx-font-text: 'Anthropic Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  --yamato-color-bg-dark: #141413;
-  --yamato-color-bg-light: #f5f4ed;
-  --yamato-color-surface: #faf9f5;
-  --yamato-color-surface-alt: #f0eee6;
-  --yamato-color-surface-dark: #30302e;
-  --yamato-color-text-primary: #141413;
-  --yamato-color-text-secondary: #5e5d59;
-  --yamato-color-text-muted: #87867f;
-  --yamato-color-text-on-dark: #faf9f5;
-  --yamato-color-border-subtle: #e8e6dc;
+  --nbhx-color-bg-dark: #141413;
+  --nbhx-color-bg-light: #f5f4ed;
+  --nbhx-color-surface: #faf9f5;
+  --nbhx-color-surface-alt: #f0eee6;
+  --nbhx-color-surface-dark: #30302e;
+  --nbhx-color-text-primary: #141413;
+  --nbhx-color-text-secondary: #5e5d59;
+  --nbhx-color-text-muted: #87867f;
+  --nbhx-color-text-on-dark: #faf9f5;
+  --nbhx-color-border-subtle: #e8e6dc;
 
-  --yamato-color-accent: #c96442;
-  --yamato-color-accent-hover: #d97757;
-  --yamato-color-accent-soft: rgba(201, 100, 66, 0.14);
-  --yamato-color-accent-soft-strong: rgba(201, 100, 66, 0.22);
-  --yamato-color-link: #c96442;
-  --yamato-color-link-dark: #d97757;
+  --nbhx-color-accent: #c96442;
+  --nbhx-color-accent-hover: #d97757;
+  --nbhx-color-accent-soft: rgba(201, 100, 66, 0.14);
+  --nbhx-color-accent-soft-strong: rgba(201, 100, 66, 0.22);
+  --nbhx-color-link: #c96442;
+  --nbhx-color-link-dark: #d97757;
 
-  --yamato-color-success: #4f7d5d;
-  --yamato-color-success-soft: #e8f0e8;
-  --yamato-color-warning: #b26a00;
-  --yamato-color-warning-soft: #fff3df;
-  --yamato-color-danger: #b53333;
-  --yamato-color-danger-soft: #f8e8e6;
+  --nbhx-color-success: #4f7d5d;
+  --nbhx-color-success-soft: #e8f0e8;
+  --nbhx-color-warning: #b26a00;
+  --nbhx-color-warning-soft: #fff3df;
+  --nbhx-color-danger: #b53333;
+  --nbhx-color-danger-soft: #f8e8e6;
 
-  --yamato-radius-xs: 5px;
-  --yamato-radius-sm: 8px;
-  --yamato-radius-md: 11px;
-  --yamato-radius-lg: 12px;
-  --yamato-radius-pill: 980px;
+  --nbhx-radius-xs: 5px;
+  --nbhx-radius-sm: 8px;
+  --nbhx-radius-md: 11px;
+  --nbhx-radius-lg: 12px;
+  --nbhx-radius-pill: 980px;
 
-  --yamato-shadow-card: 0 0 0 1px rgba(20, 20, 19, 0.06), 0 12px 28px rgba(20, 20, 19, 0.08);
-  --yamato-shadow-overlay: 0 20px 56px rgba(20, 20, 19, 0.22);
-  --yamato-focus-ring: 0 0 0 2px rgba(201, 100, 66, 0.35);
+  --nbhx-shadow-card: 0 0 0 1px rgba(20, 20, 19, 0.06), 0 12px 28px rgba(20, 20, 19, 0.08);
+  --nbhx-shadow-overlay: 0 20px 56px rgba(20, 20, 19, 0.22);
+  --nbhx-focus-ring: 0 0 0 2px rgba(201, 100, 66, 0.35);
 }
 
 body {
-  font-family: var(--yamato-font-text);
-  background: var(--yamato-color-bg-light);
-  color: var(--yamato-color-text-secondary);
+  font-family: var(--nbhx-font-text);
+  background: var(--nbhx-color-bg-light);
+  color: var(--nbhx-color-text-secondary);
   line-height: 1.6;
   letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
@@ -67,5 +67,5 @@ select {
 }
 
 a {
-  color: var(--yamato-color-link);
+  color: var(--nbhx-color-link);
 }

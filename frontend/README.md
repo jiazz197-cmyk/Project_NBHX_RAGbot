@@ -1,4 +1,4 @@
-# Yamato Frontend
+# NBHX Frontend
 
 基于 Monorepo 架构的前端项目，使用 Vue 3 + TypeScript + Vite 构建。
 

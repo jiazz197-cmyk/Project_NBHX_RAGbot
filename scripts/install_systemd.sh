@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装并启用 yamato-backend systemd 服务。
+# 安装并启用 nbhx-backend systemd 服务。
 #
 # 用法：
 #   sudo ./scripts/install_systemd.sh            # 安装 + 启用 + 启动
@@ -9,8 +9,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TPL="${ROOT}/deploy/yamato-backend.service.template"
-UNIT_NAME="yamato-backend.service"
+TPL="${ROOT}/deploy/nbhx-backend.service.template"
+UNIT_NAME="nbhx-backend.service"
 UNIT_DST="/etc/systemd/system/${UNIT_NAME}"
 
 c() { printf '\033[1;36m●\033[0m %s\n' "$*"; }
@@ -39,9 +39,9 @@ if [[ -z "$RUN_HOME" ]]; then
   exit 1
 fi
 
-# 探测虚拟环境：yamatoenv
+# 探测虚拟环境：nbhxenv
 detect_venv() {
-  for cand in "${RUN_HOME}/桌面/yamatoenv" "${RUN_HOME}/yamatoenv" "${ROOT}/.venv" "${ROOT}/venv"; do
+  for cand in "${RUN_HOME}/桌面/nbhxenv" "${RUN_HOME}/nbhxenv" "${ROOT}/.venv" "${ROOT}/venv"; do
     if [[ -x "${cand}/bin/python" ]] && "${cand}/bin/python" -c "import uvicorn" >/dev/null 2>&1; then
       echo "$cand"; return 0
     fi
@@ -49,7 +49,7 @@ detect_venv() {
   return 1
 }
 if ! VENV_DIR="$(detect_venv)"; then
-  r "未在常见位置找到含 uvicorn 的 yamatoenv。请先在该环境内 pip install -r requirements.txt。"
+  r "未在常见位置找到含 uvicorn 的 nbhxenv。请先在该环境内 pip install -r requirements.txt。"
   exit 1
 fi
 

@@ -40,7 +40,7 @@ The default template defines **three upstream blocks**, each with **one** `serve
 Example: two FastAPI instances behind one upstream (round-robin by default):
 
 ```nginx
-upstream yamato_backend {
+upstream nbhx_backend {
     server 10.0.0.1:8000 max_fails=3 fail_timeout=30s;
     server 10.0.0.2:8000 max_fails=3 fail_timeout=30s;
     keepalive 64;
@@ -51,7 +51,7 @@ Notes for multi-instance setups:
 
 - **WebSockets** (`/api/v1/document-tasks/ws/`; legacy `/api/v1/docs/ws/`): sticky routing may be required if the app assumes a fixed backend; consider `ip_hash` or `hash $cookie_... consistent;` on the upstream, or ensure the app is stateless with respect to which worker handles the socket.
 - **Health**: open-source Nginx uses `max_fails` / `fail_timeout` on `server`; active health checks need a module or an external load balancer.
-- **Dify / Vite**: scale those services the same way by adding more `server` entries to `yamato_dify` or `yamato_vite` (or terminate TLS on a cloud LB and point Nginx at internal addresses).
+- **Dify / Vite**: scale those services the same way by adding more `server` entries to `nbhx_dify` or `nbhx_vite` (or terminate TLS on a cloud LB and point Nginx at internal addresses).
 
 ## Edge hardening (optional)
 

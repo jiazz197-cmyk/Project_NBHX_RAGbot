@@ -12,8 +12,19 @@ SUPER_PASS="${SUPER_PASS:-superuser.5001}"
 TEST_PDF="${TEST_PDF:-/home/shmtu/桌面/ADW-0314S规格书.pdf}"
 RUN_ID="${RUN_ID:-fix_ws_$(date +%Y%m%d_%H%M%S)}"
 
-WORKDIR="${WORKDIR:-/tmp/yamato_fix_regression_$RUN_ID}"
+WORKDIR="${WORKDIR:-/tmp/nbhx_fix_regression_$RUN_ID}"
 LOGFILE="$WORKDIR/full_regression.log"
+
+# WebSocket 校验用解释器：优先 PYBIN，其次 VENV_DIR / 项目 .venv / nbhxenv，最后回落 PATH
+resolve_pybin() {
+  local cand
+  if [[ -n "${PYBIN:-}" && -x "${PYBIN}" ]]; then echo "${PYBIN}"; return; fi
+  for cand in "${VENV_DIR:-}" "${PROJECT_ROOT}/.venv" "${HOME}/桌面/nbhxenv" "${HOME}/nbhxenv"; do
+    if [[ -n "$cand" && -x "${cand}/bin/python" ]]; then echo "${cand}/bin/python"; return; fi
+  done
+  command -v python3 || command -v python || echo python
+}
+PYBIN="$(resolve_pybin)"
 
 mkdir -p "$WORKDIR"
 
@@ -309,11 +320,11 @@ ws_wait_task() {
   local max_seconds="${3:-180}"
   local out_file="$4"
 
-  if ! /home/shmtu/桌面/yamatoenv/bin/python - <<'PY_CHECK' >/dev/null 2>&1
+  if ! "$PYBIN" - <<'PY_CHECK' >/dev/null 2>&1
 import websockets
 PY_CHECK
   then
-    warn "yamatoenv 未安装 websockets，无法 WebSocket 订阅 $name"
+    warn "当前 Python 环境（$PYBIN）未安装 websockets，无法 WebSocket 订阅 $name"
     return 2
   fi
 
@@ -453,7 +464,7 @@ PY_WS
   WS_MAX_SECONDS="$max_seconds" \
   WS_OUT_FILE="$out_file" \
   WS_NAME="$name" \
-  PYTHONUNBUFFERED=1 /home/shmtu/桌面/yamatoenv/bin/python -u "$WORKDIR/ws_wait_task.py"
+  PYTHONUNBUFFERED=1 "$PYBIN" -u "$WORKDIR/ws_wait_task.py"
 
   return $?
 }
@@ -614,11 +625,11 @@ test_rag() {
 test_websocket_reject() {
   section "11. WebSocket 拒绝场景"
 
-  if ! /home/shmtu/桌面/yamatoenv/bin/python - <<'PY' >/dev/null 2>&1
+  if ! "$PYBIN" - <<'PY' >/dev/null 2>&1
 import websockets
 PY
   then
-    warn "yamatoenv 未安装 websockets，跳过 WebSocket 拒绝场景"
+    warn "当前 Python 环境（$PYBIN）未安装 websockets，跳过 WebSocket 拒绝场景"
     return
   fi
 
@@ -666,10 +677,10 @@ PY
   export WS_URL="ws://127.0.0.1:8000/api/v1/document-tasks/ws/$ws_task_id"
   export TOKEN="$SUPER_TOKEN"
 
-  MODE=bad /home/shmtu/桌面/yamatoenv/bin/python "$WORKDIR/ws_reject.py" > "$WORKDIR/ws_bad.out" 2>&1 || true
+  MODE=bad "$PYBIN" "$WORKDIR/ws_reject.py" > "$WORKDIR/ws_bad.out" 2>&1 || true
   cat "$WORKDIR/ws_bad.out"
 
-  MODE=wrong_field /home/shmtu/桌面/yamatoenv/bin/python "$WORKDIR/ws_reject.py" > "$WORKDIR/ws_wrong.out" 2>&1 || true
+  MODE=wrong_field "$PYBIN" "$WORKDIR/ws_reject.py" > "$WORKDIR/ws_wrong.out" 2>&1 || true
   cat "$WORKDIR/ws_wrong.out"
 
   pass "WebSocket 拒绝场景已执行"

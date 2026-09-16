@@ -13,7 +13,7 @@ importers:
 
   apps/chat:
     dependencies:
-      '@yamato/components':
+      '@nbhx/components':
         specifier: workspace:*
         version: link:../../packages/components
       js-tiktoken:

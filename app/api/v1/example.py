@@ -28,15 +28,15 @@ class ItemResponse(BaseModel):
 
 
 # ==================== 路由定义 ====================
-@router.get("/hello", response_model=HelloResponse, summary="Hello Yamato")
-async def hello_yamato():
+@router.get("/hello", response_model=HelloResponse, summary="Hello NBHX")
+async def hello_nbhx():
     """
-    返回 Hello Yamato 问候语。
-    
+    返回 Hello NBHX 问候语。
+
     这是一个最简单的 GET 请求示例。
     """
-    logger.info("Hello Yamato endpoint called")
-    return HelloResponse(message="Hello Yamato")
+    logger.info("Hello NBHX endpoint called")
+    return HelloResponse(message="Hello NBHX")
 
 
 @router.get("/hello/{name}", response_model=HelloResponse, summary="个性化问候")
@@ -59,4 +59,4 @@ async def db_example(db: AsyncSession = Depends(get_async_db)):
     """
     logger.info("Database example endpoint called")
     # 示例：db.query(Model).all()
-    return HelloResponse(message="Hello Yamato with DB connection")
+    return HelloResponse(message="Hello NBHX with DB connection")

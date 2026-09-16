@@ -4,7 +4,7 @@
 # 职责：
 #   1. 取消全部代理环境变量（反代在 8080，出站请求不能被代理拦截）
 #   2. 加载根目录 .env
-#   3. 解析 Python 虚拟环境（yamatoenv）
+#   3. 解析 Python 虚拟环境（nbhxenv）
 #   4. 探测并等待依赖服务就绪（PostgreSQL / Redis / MinIO / Dify）
 #   5. 启动 uvicorn main:app
 #
@@ -33,7 +33,7 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; }
 
 # ── 2. 加载 .env（安全方式：仅导出 KEY=VALUE，不执行任意内容） ──
-# 不能用 source：.env 里有带空格的值（如 PROJECT_NAME=Project Yamato Shanghai）
+# 不能用 source：.env 里有带空格的值（如 PROJECT_NAME=Project NBHX）
 # 和注释文本，source 会把值当命令执行（status=127）。
 load_env() {
   local file="$1" line key val
@@ -67,14 +67,14 @@ resolve_venv() {
     echo "${dir}"; return
   fi
   local cand
-  for cand in "${HOME}/桌面/yamatoenv" "${HOME}/yamatoenv" "${ROOT}/.venv" "${ROOT}/venv"; do
+  for cand in "${HOME}/桌面/nbhxenv" "${HOME}/nbhxenv" "${ROOT}/.venv" "${ROOT}/venv"; do
     if [[ -x "${cand}/bin/python" ]]; then echo "${cand}"; return; fi
   done
   return 1
 }
 
 if ! VENV="$(resolve_venv)"; then
-  fail "未找到 Python 虚拟环境（yamatoenv）。请设置 VENV_DIR 环境变量。"
+  fail "未找到 Python 虚拟环境（nbhxenv）。请设置 VENV_DIR 环境变量。"
   exit 1
 fi
 PY="${VENV}/bin/python"

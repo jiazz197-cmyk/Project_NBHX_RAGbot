@@ -15,9 +15,9 @@ class RAGRetrieverAdapter(RetrieverPort):
         self._collection_name = collection_name
 
     def query_db(self, q: RetrievalQuery) -> RetrievalResult:
-        from app.adapters.ragsystem import retriever_for_yamato
+        from app.adapters.ragsystem import retriever_for_nbhx
         collection = q.collection_name or self._collection_name
-        retriever = retriever_for_yamato.retriever(
+        retriever = retriever_for_nbhx.retriever(
             rag_system=self._rag_instance,
             collection_name=collection,
         )
@@ -28,10 +28,10 @@ class RAGRetrieverAdapter(RetrieverPort):
         )
 
     def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
-        from app.adapters.ragsystem import retriever_for_yamato
+        from app.adapters.ragsystem import retriever_for_nbhx
         import json
         collection = q.collection_name or self._collection_name
-        retriever = retriever_for_yamato.retriever(
+        retriever = retriever_for_nbhx.retriever(
             rag_system=self._rag_instance,
             collection_name=collection,
         )

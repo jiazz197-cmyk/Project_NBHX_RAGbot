@@ -70,7 +70,7 @@ interface SidebarProps {
 }
 
 const props = withDefaults(defineProps<SidebarProps>(), {
-  title: 'yamato',
+  title: 'NBHX',
   userName: '',
   userAvatarUrl: '',
   userDesc: '',
@@ -101,7 +101,7 @@ const toggle = () => {
   z-index: 10;
   background: #ffffff;
   border-radius: 16px;
-  border: 1px solid var(--yamato-color-border-subtle);
+  border: 1px solid var(--nbhx-color-border-subtle);
   box-shadow: 0 10px 28px rgba(20, 20, 19, 0.08);
   transition: width 0.3s ease;
   display: flex;
@@ -120,7 +120,7 @@ const toggle = () => {
     height: 40px;
     border: none;
     background: transparent;
-    border-radius: var(--yamato-radius-pill);
+    border-radius: var(--nbhx-radius-pill);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -129,20 +129,20 @@ const toggle = () => {
     transition: all 0.2s ease;
 
     &:hover {
-      background: var(--yamato-color-surface-alt);
-      color: var(--yamato-color-text-primary);
+      background: var(--nbhx-color-surface-alt);
+      color: var(--nbhx-color-text-primary);
     }
 
     &:focus-visible {
       outline: none;
-      box-shadow: var(--yamato-focus-ring);
+      box-shadow: var(--nbhx-focus-ring);
     }
   }
 
   &__title {
     font-size: 17px;
     font-weight: 600;
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
     letter-spacing: 0;
     margin: 0;
     max-width: 160px;
@@ -174,7 +174,7 @@ const toggle = () => {
     height: 64px;
     box-sizing: border-box;
     margin-top: auto;
-    border-top: 1px solid var(--yamato-color-border-subtle);
+    border-top: 1px solid var(--nbhx-color-border-subtle);
   }
 }
 
@@ -244,7 +244,7 @@ const toggle = () => {
   &__name {
     font-size: 14px;
     font-weight: 600;
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
     line-height: 1.2;
     min-width: 0;
     overflow: hidden;

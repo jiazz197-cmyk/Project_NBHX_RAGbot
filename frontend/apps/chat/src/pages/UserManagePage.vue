@@ -125,7 +125,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ConfirmDialog, useToast } from '@yamato/components'
+import { ConfirmDialog, useToast } from '@nbhx/components'
 import { listUsers, deleteUser, updateUserRole, resetUserPassword } from '../services/auth'
 import type { UserResponse } from '../services/auth'
 
@@ -231,7 +231,7 @@ onMounted(loadUsers)
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
   padding: 32px 32px 24px;
   box-sizing: border-box;
   overflow: hidden;
@@ -253,17 +253,17 @@ onMounted(loadUsers)
 
 .user-manage-header__title {
   margin: 0;
-  font-family: var(--yamato-font-display);
+  font-family: var(--nbhx-font-display);
   font-size: 34px;
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: 0;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .user-manage-header__count {
   font-size: 14px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
 }
 
 .refresh-btn {
@@ -272,21 +272,21 @@ onMounted(loadUsers)
   gap: 6px;
   min-height: 36px;
   padding: 0 16px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-sm);
-  background: var(--yamato-color-surface);
-  color: var(--yamato-color-text-primary);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-sm);
+  background: var(--nbhx-color-surface);
+  color: var(--nbhx-color-text-primary);
   font-size: 14px;
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 
   &:hover:not(:disabled) {
-    background: var(--yamato-color-surface-alt);
+    background: var(--nbhx-color-surface-alt);
   }
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:disabled {
@@ -311,8 +311,8 @@ onMounted(loadUsers)
 
 .user-manage-content {
   background: #ffffff;
-  border-radius: var(--yamato-radius-lg);
-  box-shadow: var(--yamato-shadow-card);
+  border-radius: var(--nbhx-radius-lg);
+  box-shadow: var(--nbhx-shadow-card);
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -324,14 +324,14 @@ onMounted(loadUsers)
   justify-content: center;
   height: 160px;
   font-size: 14px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
 }
 
 .user-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .user-table__th {
@@ -339,9 +339,9 @@ onMounted(loadUsers)
   text-align: left;
   font-size: 12px;
   font-weight: 600;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
   background: rgba(0, 0, 0, 0.03);
-  border-bottom: 1px solid var(--yamato-color-border-subtle);
+  border-bottom: 1px solid var(--nbhx-color-border-subtle);
   white-space: nowrap;
   position: sticky;
   top: 0;
@@ -375,11 +375,11 @@ onMounted(loadUsers)
 
   &--username {
     font-weight: 500;
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
   }
 
   &--email {
-    color: var(--yamato-color-text-secondary);
+    color: var(--nbhx-color-text-secondary);
     font-size: 13px;
   }
 
@@ -392,30 +392,30 @@ onMounted(loadUsers)
 .role-badge {
   display: inline-block;
   padding: 2px 10px;
-  border-radius: var(--yamato-radius-pill);
+  border-radius: var(--nbhx-radius-pill);
   font-size: 12px;
   font-weight: 500;
 
   &--superuser {
-    background: var(--yamato-color-accent-soft);
-    color: var(--yamato-color-accent);
+    background: var(--nbhx-color-accent-soft);
+    color: var(--nbhx-color-accent);
   }
 
   &--admin {
-    background: var(--yamato-color-success-soft);
-    color: var(--yamato-color-success);
+    background: var(--nbhx-color-success-soft);
+    color: var(--nbhx-color-success);
   }
 
   &--user {
     background: rgba(0, 0, 0, 0.08);
-    color: var(--yamato-color-text-secondary);
+    color: var(--nbhx-color-text-secondary);
   }
 }
 
 .action-btn {
   height: 30px;
   padding: 0 12px;
-  border-radius: var(--yamato-radius-sm);
+  border-radius: var(--nbhx-radius-sm);
   border: 1px solid transparent;
   font-size: 12px;
   cursor: pointer;
@@ -431,18 +431,18 @@ onMounted(loadUsers)
   }
 
   &--role {
-    background: var(--yamato-color-accent-soft);
-    color: var(--yamato-color-accent);
+    background: var(--nbhx-color-accent-soft);
+    color: var(--nbhx-color-accent);
     border-color: rgba(201, 100, 66, 0.3);
 
     &:hover:not(:disabled) {
-      background: var(--yamato-color-accent-soft-strong);
+      background: var(--nbhx-color-accent-soft-strong);
     }
   }
 
   &--delete {
-    background: var(--yamato-color-danger-soft);
-    color: var(--yamato-color-danger);
+    background: var(--nbhx-color-danger-soft);
+    color: var(--nbhx-color-danger);
     border-color: rgba(196, 59, 47, 0.3);
 
     &:hover:not(:disabled) {
@@ -452,7 +452,7 @@ onMounted(loadUsers)
 
   &--reset {
     background: rgba(52, 168, 83, 0.1);
-    color: var(--yamato-color-success);
+    color: var(--nbhx-color-success);
     border-color: rgba(52, 168, 83, 0.3);
 
     &:hover:not(:disabled) {
@@ -463,7 +463,7 @@ onMounted(loadUsers)
 
 .self-label {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   font-style: italic;
 }
 
@@ -471,12 +471,12 @@ onMounted(loadUsers)
   font-size: 12px;
 
   &--static {
-    color: var(--yamato-color-text-muted);
+    color: var(--nbhx-color-text-muted);
     font-style: italic;
   }
 
   &--always {
-    color: var(--yamato-color-success);
+    color: var(--nbhx-color-success);
     font-weight: 500;
   }
 }
@@ -495,14 +495,14 @@ onMounted(loadUsers)
 
 .perm-toggle__label {
   font-size: 12px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .perm-toggle__input {
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: var(--yamato-color-accent);
+  accent-color: var(--nbhx-color-accent);
 
   &:disabled {
     opacity: 0.5;
@@ -529,9 +529,9 @@ onMounted(loadUsers)
 
 .dialog-container {
   background: #ffffff;
-  border-radius: var(--yamato-radius-lg);
-  box-shadow: var(--yamato-shadow-overlay);
-  border: 1px solid var(--yamato-color-border-subtle);
+  border-radius: var(--nbhx-radius-lg);
+  box-shadow: var(--nbhx-shadow-overlay);
+  border: 1px solid var(--nbhx-color-border-subtle);
   min-width: 320px;
   max-width: 440px;
   width: 100%;
@@ -543,7 +543,7 @@ onMounted(loadUsers)
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
-  border-bottom: 1px solid var(--yamato-color-border-subtle);
+  border-bottom: 1px solid var(--nbhx-color-border-subtle);
 }
 
 .dialog-title {
@@ -551,14 +551,14 @@ onMounted(loadUsers)
   font-size: 21px;
   font-weight: 600;
   line-height: 1.19;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .dialog-close {
   border: none;
   background: transparent;
   font-size: 20px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   cursor: pointer;
   padding: 0;
   width: 24px;
@@ -571,13 +571,13 @@ onMounted(loadUsers)
 
   &:hover {
     background-color: rgba(0, 0, 0, 0.05);
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
   }
 }
 
 .dialog-body {
   padding: 24px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
   font-size: 16px;
   line-height: 1.6;
 }
@@ -586,7 +586,7 @@ onMounted(loadUsers)
   display: flex;
   gap: 12px;
   padding: 16px 24px;
-  border-top: 1px solid var(--yamato-color-border-subtle);
+  border-top: 1px solid var(--nbhx-color-border-subtle);
   justify-content: flex-end;
 }
 
@@ -594,7 +594,7 @@ onMounted(loadUsers)
   min-height: 36px;
   padding: 0 20px;
   border: none;
-  border-radius: var(--yamato-radius-sm);
+  border-radius: var(--nbhx-radius-sm);
   font-size: 14px;
   font-weight: 400;
   cursor: pointer;
@@ -606,7 +606,7 @@ onMounted(loadUsers)
   }
 
   &:focus-visible {
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:disabled {
@@ -616,7 +616,7 @@ onMounted(loadUsers)
 }
 
 .dialog-btn--cancel {
-  background: var(--yamato-color-surface-alt);
+  background: var(--nbhx-color-surface-alt);
   color: #4d4c48;
 
   &:hover {
@@ -625,21 +625,21 @@ onMounted(loadUsers)
 }
 
 .dialog-btn--confirm {
-  background: var(--yamato-color-accent);
+  background: var(--nbhx-color-accent);
   color: #fff;
 
   &:hover:not(:disabled) {
-    background: var(--yamato-color-accent-hover);
+    background: var(--nbhx-color-accent-hover);
   }
 }
 
 .reset-dialog__desc {
   margin: 0 0 16px;
   font-size: 14px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 
   strong {
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
     font-weight: 600;
   }
 }
@@ -649,28 +649,28 @@ onMounted(loadUsers)
   box-sizing: border-box;
   height: 40px;
   padding: 0 14px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-sm);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-sm);
   font-size: 14px;
-  color: var(--yamato-color-text-primary);
-  background: var(--yamato-color-surface);
+  color: var(--nbhx-color-text-primary);
+  background: var(--nbhx-color-surface);
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 
   &::placeholder {
-    color: var(--yamato-color-text-muted);
+    color: var(--nbhx-color-text-muted);
   }
 
   &:focus {
-    border-color: var(--yamato-color-accent);
-    box-shadow: var(--yamato-focus-ring);
+    border-color: var(--nbhx-color-accent);
+    box-shadow: var(--nbhx-focus-ring);
   }
 }
 
 .reset-dialog__hint {
   margin: 10px 0 0;
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   line-height: 1.5;
 }
 

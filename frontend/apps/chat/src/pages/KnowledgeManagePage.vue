@@ -223,7 +223,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ConfirmDialog, useToast } from '@yamato/components'
+import { ConfirmDialog, useToast } from '@nbhx/components'
 import {
   deleteKnowledgeRecord,
   fetchKnowledgeTaskStatus,
@@ -602,7 +602,7 @@ onBeforeUnmount(() => {
   padding: 32px 32px 24px;
   box-sizing: border-box;
   overflow: auto;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
 }
 
 .page-header {
@@ -621,18 +621,18 @@ onBeforeUnmount(() => {
 
 .page-header__title {
   margin: 0;
-  font-family: var(--yamato-font-display);
+  font-family: var(--nbhx-font-display);
   font-size: 34px;
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: 0;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .page__content {
   background: #ffffff;
-  border-radius: var(--yamato-radius-lg);
-  box-shadow: var(--yamato-shadow-card);
+  border-radius: var(--nbhx-radius-lg);
+  box-shadow: var(--nbhx-shadow-card);
   padding: 32px;
   flex: 1;
   display: flex;
@@ -659,21 +659,21 @@ onBeforeUnmount(() => {
   gap: 6px;
   min-height: 34px;
   padding: 0 14px;
-  border-radius: var(--yamato-radius-sm);
-  border: 1px solid var(--yamato-color-border-subtle);
-  background: var(--yamato-color-surface);
-  color: var(--yamato-color-text-primary);
+  border-radius: var(--nbhx-radius-sm);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  background: var(--nbhx-color-surface);
+  color: var(--nbhx-color-text-primary);
   font-size: 14px;
   cursor: pointer;
   transition: background 0.2s ease, box-shadow 0.2s ease;
 
   &:hover:not(:disabled) {
-    background: var(--yamato-color-surface-alt);
+    background: var(--nbhx-color-surface-alt);
   }
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:disabled {
@@ -698,7 +698,7 @@ onBeforeUnmount(() => {
 
 .records__count {
   font-size: 14px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .records__loading {
@@ -715,7 +715,7 @@ onBeforeUnmount(() => {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--yamato-color-accent);
+    background: var(--nbhx-color-accent);
     animation: dot-bounce 1.2s ease-in-out infinite;
 
     &:nth-child(2) { animation-delay: 0.2s; }
@@ -732,7 +732,7 @@ onBeforeUnmount(() => {
   padding: 48px 0;
   text-align: center;
   font-size: 14px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
 }
 
 .records__groups {
@@ -742,8 +742,8 @@ onBeforeUnmount(() => {
 }
 
 .file-group {
-  border-radius: var(--yamato-radius-md);
-  border: 1px solid var(--yamato-color-border-subtle);
+  border-radius: var(--nbhx-radius-md);
+  border: 1px solid var(--nbhx-color-border-subtle);
   background: #ffffff;
   box-shadow: 0 2px 10px rgba(20, 20, 19, 0.06);
   padding: 12px;
@@ -757,7 +757,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   padding: 2px 2px 6px;
-  border-bottom: 1px solid var(--yamato-color-border-subtle);
+  border-bottom: 1px solid var(--nbhx-color-border-subtle);
 }
 
 .file-group__title-row {
@@ -771,7 +771,7 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -780,9 +780,9 @@ onBeforeUnmount(() => {
 .file-group__badge {
   flex-shrink: 0;
   font-size: 11px;
-  color: var(--yamato-color-text-secondary);
-  background: var(--yamato-color-surface-alt);
-  border-radius: var(--yamato-radius-pill);
+  color: var(--nbhx-color-text-secondary);
+  background: var(--nbhx-color-surface-alt);
+  border-radius: var(--nbhx-radius-pill);
   padding: 2px 8px;
 }
 
@@ -795,7 +795,7 @@ onBeforeUnmount(() => {
 
 .file-group__meta-item {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
 }
 
 .file-group__records {
@@ -805,13 +805,13 @@ onBeforeUnmount(() => {
 }
 
 .record-card {
-  border-radius: var(--yamato-radius-sm);
-  border: 1px solid var(--yamato-color-border-subtle);
-  background: var(--yamato-color-surface);
+  border-radius: var(--nbhx-radius-sm);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  background: var(--nbhx-color-surface);
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
-  border-left: 3px solid var(--yamato-color-accent);
+  border-left: 3px solid var(--nbhx-color-accent);
 
   &:hover {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
@@ -841,24 +841,24 @@ onBeforeUnmount(() => {
 
 .record-card__time {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .record-card__uploader {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   white-space: nowrap;
   flex-shrink: 0;
   background: #ebe8de;
   padding: 1px 7px;
-  border-radius: var(--yamato-radius-pill);
+  border-radius: var(--nbhx-radius-pill);
 }
 
 .record-card__summary {
   font-size: 13px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -875,7 +875,7 @@ onBeforeUnmount(() => {
 
 .record-card__chevron {
   flex-shrink: 0;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   transition: transform 0.2s ease;
 
   .record-card--expanded & {
@@ -886,10 +886,10 @@ onBeforeUnmount(() => {
 .delete-btn {
   height: 26px;
   padding: 0 12px;
-  border-radius: var(--yamato-radius-pill);
+  border-radius: var(--nbhx-radius-pill);
   border: none;
-  color: var(--yamato-color-danger);
-  background: var(--yamato-color-danger-soft);
+  color: var(--nbhx-color-danger);
+  background: var(--nbhx-color-danger-soft);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -907,9 +907,9 @@ onBeforeUnmount(() => {
 }
 
 .record-card__body {
-  border-top: 1px solid var(--yamato-color-border-subtle);
+  border-top: 1px solid var(--nbhx-color-border-subtle);
   padding: 16px;
-  background: var(--yamato-color-surface-alt);
+  background: var(--nbhx-color-surface-alt);
 }
 
 .record-fields {
@@ -929,14 +929,14 @@ onBeforeUnmount(() => {
 
 .record-field__label {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   font-weight: 600;
   text-align: left;
 }
 
 .record-field__value {
   font-size: 13px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   line-height: 1.7;
   text-align: justify;
   text-justify: inter-ideograph;
@@ -945,7 +945,7 @@ onBeforeUnmount(() => {
 
 .record-raw-text {
   font-size: 13px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   line-height: 1.8;
   text-align: justify;
   text-justify: inter-ideograph;
@@ -970,9 +970,9 @@ onBeforeUnmount(() => {
   justify-content: center;
   min-height: 36px;
   padding: 0 18px;
-  border-radius: var(--yamato-radius-sm);
-  border: 1px solid var(--yamato-color-accent);
-  background: var(--yamato-color-accent);
+  border-radius: var(--nbhx-radius-sm);
+  border: 1px solid var(--nbhx-color-accent);
+  background: var(--nbhx-color-accent);
   color: #ffffff;
   font-size: 14px;
   font-weight: 500;
@@ -985,7 +985,7 @@ onBeforeUnmount(() => {
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:disabled {
@@ -1002,10 +1002,10 @@ onBeforeUnmount(() => {
 .upload-progress {
   margin-bottom: 16px;
   padding: 14px 18px;
-  border-radius: var(--yamato-radius-md);
-  border: 1px solid var(--yamato-color-border-subtle);
+  border-radius: var(--nbhx-radius-md);
+  border: 1px solid var(--nbhx-color-border-subtle);
   background: #ffffff;
-  box-shadow: var(--yamato-shadow-card);
+  box-shadow: var(--nbhx-shadow-card);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1022,7 +1022,7 @@ onBeforeUnmount(() => {
 .upload-progress__title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1031,20 +1031,20 @@ onBeforeUnmount(() => {
 .upload-progress__status {
   flex-shrink: 0;
   font-size: 12px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .upload-progress__bar {
   height: 8px;
-  border-radius: var(--yamato-radius-pill);
-  background: var(--yamato-color-surface-alt);
+  border-radius: var(--nbhx-radius-pill);
+  background: var(--nbhx-color-surface-alt);
   overflow: hidden;
 }
 
 .upload-progress__fill {
   height: 100%;
-  border-radius: var(--yamato-radius-pill);
-  background: var(--yamato-color-accent);
+  border-radius: var(--nbhx-radius-pill);
+  background: var(--nbhx-color-accent);
   transition: width 0.4s ease;
 
   &--indeterminate {
@@ -1064,7 +1064,7 @@ onBeforeUnmount(() => {
 
 .upload-progress__message {
   font-size: 12px;
-  color: var(--yamato-color-text-muted);
+  color: var(--nbhx-color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1087,7 +1087,7 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .records__restricted-text {
@@ -1095,7 +1095,7 @@ onBeforeUnmount(() => {
   max-width: 560px;
   font-size: 14px;
   line-height: 1.8;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .conflict-mask {
@@ -1110,9 +1110,9 @@ onBeforeUnmount(() => {
 
 .conflict-dialog {
   width: min(480px, calc(100vw - 48px));
-  border-radius: var(--yamato-radius-lg);
+  border-radius: var(--nbhx-radius-lg);
   background: #ffffff;
-  box-shadow: var(--yamato-shadow-card);
+  box-shadow: var(--nbhx-shadow-card);
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -1123,22 +1123,22 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 17px;
   font-weight: 600;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .conflict-dialog__text {
   margin: 0;
   font-size: 13px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .conflict-dialog__list {
   margin: 0;
   padding: 8px 12px 8px 28px;
-  border-radius: var(--yamato-radius-sm);
-  background: var(--yamato-color-surface-alt);
+  border-radius: var(--nbhx-radius-sm);
+  background: var(--nbhx-color-surface-alt);
   font-size: 13px;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   max-height: 120px;
   overflow: auto;
 }
@@ -1152,37 +1152,37 @@ onBeforeUnmount(() => {
 
 .conflict-btn {
   min-height: 38px;
-  border-radius: var(--yamato-radius-sm);
-  border: 1px solid var(--yamato-color-border-subtle);
-  background: var(--yamato-color-surface);
-  color: var(--yamato-color-text-primary);
+  border-radius: var(--nbhx-radius-sm);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  background: var(--nbhx-color-surface);
+  color: var(--nbhx-color-text-primary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s ease;
 
   &:hover {
-    background: var(--yamato-color-surface-alt);
+    background: var(--nbhx-color-surface-alt);
   }
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &--replace {
-    border-color: var(--yamato-color-accent);
-    background: var(--yamato-color-accent);
+    border-color: var(--nbhx-color-accent);
+    background: var(--nbhx-color-accent);
     color: #ffffff;
 
     &:hover {
-      background: var(--yamato-color-accent);
+      background: var(--nbhx-color-accent);
       filter: brightness(0.92);
     }
   }
 
   &--cancel {
-    color: var(--yamato-color-text-secondary);
+    color: var(--nbhx-color-text-secondary);
   }
 }
 
