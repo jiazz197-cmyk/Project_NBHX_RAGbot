@@ -1,0 +1,28 @@
+# NBHX infra 体检 / 自愈（专治「宿主侧改了容器数据目录属主/权限」这类故障）
+#
+# 安装（一次性，root）：
+#   sed "s|__ROOT__|/data/jiazhenyu/RAG/project-nbhx|g" deploy/infra-doctor.service.template \
+#     | sudo tee /etc/systemd/system/infra-doctor.service >/dev/null
+#   sudo cp deploy/infra-doctor.timer.template /etc/systemd/system/infra-doctor.timer
+#   sudo systemctl daemon-reload && sudo systemctl enable --now infra-doctor.timer
+#
+# 看结果： systemctl list-timers infra-doctor.timer ; journalctl -u infra-doctor -n 50 --no-pager
+# 立刻跑一次： sudo systemctl start infra-doctor.service
+#
+# 卸载： sudo systemctl disable --now infra-doctor.timer && sudo rm /etc/systemd/system/infra-doctor.{service,timer} && sudo systemctl daemon-reload
+
+[Unit]
+Description=NBHX infra doctor (container ownership/permission self-heal)
+Documentation=file://__ROOT__/docs/docker-dev-guide-admin.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# --fix：发现问题就按各容器的规范动作修（redis/pg 改属主 + bgsave；gitlab 走 docker restart）
+# --quiet：一切正常时不输出，只有故障才进 journal
+ExecStart=/bin/bash __ROOT__/scripts/infra_doctor.sh --fix --quiet
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=900

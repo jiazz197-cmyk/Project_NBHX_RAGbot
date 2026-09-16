@@ -1,0 +1,19 @@
+# NBHX infra 体检 / 自愈的调度（10 分钟一次）。
+# 安装见 infra-doctor.service.template 头部；启用： sudo systemctl enable --now infra-doctor.timer
+#
+# 为什么这么密：这类故障（宿主侧 chgrp/chmod → 容器服务用户失配）不体现在 `docker ps` 上，
+# 服务会“看着 Up 但功能已废”。10 分钟一轮能把窗口从「几小时没人发现」压到 10 分钟。
+# 探针本身很轻（HTTP + 一次 touch + pg_isready），修只在实际故障时发生。
+
+[Unit]
+Description=Run NBHX infra doctor every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=infra-doctor.service
+
+[Install]
+WantedBy=timers.target

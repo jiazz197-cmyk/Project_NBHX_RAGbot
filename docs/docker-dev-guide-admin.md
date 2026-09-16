@@ -5,11 +5,16 @@
 
 ---
 
-## 0. 三个不变量（先记住，能避掉 90% 的坑）
+## 0. 四个不变量（先记住，能避掉 90% 的坑）
 
 1. **代码在宿主，环境在镜像** → 改代码不用重建；**改依赖必须重建**（`git pull` 不会更新环境）。
 2. **绝不要手动跑 `gitlab-ctl reconfigure`**（除了极少数场景）—— 官方 gitlab 镜像的 entrypoint 启动时**自己会跑一遍**，你再跑第二遍会与它并发，两个 chef 互相删对方等待的 supervise socket → **死锁 + GitLab 全部服务下线**。2026-09-15 实测踩过，只能 `docker restart gitlab` 恢复。
 3. **docker 危险命令黑名单**：`docker system prune -a --volumes`、`docker volume prune`、`docker image prune -a` —— 这台机器上跑着 GitLab / pgvector / Redis / MinIO / CI Runner 和其他同事的项目。
+4. **绝不对容器数据目录做宿主侧递归 `chown` / `chgrp` / `chmod`**（`/srv/infra/**`，尤其 `gitlab/`、`redis/data`、`pgvector_data`）—— 里面的 owner/group/mode 是**容器内服务身份**（git 998、gitlab-www 999、redis 999:1000、postgres 999），宿主侧一刷就全部失配，服务「看着 Up、功能已废」。2026-09-16 实测踩过（详见 §4.2）。**要给 `infra` 组共享读写，用 ACL**（附加式，不动 owner/group/mode）：
+   ```bash
+   sudo setfacl -R -m g:infra:rwX -m d:g:infra:rwX /srv/infra/<dir>   # 只给权限，不改属主
+   ```
+   巡检用 `bash scripts/infra_doctor.sh`（见 §6），自愈定时器见 §4.2。
 
 ---
 
@@ -127,6 +132,60 @@ docker exec gitlab gitlab-ctl status | head          # 期望十来个 run: 服�
 ```
 **数据安全**：GitLab 所有状态都在 bind mount（`/srv/infra/gitlab/{config,logs,data}`），重启容器不丢数据。
 
+### 4.2 容器数据目录被宿主侧「权限归一化」刷坏（2026-09-16 实测，GitLab + Redis 同时中招）
+
+**症状**：`docker ps` 全是 Up，但功能已废 ——
+- GitLab 全站 **502**（返回它自己的 `Waiting for GitLab to boot` 页），`git push` / `git ls-remote` 全部 HTTP 502；容器**内部**自测 `curl localhost:80` 也是 502（所以不是网络问题）。
+- Redis 写命令被拒：`MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk...`；`info persistence` 里 `rdb_last_bgsave_status:err`。**缓存/限流/任务状态全部写不进去**（三个开发容器共用这一个 Redis）。
+- 两个都在 `docker logs` 里刷：gitlab nginx `connect() to unix:/var/opt/gitlab/gitlab-workhorse/sockets/socket failed (13: Permission denied)`；redis `Failed opening the temp RDB file temp-NNN.rdb ... Permission denied`。
+
+**根因**：有人从**宿主侧**对 `/srv/infra` 做了一次递归「权限归一化」—— group 刷成 `infra(1005)`、普通文件 mode 刷成 `2775`。容器里的服务用户不在宿主 `infra` 组里（`git=998`、`gitlab-www=999`、`redis=999:1000`、`postgres=999`），目录/socket 的 group 位一夜失效。
+**取证三步**（下次照抄）：
+```bash
+# ① ctime 指纹：mtime 没变、ctime 变了 = 有人只改了元数据（属主/权限），不是重建
+docker exec gitlab stat -c 'mtime=%y ctime=%z %A %U:%G %n' /var/opt/gitlab/gitlab-workhorse/sockets/socket
+# ② 破坏范围：全机找同一时刻被改的路径（含 /data、/opt、/home、docker 卷，确认没扩散）
+find /srv /data /opt /home /var/lib/docker/volumes -maxdepth 4 -newerct "2026-09-16 11:26:50" ! -newerct "2026-09-16 11:27:20"
+# ③ 破坏指纹：容器数据目录里出现「带 setgid 位的普通文件」= 被 chmod -R 刷过
+find /srv/infra/gitlab -maxdepth 4 -type f -perm -2000 | head
+```
+**规范修复**：
+```bash
+bash scripts/infra_doctor.sh            # ① 先体检（只读）：谁坏了、坏在哪
+bash scripts/infra_doctor.sh --fix      # ② 自愈：redis/pg 改属主 + bgsave；gitlab 走 docker restart
+bash scripts/infra_doctor.sh --only Redis --fix   # 只处理某一项（定点）
+# 或手动：
+docker exec -u 0 redis chown -R redis:redis /data && docker exec -e REDISCLI_AUTH=… redis redis-cli bgsave
+docker restart redis                    # redis 也可以直接重启：entrypoint 的 `find . ! -user redis -exec chown redis`
+                                        #   连 /data 目录本身一起 chown（实测），落盘立刻恢复
+docker restart -t 60 gitlab             # ⚠️ 不要 gitlab-ctl reconfigure（§0 不变量 #2）
+```
+**⚠️ 安全副作用（这次特有的）**：`chmod 2775` 把 `/srv/infra/gitlab/config/` 下的敏感文件也刷成了 **world-readable**（`gitlab.rb`、`gitlab-secrets.json`、**`ssh_host_rsa_key`**）。修完权限后要复核：
+```bash
+docker exec gitlab stat -c '%A %U:%G %n' /etc/gitlab/gitlab-secrets.json /etc/gitlab/gitlab.rb   # 期望 600 root:root
+stat -c '%A %U:%G %n' /srv/infra/gitlab/config/ssh_host_rsa_key                                  # 期望 600 root:root
+```
+若 ssh host key 曾以 2775 暴露，建议重新生成（`rm` 掉 `ssh_host_*` 后重启容器会重建，客户端首次连接需重新确认指纹）。
+
+**为什么"以后不再出现"要靠三道防线**（都已在仓库里）：
+| 防线 | 内容 |
+|---|---|
+| ① 不再产生触发点 | §0 不变量 #4：容器数据目录禁止宿主侧递归 chown/chgrp/chmod；要共享用 `setfacl` |
+| ② 坏了能自动发现并自愈 | `scripts/infra_doctor.sh`（功能探针，不只看 Up）+ `deploy/infra-doctor.{service,timer}.template`（10 分钟一轮） |
+| ③ 备份/迁移别再带回来 | rsync 必须 `-aHAX --numeric-ids`（保留 uid/gid/ACL/xattr），否则恢复一次就把同一类问题带回来 |
+
+**装自愈定时器**（一次性，root）：
+```bash
+sed "s|__ROOT__|/data/jiazhenyu/RAG/project-nbhx|g" deploy/infra-doctor.service.template \
+  | sudo tee /etc/systemd/system/infra-doctor.service >/dev/null
+sudo cp deploy/infra-doctor.timer.template /etc/systemd/system/infra-doctor.timer
+sudo systemctl daemon-reload && sudo systemctl enable --now infra-doctor.timer
+systemctl list-timers infra-doctor.timer          # 看下一轮
+journalctl -u infra-doctor -n 50 --no-pager       # 看历史结果（正常时是空的，--quiet）
+```
+
+**为什么不能用"给容器加 `group_add`"来免疫**（实测过）：redis 官方 entrypoint 用 `setpriv --clear-groups`、postgres 用 `gosu`（initgroups）、gitlab 用 `chpst -P` / nginx `user gitlab-www` —— 服务进程的补充组一律由**容器内 `/etc/group`** 决定，docker 的 `group_add` 只作用于 PID 1，传不到服务进程。要真免疫只能派生镜像（把 gid 1005 加进容器内服务用户的组），代价是每次上游升版都要重做，性价比低。
+
 ---
 
 ## 5. 磁盘与缓存回收
@@ -149,6 +208,7 @@ docker builder prune --keep-storage 8GB    # ✅ 安全且收益最大（纯缓�
 ## 6. 日常巡检（30 秒）
 
 ```bash
+bash scripts/infra_doctor.sh                                    # 全机容器体检（只读，30 秒内出结论）
 bash scripts/dev.sh docker ps                                   # 自己的容器
 bash scripts/dev.sh docker check                                # 本地依赖 vs 镜像指纹
 curl -s -o /dev/null -w '%{http_code}\n' http://10.80.153.12:5050/v2/   # registry：期望 401
