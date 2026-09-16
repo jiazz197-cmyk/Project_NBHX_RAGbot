@@ -55,7 +55,7 @@
 - Query：`page` 从 `1` 开始；`limit` 默认 `20`，上限 `100`。
 - Response：保持旧前端兼容形状 `{ "data": [...], "page": 1, "limit": 20, "has_more": false }`。
 - 超过末页返回空 `data`，`has_more=false`；`has_more=true` 表示可能存在下一页。
-- 会话/消息落 PostgreSQL 后，分页必须稳定排序：会话按 `updated_at DESC, id DESC`，消息按 `created_at ASC, id ASC`。
+- 会话/消息落 PostgreSQL 后，分页必须稳定排序：会话按 `updated_at DESC, id DESC`；消息按**写入顺序**（自增 `id`）分窗——`page=1` 是 `id` 最大的 `limit` 条，页内按 `id` 升序返回，便于前端直接顺序渲染。调用方传入的 `created_at` 只用于展示，不参与排序。
 
 ### 0.4 SSE 协议
 
@@ -180,13 +180,14 @@ data: <JSON>
 | Response Body | `{"data":[{"id":"...","name":"...","user_id":"...","inputs":{},"status":"normal","introduction":"","created_at":0,"updated_at":0}],"page":1,"limit":20,"has_more":false}` |
 | SSE 协议 | 不适用。 |
 | 错误码 | 401/403/429/503。 |
-| 分页 | `page`/`limit`/`has_more`，见 0.3。 |
+| 分页 | `page`/`limit`/`has_more`，见 0.3；`limit` 上限 100（超出 422）。排序为 `updated_at` 倒序，同秒按 `id` 倒序兜底。 |
 | 超时 / 重试 | 只读，可安全重试；超时按部署默认 HTTP 超时。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
 | 依赖 | PostgreSQL（`chat_conversation`，按 `user_id` 过滤，`updated_at` 倒序）。 |
 | 日志与观测 | `request_id`、`user_id`、分页参数、返回数量。 |
-| 实现状态 | 已完成（`ListConversationsUseCase` + `SqlAlchemyChatMemoryRepositoryAdapter`）。 |
+| 实现状态 | 已完成（`ListConversationsUseCase` + `SqlAlchemyChatMemoryRepositoryAdapter`）。无会话时返回 200 + `data: []`（正常响应，前端渲染空侧边栏）。 |
+| 前端行为 | `ChatPage.vue` 的 `onMounted` 只调一次（`page=1&limit=20`），**当前没有分页/"加载更多" UI**，所以侧边栏最多显示最近 20 个会话。 |
 | 前端调用方 | `frontend/apps/chat/src/services/chat.ts` 的 `getConversations()`；`ChatPage.vue` `onMounted()`。 |
 
 ## 4. `GET /api/v1/messages`
@@ -204,7 +205,7 @@ data: <JSON>
 | Response Body | `{"data":[{"id":"...","conversation_id":"...","role":"user","content":"...","query":"...","answer":"...","created_at":0,"metadata":{}}],"page":1,"limit":20,"has_more":false}` |
 | SSE 协议 | 不适用。 |
 | 错误码 | 401/403/404/422/429/503。 |
-| 分页 | 见 0.3；`page=1` 是最新一窗，数组内按时间升序。 |
+| 分页 | 见 0.3；`page=1` 是最新一窗，数组内按时间升序；`limit` 上限 100（超出 422）。 |
 | 超时 / 重试 | 只读，可安全重试。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |

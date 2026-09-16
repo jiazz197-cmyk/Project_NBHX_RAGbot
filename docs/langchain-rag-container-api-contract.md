@@ -133,6 +133,9 @@ POST /api/v1/chat-messages
 - 前端不再在 body 里传 `token` / `user` / `user_id` 作为可信身份；身份只来自 JWT。
 - 如 body 仍出现旧字段，RAG 容器可以忽略，不要把它作为鉴权依据。
 - `conversation_id` 由前端从历史事件中保存；新建会话时 RAG 容器应在 SSE 中返回新的 `conversation_id`。
+- **`search_mode` 已实测可用**：三种取值（`联网搜索` / `本地检索` / `本地&网络`）打到主应用占位实现上都是 501 `CHAT_ORCHESTRATOR_NOT_CONFIGURED` 而不是 422，说明字段名与取值被正确解析。主应用不消费它，唯一消费方就是 RAG 容器的核心链。
+- **`search_mode` 是用户级设置，不随会话保存**：前端存在 localStorage `nbhx_chat_settings`，切换模式只改这个全局值，发消息时带上；它不会写进 `conversation.inputs`。
+- 前端**从不调用 `POST /api/v1/conversations`**，会话由 RAG 容器在生成后落库。所以若不主动传，建出来的会话 `inputs` 恒为 `{}`；想按会话记住检索方式，容器建会话时应显式带上 `inputs.search_mode`。
 
 ### 2.3 Response：SSE 协议
 
@@ -296,7 +299,7 @@ Authorization: Bearer <JWT>
 | Query | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `page` | int | 否 | 默认 1，从 1 开始 |
-| `limit` | int | 否 | 默认 20，建议 1–100 |
+| `limit` | int | 否 | 默认 20，上限 **100**（`limit=101` 实测 422） |
 | `user_id` | string | 否 | 仅 admin / superuser 查他人时使用 |
 
 ### 4.3 Response
@@ -323,6 +326,14 @@ Authorization: Bearer <JWT>
 
 前端仅强依赖 `data[].id`、`data[].name`；其它字段兼容旧协议。
 
+**语义（实测）**
+
+- 排序：`updated_at` 倒序（最近有消息的排最前），同秒按 `id` 倒序兜底。
+- 无会话时返回 200 + `"data": []`——这是正常响应，不是错误。前端会据此渲染空侧边栏（"新聊天"由侧边栏的 `+` 按钮创建，走 `new-` 前缀）。
+- 未带/带错 JWT：401，前端会清 token 并跳 `/login`。
+
+> ⚠️ **前端当前没有分页 UI**：`onMounted` 只调一次 `getConversations()`（即 `page=1&limit=20`），也没有"加载更多"按钮。所以侧边栏**最多只显示最近 20 个会话**。要突破这一点，要么容器/前端把 `limit` 提到 100，要么前端补分页。
+
 ---
 
 ## 5. `GET /api/v1/messages`
@@ -342,8 +353,10 @@ Authorization: Bearer <JWT>
 |---|---|---|---|
 | `conversation_id` | string | 是 | 本服务内部会话 ID，1–128 字符 |
 | `page` | int | 否 | 默认 1 |
-| `limit` | int | 否 | 默认 20，建议 1–100 |
+| `limit` | int | 否 | 默认 20，上限 **100**（`limit=101` 实测 422） |
 | `user_id` | string | 否 | 仅 admin / superuser 查他人时使用 |
+
+**分页语义（实测）**：`page=1` 返回**最新的** `limit` 条，页内按**写入顺序（自增 `id`）升序**返回（前端直接顺序渲染，不再排序；传入的 `created_at` 只用于展示，不参与排序）；`page=2` 是更早的一窗；`has_more` 表示还有更早的消息。会话不存在或不属于当前用户统一 **404**（不区分二者，避免泄露存在性）。
 
 ### 5.3 Response
 
@@ -717,7 +730,7 @@ Content-Type: application/json
 
 **分页语义**（`GET /messages`）
 
-- `page=1` 返回**最新的** `limit` 条，数组内按时间**升序**（前端直接顺序渲染）。
+- `page=1` 返回**最新的** `limit` 条，页内按**写入顺序（自增 `id`）升序**返回（前端直接顺序渲染；`created_at` 只用于展示，不参与排序）。
 - `page=2` 是更早的一窗，`has_more` 表示还有更早的消息。
 - 返回字段：`{"data": [...], "page": n, "limit": n, "has_more": bool}`。
 - 会话列表按 `updated_at` 倒序（最近有消息的排前面）。
