@@ -31,8 +31,6 @@
 - `app/api/v1/image2url.py`
 - `app/api/v1/file_manager.py`
 - `app/api/v1/context_compression.py`
-- `app/api/v1/closing_form.py`
-- `app/api/v1/sqlserver_queries.py`
 
 ---
 
@@ -77,12 +75,6 @@
 - **UseCase**: `CompressContextUseCase`
 - 将 `normalize_self_user_identifier` 以及角色的 admin 特判下沉到 UseCase 中，外部仅传入 `auth_user` 和 `requested_user_id`。
 
-### P1：表单与 SQL 查询（closing_form & sqlserver）
-**现状**：这俩模块已经是 Thin Controller（约 20 行以内），但直接 import 了 `app.integrations.*`。
-**目标**：
-- 为它们声明 Protocol (如 `ClosingFormRepoPort`, `U8BomQueryPort`)。
-- 虽然它们只有单纯的透传或单步调用，为了保持全局依赖方向一致，补充极为简单的 UseCase 壳子，或者至少让 Route 调用 Adapter，Adapter 实现 Port，阻断从 api 到 integrations 的静态依赖。
-
 ---
 
 ## 3. 落地里程碑
@@ -98,7 +90,7 @@
 - [ ] 建立 `context_compression` 的 UseCase。
 
 ### Week 3：长尾 API 收尾与 CI 升级
-- [ ] 重构 `closing_form` 与 `sqlserver_queries` 以切断直接依赖。
+- [ ] 复核长尾 API，确保新增接口同样通过 Port / UseCase 隔离 `app.integrations`。
 - [ ] 升级 `scripts/check_layered_architecture.sh`，将上述 7 个文件加入严格阻断名单。
 - [ ] 为新增的核心 UseCase 补充 Fake Adapter 测试（尤其聚焦越权校验分支）。
 

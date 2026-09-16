@@ -4,9 +4,9 @@
 
 ## 项目概览
 
-Yamato AI 助手平台——大和衡器（上海）企业内部 AI 工作台。核心能力：自然语言知识库对话、文档处理、营业订单填报、OCR、PDF 报价生成流水线。
+Yamato AI 助手平台——大和衡器（上海）企业内部 AI 工作台。核心能力：自然语言知识库对话、文档与 Excel 数据库上传处理、RAG 检索、OCR。
 
-技术栈：Python 3.12 + FastAPI 0.116 + SQLAlchemy(async) + LangChain；PostgreSQL 14(pgvector) + Redis + MinIO + SQL Server(U8/PDM)；前端 Vue 3 + pnpm workspace + Turbo。
+技术栈：Python 3.12 + FastAPI 0.116 + SQLAlchemy(async) + LangChain；PostgreSQL 14(pgvector) + Redis + MinIO；前端 Vue 3 + pnpm workspace + Turbo。
 
 ## 架构：Clean Architecture（强制）
 
@@ -35,17 +35,17 @@ main.py                  FastAPI 入口 + lifespan（组合根 + 生命周期）
 app/
   api/v1/                路由（薄边界）；registry.py 装配，prefixes.py 集中前缀
   core/                  配置/DB/缓存/安全/中间件/任务管理（工具岛，deferred）
-  domain/                quotation / file_manager / knowledge 纯领域
+  domain/                auth / file_manager / knowledge 纯领域
   ports/
     contracts/           driving 侧契约（identity / tasking / metrics / executor_async）
     dto/                 跨层 dataclass DTO + Command
     outbound/            driven 侧 Port（Protocol）
-  usecases/              按业务域组织（auth / quotation / knowledge / ...）
+  usecases/              按业务域组织（auth / knowledge / document_processing / chat_summary / ...）
   adapters/
-    {auth,quotation,ocr,sqlserver,doc_processing,knowledge,pdm_matcher,chat_archive}/  driven
+    {auth,ocr,doc_processing,knowledge,chat_archive}/  driven
     ragsystem/           driven（RetrieverPort / ChartAnalysisPort），经 adapters/retriever.py facade 暴露
     web/                 driving（FastAPI 请求/响应 schema）
-    workers/             driving 异步入口（TaskDispatchPort，报价生成 worker）
+    workers/             driving 异步入口（文档处理 / OCR 任务执行器）
     monitoring/          driven（health / metrics）
   models/orm/            SQLAlchemy ORM 模型
 frontend/apps/chat/      主前端应用；frontend/packages/components = @yamato/components 共享包
@@ -166,18 +166,17 @@ uv cache dir / size / prune
 - **RAG 栈已整体拆出主清单（2026-09）**：`langchain*`、`llama-index*`、`llama-cloud*`、`llama-parse`、`langsmith`、`openai`、`tiktoken`、`pgvector`、`nltk`、`banks`、`aiosqlite`、`requests-toolbelt` 等 **48 个包**移到 [`requirements-rag.txt`](requirements-rag.txt)（该栈的**完整独立闭包，96 个包**，可单独 `uv pip compile` 通过），随「RAG 独立容器」部署、对外只暴露 HTTP 接口；主清单从 228 → **179 包**（实测 `grep -cE '^[A-Za-z0-9._-]+==' requirements.txt`；早前写的 180 是估算，差 1）。
   - ⚠️ **仓库里的 RAG 代码还没搬走**：`main.py`（第 33 行）与 `app/api/v1/registry.py` 仍会 `import langchain/llama_index`，所以在纯主清单环境下应用起不来。
   - 过渡期本地开发：`bash scripts/setup_local_env.sh --with-rag`（默认不装 RAG 栈）。等 RAG 调用改成 HTTP 客户端后即可去掉该开关。
-  - 已用「导入拦截器」模拟验证过：**非 RAG 模块在无 RAG 栈时全部可正常 import**（`app.core.*`、`app.models.orm`、`ocr`、`sqlserver`、`quotation`、`knowledge`、`auth`、`monitoring`）。
+  - 已用「导入拦截器」模拟验证过：**非 RAG 模块在无 RAG 栈时全部可正常 import**（`app.core.*`、`app.models.orm`、`ocr`、`knowledge`、`auth`、`monitoring`）。
   - 搬 RAG 时注意这几个**隐藏依赖**（元数据没声明、代码里才 import，容易被漏掉）：`psycopg2-binary`（`app/core/database.py` 的同步 engine 用，**留在主清单**）、`asyncpg`（`postgresql+asyncpg://` URL 用，主清单）、`greenlet`（SQLAlchemy async 需要）、`beautifulsoup4`/`soupsieve`（`readability`/`html_text` 运行时需要，主清单）。
-- **测试工具在 [`requirements-dev.txt`](requirements-dev.txt)**（`pytest==9.1.1` + `pytest-asyncio==1.4.0`，与 `.gitlab-ci.yml` 的 pytest job 对齐），`setup_local_env.sh` 会自动装。当前分支 `pytest -q` = **150 passed**（容器内 9s / 宿主 36s）；早前记录的 218 / CI 里的 189 是 closing_form、quotation 删除**之前**的数字，别当成回归。
+- **测试工具在 [`requirements-dev.txt`](requirements-dev.txt)**（`pytest==9.1.1` + `pytest-asyncio==1.4.0`，与 `.gitlab-ci.yml` 的 pytest job 对齐），`setup_local_env.sh` 会自动装。pytest 结果以当前分支实际输出为准，历史数字不要当基线。
 - **无 GPU 机器**：`TORCH_INDEX=https://download.pytorch.org/whl/cpu bash scripts/setup_local_env.sh`（省约 7GB CUDA wheel）。本机有 RTX 5090（驱动 580 / CUDA 13.0），装的是 cu130 版本，用 `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"` 验证。
 - **解释器只用 `.venv`**：`scripts/start_backend.sh` 按 `VENV_DIR` → `~/桌面/yamatoenv` → `~/yamatoenv` → `<repo>/.venv` → `<repo>/venv` 顺序解析，本仓库命中 `.venv`。
 
 **本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY`/`CHAT_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
 - **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `yamato_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
-- **SQL Server（U8/PDM）**：启动时的连通性检查**已删除**（连同 `app/adapters/sqlserver/connectivity.py`），不再打 `[warning] U8/PDM SQLServer 连接失败`；报价/PDM 相关接口被调用时才会真正连库。
 - **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / Qwen3.6-35B / Qwen3-8B / DOTS-OCR）：本机不跑这些模型，走 HTTP API；`.env` 里现有的 `localhost:80` 是**错误占位值**（这台机器的 80 端口是 GitLab），真实网关地址待定。本机**只**跑 `PaddleOCR` 与 `TagGenerator`（两者正在拆成独立容器，见 issue #9 / #10），它们才是 GPU 的用途。
 
-**MinIO 对账只扫 `temp/` 与 `images/`**：`form_pic/` 前缀与 closing_form 遗留登记逻辑（`_LEGACY_*`）已随 closing_form 下线一并删除，不再输出 `跳过 data_doc_collection_1 图片登记` 告警；`form_pic/` 下历史对象现在**不被扫描**（不会被删，也不再纳入对账）。
+**MinIO 对账只扫保留功能的 `temp/`、`images/` 前缀**：历史功能曾用过的前缀不再纳入对账，也不再输出相关登记告警；已删历史对象不会被主动删除。
 
 **pnpm 两个坑（已实测，别再踩）**：
 1. **`.pnpmrc` 不生效**：pnpm 8 与 pnpm 12 都不读它，原先写在里面的 `shamefully-hoist=true` 从未起作用（改到 `.npmrc` 后 `node_modules/.modules.yaml` 才出现 `hoistPattern: '*'`）。该文件已删除，配置写在 [`frontend/.npmrc`](frontend/.npmrc)（pnpm ≤10）与 [`frontend/pnpm-workspace.yaml`](frontend/pnpm-workspace.yaml)（pnpm 11+，camelCase），两处保持一致。
@@ -222,7 +221,7 @@ API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up   # 每人一组端口
 
 **2. 业务异常用 `app.core.exceptions` 的 `APIException` 子类，不要抛 `ValueError` / 裸 `Exception`。** `main.py` 注册了 `@app.exception_handler(APIException)`，子类自带 `status_code` 自动映射 HTTP：`NotFoundError`=404、`PermissionDeniedError`=403、`AuthenticationError`=401、`ValidationError`=422、`ExternalServiceError`=502。抛 `ValueError` 会变成 500 且绕过统一错误格式。
 
-**3. 日志命名必须落在 `app.*` 路由表里，否则静默丢失。** 用 `from app.core.logging import get_logger; logger = get_logger("auth.login")`（内部即 `logging.getLogger("app.auth.login")`）。若直接用 stdlib `logging.getLogger`，名字必须带 `app.` 前缀（如 `"app.u8_grouping"`）。裸名（`"u8_grouping"`）不在 dictConfig 路由表，日志会丢。
+**3. 日志命名必须落在 `app.*` 路由表里，否则静默丢失。** 用 `from app.core.logging import get_logger; logger = get_logger("auth.login")`（内部即 `logging.getLogger("app.auth.login")`）。若直接用 stdlib `logging.getLogger`，名字必须带 `app.` 前缀（如 `"app.knowledge.upload"`）。裸名（`"knowledge.upload"`）不在 dictConfig 路由表，日志会丢。
 
 **4. Port / UseCase / Adapter / Router 角色**（详见 [docs/di-and-layered-architecture.md](docs/di-and-layered-architecture.md)）：
 - Port = `Protocol`（`app/ports/outbound/`）或 DTO/Command（`app/ports/dto/`），只声明契约。
@@ -232,7 +231,7 @@ API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up   # 每人一组端口
 
 **5. SQLAlchemy Adapter 是「每方法一 session」模式**：`async with AsyncSessionLocal() as db:` 包在每个 repository 方法里，方法内 commit。连续两个 repository 调用会跨两个 session（这是既有模式，不是 bug）。
 
-**6. 鉴权有两条验证路径，改密码/校验相关逻辑两条都要改**：`get_current_user`（`require_roles` 走它）和 `get_current_user_detached`（`sqlserver_queries` 端点用）。JWT 带 `pv` claim（密码哈希指纹），重置密码后旧 token 立即失效；动鉴权时两条路径的 pv 校验必须同步。
+**6. 鉴权统一走 `get_current_user`（`require_roles` 也走它）**：JWT 带 `pv` claim（密码哈希指纹），重置密码后旧 token 立即失效。通用页面权限框架保留在 `app/api/v1/auth.py` / `app/usecases/auth/users.py` / `frontend/apps/chat/src/services/auth.ts`，但默认由 `PAGE_PERMISSION_MANAGEMENT_ENABLED=False` 关闭；改鉴权时别把该框架误删。
 
 **7. API 路由前缀集中管理**：新前缀加在 [`app/api/v1/prefixes.py`](app/api/v1/prefixes.py)，路由挂载在 [`app/api/v1/registry.py`](app/api/v1/registry.py)。所有业务路由挂在 `settings.API_V1_STR`（`/api/v1`）下。
 
@@ -246,7 +245,7 @@ API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up   # 每人一组端口
 # 每个新 shell 先激活项目内环境（首次先跑 scripts/setup_local_env.sh）
 source scripts/env.sh   # VIRTUAL_ENV=.venv，并导出 UV_CACHE_DIR / HF_HOME 等
 
-# 后端（.env 已生成为 development；依赖 PostgreSQL+pgvector / Redis / MinIO / SQL Server）
+# 后端（.env 已生成为 development；依赖 PostgreSQL+pgvector / Redis / MinIO）
 python main.py          # http://localhost:8000，文档 /api/v1/docs
 
 # 架构守卫（改分层后必跑）
@@ -268,11 +267,10 @@ corepack pnpm --filter chat type-check  # 仅类型检查
 配置走 `.env`（模板见 [`.env.example`](.env.example)，由 `app/core/config.py` 的 `settings` 读取）。关键依赖：
 - **PostgreSQL + pgvector**：主库 + 向量检索（RAG 集合）
 - **Redis**：缓存 + 限流 + 任务状态
-- **MinIO**：对象存储（报价 PDF / 临时图 / 结果 xlsx）
-- **SQL Server**：U8 与 PDM 库（报价/PDM 接口被调用时才连库；启动时**不再**做连通性检查）
+- **MinIO**：对象存储（知识库文件、文档/OCR 产物、任务临时文件）
 - **AI 推理**：BGE-M3 嵌入、Reranker、OCR（PaddleOCR/DOC），本地 LLM 走 GPU（`LOCAL_MODEL_GPU_DEVICE`）
 
-`main.py` 的 `lifespan` 负责启动初始化（DB 表、executor、任务观察者、报价队列恢复、retention 调度、MinIO bucket、RAG 系统）与有序关闭。改启动/关闭顺序在这里。
+`main.py` 的 `lifespan` 负责启动初始化（DB 表、executor、任务观察者、MinIO reconcile 调度、MinIO bucket、RAG 系统）与有序关闭。改启动/关闭顺序在这里。
 
 ## Git 工作流
 

@@ -16,6 +16,7 @@
 | Example | `/example` | |
 | File storage | `/files` | |
 | Document async tasks + task WebSocket | `/document-tasks` | Preferred; avoids clashing with Swagger UI at `/api/v1/docs` |
+| Knowledge records + uploads | `/knowledge` | Record list/delete, document upload, Excel database upload |
 | OCR (image upload + PDF to image) | `/ocr` | Replaces split `/image2url` and `/pdf2image` for new clients |
 | RAG retriever | `/retriever` | |
 | Chat summary | `/chat-summary` | |

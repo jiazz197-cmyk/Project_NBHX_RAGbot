@@ -1,7 +1,7 @@
 # Issue #5 进度清单：删除报价生成与 SQLServer / U8 / PDM 查询，共享基础设施去报价化
 
 > GitLab Issue: #5（`Carl_Jia/ragchatbot`）
-> 对应计划文档：`docs/removal-plan-closing-form-and-quotation.md` §1.2 / §1.3 / §4 / §5
+> 对应计划文档：原 `docs/removal-plan-closing-form-and-quotation.md` §1.2 / §1.3 / §4 / §5（该文件已随 Issue #6 完成删除）
 > 创建时间：2026-09-14
 >
 > 进度约定：完成一项勾选一项（`- [x]`），并在每项后标注提交 hash 与日期。
@@ -178,7 +178,7 @@
 ## 依赖与顺序
 
 - 建议在「删除 closing_form」（Issue #4）之后执行（避免删除交叉、便于回归定位）
-- 后续：「移除页面权限框架 + 清理」（Issue #6）、「品牌替换」（Issue #7）、「Dify → LangChain」（Issue #8）
+- 后续：「页面权限清理（通用框架保留禁用）」（Issue #6）、「品牌替换」（Issue #7）、「Dify → LangChain」（Issue #8）
 - 执行顺序（自顶向下 + 先断引用再删实体）：
   1. 阶段 1：外围件（测试删除 / nginx / 前端纯删除）
   2. 阶段 2：删报价 A + 修共享文件报价专属部分

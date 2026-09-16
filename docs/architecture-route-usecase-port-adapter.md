@@ -23,7 +23,7 @@
 |------|-----------|------|--------|
 | **Route** | `app/api/v1/` | 解析/校验入参、注入依赖（`Depends`）、**组装 Adapter**、**构造并调用** `UseCase`、将领域结果映射为 API 响应。 | 不应承载长业务流程、不应直接 `import app.integrations`（整改后的路由，见 `scripts/check_layered_architecture.sh`）。 |
 | **UseCase** | `app/usecases/` | **编排**业务步骤、组合规则、对调用方返回稳定的命令/查询结果。通过 **构造函数或方法参数** 接收 Port 依赖。 | 不应直接依赖 `app.integrations` 或 ORM/HTTP client 等具体实现。 |
-| **Port** | `app/ports/dto`、`app/ports/contracts`、`app/ports/domains` | **DTO** 为纯数据类；**contracts** 为跨业务 `Protocol`；**domains** 为业务线出站 `Protocol`。示例 DTO：`ChatSummaryResult`、`QuotationTaskSnapshot`（见 `app/ports/dto/`）。 | Port 不实现 IO；**domains/contracts** 的方法签名不引用 ORM 实体；身份视图用 `CurrentUserPort` 等，而非 `User` 模型。 |
+| **Port** | `app/ports/dto`、`app/ports/contracts`、`app/ports/domains` | **DTO** 为纯数据类；**contracts** 为跨业务 `Protocol`；**domains** 为业务线出站 `Protocol`。示例 DTO：`ChatSummaryResult`（见 `app/ports/dto/`）。 | Port 不实现 IO；**domains/contracts** 的方法签名不引用 ORM 实体；身份视图用 `CurrentUserPort` 等，而非 `User` 模型。 |
 | **Adapter** | `app/adapters/`（等） | **实现** Port，把一次用例里的调用**翻译**为对现有代码（如 `app.integrations/*`、ORM、配置）的调用。 | 不把整条业务流程写进 Adapter；复杂编排仍放在 UseCase。 |
 
 **依赖方向（示意）**：
@@ -51,9 +51,9 @@ Route  ──creates──▶  Adapter  ──implements──▶  Port
 
 ## 4. 与本仓库文件的对应关系
 
-- **`app/ports/dto/`**：仅数据类（如 `TaskManagerTaskSnapshot`、`FileRecordDTO`、`QuotationTaskSnapshot`、`ChatSummaryResult`），无 `Protocol`。
+- **`app/ports/dto/`**：仅数据类（如 `TaskManagerTaskSnapshot`、`FileRecordDTO`、`ChatSummaryResult`），无 `Protocol`。
 - **`app/ports/contracts/`**：跨业务复用的 `Protocol`（如 `TaskStatePort`、`ExecutorAsyncTaskPort`、`CurrentUserPort`、`RequestMetricsPort`）。
-- **`app/ports/domains/`**：按业务线的出站 `Protocol`（如 `app/ports/domains/chat_summary.py` 中的 `UserLookupPort` / `ChatArchivePort`，`domains/quotation.py` 中的 `FileStoragePort` / `QuotationTaskRepoPort`，`domains/ocr_async.py` 等）。**请从子包显式 import**；`app/ports/__init__.py` 不再做符号聚合。
+- **`app/ports/domains/`**：按业务线的出站 `Protocol`（如 `app/ports/domains/chat_summary.py` 中的 `UserLookupPort` / `ChatArchivePort`，`domains/ocr_async.py` 等）。**请从子包显式 import**；`app/ports/__init__.py` 不再做符号聚合。
 - **UseCase 示例**：`app/usecases/chat_summary/create_chat_summary.py` 中 `CreateChatSummaryUseCase` 依赖 `domains.chat_summary` 的 Port 与 `contracts.identity.CurrentUserPort`。
 - **Adapter 示例**：`app/adapters/chat_summary.py` 实现上述 Port，内部再调用 `app.integrations` 与 ORM。
 
@@ -217,148 +217,7 @@ class UserProfileSummaryRepoAdapter(ChatSummaryRepoPort):
 
 ---
 
-### 7.3 报价任务：创建（多 Port 编排 + 执行器/调度在 Adapter 中）
-
-**Route** 为一次「上传 PDF 建任务」注入 **五个** Port 实现：任务状态、任务与文件持久化、对象存储、执行器上的 owner 绑定、按 owner 触发队列：
-
-```130:155:app/api/v1/quotation_generation.py
-@router.post("/tasks", response_model=QuotationTaskSubmitResponse, summary="创建报价生成任务")
-async def create_quotation_task(
-    file: UploadFile = File(..., description="仅支持 PDF 文件"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> QuotationTaskSubmitResponse:
-    file_data = await file.read()
-    usecase = CreateQuotationTaskUseCase(
-        task_state=TaskManagerStateAdapter(),
-        task_repo=SqlAlchemyQuotationTaskRepoAdapter(db),
-        file_storage=MinioFileStorageAdapter(),
-        task_execution=ThreadPoolTaskExecutionAdapter(),
-        task_dispatch=QuotationDispatchAdapter(),
-    )
-    result = await usecase.execute(
-        CreateQuotationTaskCommand(
-            file_name=file.filename,
-            content_type=file.content_type,
-            file_bytes=file_data,
-            max_file_size=settings.MAX_FILE_SIZE,
-            owner_id=str(current_user.id),
-            owner_username=current_user.username,
-            role_snapshot=current_user.role.value,
-        )
-    )
-    return QuotationTaskSubmitResponse(**result.__dict__)
-```
-
-**UseCase** 在单条 `execute` 里按顺序做：校验类型/大小 → `FileStoragePort.upload_pdf` → `QuotationTaskRepoPort.create_file_record` → `TaskStatePort.create_task` → `QuotationTaskRepoPort.create_task`（领域任务行）→ `TaskExecutionPort.set_task_owner` → `TaskDispatchPort.dispatch_owner_queue` → 再算 `queue_position`。类型上全部是 Port，没有直接 `import app.integrations`：
-
-```37:50:app/usecases/quotation/create_task.py
-class CreateQuotationTaskUseCase:
-    def __init__(
-        self,
-        task_state: TaskStatePort,
-        task_repo: QuotationTaskRepoPort,
-        file_storage: FileStoragePort,
-        task_execution: TaskExecutionPort,
-        task_dispatch: TaskDispatchPort,
-    ):
-        self._task_state = task_state
-        self._task_repo = task_repo
-        self._file_storage = file_storage
-        self._task_execution = task_execution
-        self._task_dispatch = task_dispatch
-```
-
-```65:104:app/usecases/quotation/create_task.py
-        self._file_storage.upload_pdf(
-            object_path=minio_path,
-            file_bytes=cmd.file_bytes,
-            content_type=content_type,
-        )
-
-        stored_file_id = self._task_repo.create_file_record(
-            file_name=cmd.file_name or unique_name,
-            unique_name=unique_name,
-            minio_path=minio_path,
-            content_type=content_type,
-            file_size=len(cmd.file_bytes),
-            uploader=cmd.owner_username,
-        )
-
-        task_id = await self._task_state.create_task(
-            task_type="quotation_generation",
-            metadata={
-                "owner_id": cmd.owner_id,
-                "owner_username": cmd.owner_username,
-                "file_id": stored_file_id,
-                "file_name": cmd.file_name or unique_name,
-            },
-        )
-
-        task = self._task_repo.create_task(
-            task_id=task_id,
-            owner_id=cmd.owner_id,
-            owner_username=cmd.owner_username,
-            role_snapshot=cmd.role_snapshot,
-            uploaded_file_id=stored_file_id,
-            uploaded_file_name=cmd.file_name or unique_name,
-            uploaded_file_minio_path=minio_path,
-            uploaded_file_content_type=content_type,
-            uploaded_file_size=len(cmd.file_bytes),
-        )
-
-        self._task_execution.set_task_owner(task_id, cmd.owner_id)
-        self._task_dispatch.dispatch_owner_queue(cmd.owner_id)
-```
-
-**Adapter** 里才出现 `task_manager`、`executor_manager`、MinIO 上传、以及 `app.integrations.Quotation_Generation.quotation_task_workers` 的调度函数——即「执行器/队列」的**技术细节**被封装在 Port 实现中：
-
-```11:19:app/adapters/quotation.py
-from app.core.executor import executor_manager
-from app.core.task_manager import task_manager
-from app.core.storage import upload_stream_to_minio
-from app.integrations.Quotation_Generation.quotation_task_workers import (
-    dispatch_quotation_phase2,
-    dispatch_quotation_queue_for_owner,
-    safe_cleanup_quotation_task_files,
-)
-```
-
-```161:184:app/adapters/quotation.py
-class TaskManagerStateAdapter(TaskStatePort):
-    async def create_task(self, task_type: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-        return await task_manager.create_task(task_type=task_type, metadata=metadata)
-
-    async def fail_task(self, task_id: str, error: str, message: str = "任务失败") -> bool:
-        return await task_manager.fail_task(task_id, error, message)
-
-    async def update_task_progress(self, task_id: str, progress: int, message: str = "") -> bool:
-        return await task_manager.update_task_progress(task_id, progress, message)
-
-
-class ThreadPoolTaskExecutionAdapter(TaskExecutionPort):
-    def set_task_owner(self, task_id: str, owner_id: str) -> None:
-        executor_manager.set_task_owner(task_id, owner_id)
-
-    def cancel_task(self, task_id: str) -> bool:
-        return executor_manager.cancel_task(task_id)
-
-
-class QuotationDispatchAdapter(TaskDispatchPort):
-    def dispatch_owner_queue(self, owner_id: str) -> None:
-        dispatch_quotation_queue_for_owner(owner_id)
-
-    def dispatch_phase2(self, task_id: str, owner_id: str) -> None:
-        dispatch_quotation_phase2(task_id, owner_id)
-```
-
-**要点**：你问的「执行器」在这里对应 **`ThreadPoolTaskExecutionAdapter` → `executor_manager`** 与 **`TaskManagerStateAdapter` → `task_manager`** 等，它们**是 Adapter 的下游**，不是独立一层和 UseCase 平级；UseCase 只依赖 `TaskExecutionPort` / `TaskStatePort` 的抽象方法。
-
-`cancel` / `approve` 两个 endpoint 同理：Route 里注入同一批 Adapter 类型，再调 `CancelQuotationTaskUseCase` / `ApproveQuotationTaskUseCase`（见 `app/api/v1/quotation_generation.py` 中 `cancel_quotation_task` 与 `approve_quotation_task`）。
-
----
-
-### 7.4 非 HTTP 边缘：监控中间件（`RequestMetricsPort`）
+### 7.3 非 HTTP 边缘：监控中间件（`RequestMetricsPort`）
 
 不是 API Route，但同一模式：**边缘**（中间件）只依赖 `RequestMetricsPort` 的工厂，**实现**在 `PrometheusRequestMetricsAdapter`，再进入 `app.integrations.monitoring.prometheus`：
 

@@ -343,6 +343,11 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     ENABLE_RATE_LIMIT: bool = Field(False, env="ENABLE_RATE_LIMIT")
     ENABLE_REQUEST_SIZE_LIMIT: bool = Field(True, env="ENABLE_REQUEST_SIZE_LIMIT")
     ENABLE_CACHE: bool = Field(False, env="ENABLE_CACHE")
+    # 通用页面权限管理框架默认关闭：本阶段不注册任何页面 key / RBAC 角色；
+    # 后续有页面需要时再打开，并补充 seed 与 UserManagePage 入口。
+    PAGE_PERMISSION_MANAGEMENT_ENABLED: bool = Field(
+        False, env="PAGE_PERMISSION_MANAGEMENT_ENABLED"
+    )
 
     MAX_JSON_SIZE: int = Field(5 * 1024 * 1024, env="MAX_JSON_SIZE")
     MAX_FILE_SIZE: int = Field(50 * 1024 * 1024, env="MAX_FILE_SIZE")

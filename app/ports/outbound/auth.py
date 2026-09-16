@@ -28,6 +28,18 @@ class UserRepositoryPort(Protocol):
     async def update_role(self, user_id: str, role: str) -> object:
         ...
 
+    async def update_page_permissions(
+        self, user_id: str, page_permissions: dict[str, bool]
+    ) -> object:
+        """Enable/disable generic page-visibility roles for a user.
+
+        ``page_permissions`` maps page keys to booleans; the adapter resolves
+        each key through the ``view_<key>`` permission / ``page_<key>`` role
+        convention.  Kept for the page-permission framework even though the
+        framework is disabled by default.
+        """
+        ...
+
     async def update_password(
         self,
         user_id: str,

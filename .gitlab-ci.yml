@@ -6,7 +6,7 @@
 # Runner: ragchatbot-runner（docker executor，tag: rag）
 #
 # 依赖说明：
-# - pytest job 刻意只装 tests/ 实际 import 的最小依赖集（189 个测试全部通过），
+# - pytest job 刻意只装 tests/ 实际 import 的最小依赖集（数量以当前分支实际结果为准），
 #   版本与 requirements.txt 的锁定值一致。
 # - 不要改成 `pip install -r requirements.txt`：其中有 torch==2.9.1+cu130 /
 #   paddlepaddle-gpu 等 GPU 专用包，PyPI 上不可直装且体积达数 GB。
@@ -47,7 +47,7 @@ pytest:
       pydantic==2.12.3 pydantic-settings==2.10.1 bcrypt==5.0.0
       psycopg2-binary==2.9.11 redis==7.0.1 asyncpg==0.31.0 openpyxl==3.1.5
       tenacity==9.1.2 miniopy-async==1.23.5 minio==7.2.16 urllib3==2.5.0
-      python-multipart==0.0.20
+      python-multipart==0.0.20 email-validator==2.3.0 dnspython==2.8.0
     - pytest -q --junitxml=pytest-report.xml
   artifacts:
     when: always

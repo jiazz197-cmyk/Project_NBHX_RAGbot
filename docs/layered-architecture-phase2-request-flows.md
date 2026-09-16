@@ -45,7 +45,7 @@ flowchart TB
 | 环节 | 机制 | 典型位置 |
 |------|------|----------|
 | 登录态 | `Depends(get_current_user)` | 各需登录路由 |
-| 角色门禁 | `Depends(require_roles(...))` | 如 closing_form 审批、collection2、批量删除文件 |
+| 角色门禁 | `Depends(require_roles(...))` | 如用户管理、知识库管理、批量删除文件 |
 | 资源归属（线程池任务） | `owner_id` 与 `current_user.id` 比较；`superuser` 放行 | `app/usecases/async_executor/*`、`document_processing/lifecycle.py` |
 | 上传者别名 | `normalize_self_uploader` | PDF 转换提交、文档处理提交等 |
 | 业务用户标识 | `normalize_self_user_identifier`；admin/superuser 可代查他人 | `CompressContextUseCase` |
@@ -115,12 +115,6 @@ flowchart LR
 
 ---
 
-### 3.3 模型 C：报价任务（一期已存在，供对照）
-
-**分发**：`TaskDispatchPort` 调用 `dispatch_quotation_queue_for_owner` / `dispatch_quotation_phase2`；状态与 DB 经 `QuotationTaskRepoPort`、`TaskStatePort`。
-
-数据流见 [architecture-route-usecase-port-adapter.md](architecture-route-usecase-port-adapter.md) 第 7.3 节。
-
 ---
 
 ## 4. 按模块：数据流摘要
@@ -180,32 +174,12 @@ flowchart LR
 
 ---
 
-### 4.6 闭单表单（`closing_form`）
+### 4.6 聊天摘要 / 知识库
 
-| 步骤 | 数据流 |
-|------|--------|
-| 各操作 | Route → 薄 UseCase → `ClosingFormServicePort` → `integrations.closing_form.service` |
+- **聊天摘要**：`UserLookupPort` 解析有效用户 + `ChatArchivePort` / `ChatSummaryRepoPort`。
+- **知识库**：上传复用 `SubmitDocumentProcessingUseCase`，同名预检走 `KnowledgeMetadataPort`；记录列表/删除经 `KnowledgePersistencePort`。
 
-**认证**：`get_current_user`；审批/管理接口 `require_roles(admin|superuser)` 在 Route 的 `Depends`。
-
----
-
-### 4.7 SQL Server 查询（`sqlserver_queries`）
-
-| 步骤 | 数据流 |
-|------|--------|
-| 查询 | `U8BomInventoryRequest` / `PdmBomRequest` → `RunU8BomInventoryQueryUseCase` / `RunPdmBomQueryUseCase` → Port → `run_u8_bom_inventory_query` / `run_pdm_bom_query` |
-
-**认证**：`get_current_user`（需登录）；无资源级 owner，与整改前一致。
-
----
-
-### 4.8 聊天摘要 / 报价（一期）
-
-- **聊天摘要**：`UserLookupPort` 解析有效用户 + `ChatArchivePort` / `ChatSummaryRepoPort`。  
-- **报价**：多 Port 编排 + `TaskDispatchPort` + `ThreadPoolTaskExecutionAdapter`。
-
-二者路由同样不直连 `integrations`（守卫已覆盖）。
+上述路由不直连 `integrations`（守卫已覆盖）。
 
 ---
 
@@ -252,7 +226,7 @@ flowchart TB
 
 | 类型 | 路径 |
 |------|------|
-| Port（分层） | `app/ports/dto/`（数据类）、`app/ports/contracts/`（通用 `Protocol`）、`app/ports/domains/`（业务线 `Protocol`，如 `document_processing.py`、`file_manager.py`、`ocr_async.py`、`context_compression.py`、`closing_form.py`、`sqlserver_queries.py` 等） |
-| Adapter | `app/adapters/`（含 `tasking.py`、`ocr_executor_jobs.py`、`document_processing.py`、`file_manager.py`、`context_compression.py`、`closing_form.py`、`sqlserver_queries.py`） |
-| UseCase | `app/usecases/async_executor/`、`document_processing/`、`file_manager/`、`context_compression/`、`closing_form/`、`sqlserver_queries/`、以及 `quotation/`、`chat_summary/` |
+| Port（分层） | `app/ports/dto/`（数据类）、`app/ports/contracts/`（通用 `Protocol`）、`app/ports/outbound/`（业务线 `Protocol`，如 `document_processing.py`、`file_manager.py`、`ocr_async.py`、`context_compression.py`、`knowledge.py` 等） |
+| Adapter | `app/adapters/`（含 `tasking.py`、`ocr_executor_jobs.py`、`document_processing.py`、`file_manager.py`、`context_compression.py`、`knowledge/`、`doc_processing/`） |
+| UseCase | `app/usecases/async_executor/`、`document_processing/`、`file_manager/`、`context_compression/`、`knowledge/`、`chat_summary/` |
 | 分层检查 | `scripts/check_layered_architecture.sh` |

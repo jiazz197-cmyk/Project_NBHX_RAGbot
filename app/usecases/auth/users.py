@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from app.core.exceptions import NotFoundError, PermissionDeniedError
+from app.core.exceptions import NotFoundError, PermissionDeniedError, ValidationError
 from app.core.logging import get_logger
+from app.domain.auth.page_permissions import (
+    InvalidPagePermissionKey,
+    normalize_page_permissions,
+)
 from app.ports.contracts.identity import CurrentUserPort
 from app.ports.outbound.auth import PasswordHasherPort, UserRepositoryPort
 from app.ports.dto.auth import (
+    UpdatePagePermissionsCommand,
     UpdateUserRoleCommand,
     ResetUserPasswordCommand,
     UserDTO,
@@ -119,3 +124,38 @@ class ResetUserPasswordUseCase:
             cmd.current_user_name,
             cmd.current_user_id,
         )
+
+
+class UpdateUserPagePermissionsUseCase:
+    """Toggle generic page-visibility permissions for a user.
+
+    The use case is deliberately page-key agnostic: callers provide a
+    ``{page_key: enabled}`` mapping.  No page key is seeded in this release and
+    the HTTP endpoint is disabled by default, but the framework is kept for
+    later business pages.
+    """
+
+    def __init__(self, user_repo: UserRepositoryPort):
+        self._user_repo = user_repo
+
+    async def execute(self, cmd: UpdatePagePermissionsCommand) -> UserDTO:
+        target = await self._user_repo.get_by_id(cmd.target_user_id)
+        if not target:
+            raise NotFoundError("用户不存在")
+
+        try:
+            page_permissions = normalize_page_permissions(cmd.page_permissions)
+        except InvalidPagePermissionKey as exc:
+            raise ValidationError(str(exc)) from exc
+
+        updated = await self._user_repo.update_page_permissions(
+            cmd.target_user_id,
+            page_permissions,
+        )
+        logger.info(
+            "User page permissions updated: %s (%s) by %s",
+            cmd.target_user_id,
+            ",".join(sorted(page_permissions)) or "-",
+            cmd.current_user_id,
+        )
+        return updated if isinstance(updated, UserDTO) else target
