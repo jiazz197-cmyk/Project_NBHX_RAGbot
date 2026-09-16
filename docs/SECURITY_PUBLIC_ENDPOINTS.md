@@ -32,12 +32,13 @@ This document inventories HTTP routes by authentication requirement. Paths are r
 
 ## JWT required (`Depends(get_current_user)` or stricter `require_roles`)
 
-All routes under: `/files`, `/quotation`, `/document-tasks` (HTTP; legacy `/docs`), `/ocr` (legacy `/image2url` and `/pdf2image` aliases), `/retriever`, `/chat-summary`, `/knowledge`, `/context-compression`, `/sqlserver` (U8/PDM queries).
+All routes under: `/files`, `/document-tasks` (HTTP; legacy `/docs`), `/ocr` (legacy `/image2url` and `/pdf2image` aliases), `/retriever`, `/chat-summary`, `/knowledge`, `/context-compression`.
 
 Role-restricted examples:
 
 - `GET /api/v1/document-tasks/ws/stats` (and legacy `GET /api/v1/docs/ws/stats`) — superuser only
 - `GET /api/v1/auth/users` — superuser; user delete/role — superuser
+- `PATCH /api/v1/auth/users/{id}/page-permissions` — superuser; disabled (`404`) unless `PAGE_PERMISSION_MANAGEMENT_ENABLED=True`
 - Parts of `knowledge` — admin or superuser per handler
 
 Cross-user (same as WebSocket task policy: `admin` or `superuser` may act on other users; normal users are self-only):
@@ -51,4 +52,4 @@ Cross-user (same as WebSocket task policy: `admin` or `superuser` may act on oth
 - In production, disable or protect `/example` if not needed.
 - Keep `TRUST_PROXY_HEADERS` off unless the reverse proxy is in `TRUSTED_PROXIES`.
 
-Last updated: automated pass after SQL Server routes were secured with `get_current_user`.
+Last updated: after the feature-removal issues; generic page-permission framework retained with `PAGE_PERMISSION_MANAGEMENT_ENABLED=False` (endpoint returns 404).

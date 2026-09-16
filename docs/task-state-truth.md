@@ -1,30 +1,17 @@
 # Task state source-of-truth
 
-This document describes where each async task type stores authoritative state.
+This document describes where each async task type stores authoritative state in the
+current codebase (document processing / OCR only).
 
 ## Task ID prefixes
 
 | Prefix | Task type | Example |
 |--------|-----------|---------|
-| `quotation_generation_` | Quotation pipeline (Phase1 + optional Phase2) | `quotation_generation_20260526_131046_609_89c8fedd` |
 | `doc_process_` | Document processing | `doc_process_20260407_182347_*` |
 | `pdf_convert_` | OCR PDF conversion (short-lived) | `pdf_convert_*` |
 | `image_upload_` | OCR image upload (short-lived) | `image_upload_*` |
 
 ## Field ownership
-
-### `quotation_generation_*`
-
-| Field | Source of truth | Notes |
-|-------|-----------------|-------|
-| `status`, `progress`, `message`, `error`, `result_payload` | Postgres `quotation_tasks` | API + FileManager list read PG |
-| `owner_id` | Postgres `quotation_tasks.owner_id` | WS auth via `TaskOwnerRegistry` |
-| WS progress cache | Redis `task:{task_id}` (24h TTL) | Synced on create/status/progress updates |
-| `awaiting_approval_at` | Postgres only | Used for 24h retention expiry |
-
-**Status vocabulary (Postgres):** `queued`, `running`, `awaiting_approval`, `completed`, `failed`, `cancelled`
-
-**Redis/TaskManager mirrors:** same strings after sync; created as `pending` then immediately set to `queued`.
 
 ### `doc_process_*`
 
@@ -44,16 +31,15 @@ List/detail APIs read TaskManager only. Expired Redis keys mean the task no long
 
 Short-lived; lost on process restart or when Future history is trimmed (>60 completed).
 
-## Status sync rules (quotation)
+## Status sync rules (document tasks)
 
-1. **Create:** PG `queued` + Redis `queued` (via `TaskManagerStateAdapter.create_task`).
-2. **Phase1 → awaiting_approval:** PG status + `awaiting_approval_at`; Redis `update_status('awaiting_approval')`.
-3. **Cancel:** PG `cancelled`; Redis `update_status('cancelled')` (not `failed`).
-4. **Approve → Phase2:** PG `running`, clear `awaiting_approval_at`; Redis `update_status('running')`.
-5. **Startup recovery:** PG stale `running` → `queued`; Redis synced via background task.
+1. **Create:** Redis `pending` then `queued` via `TaskManagerStateAdapter.create_task`.
+2. **Progress:** `TaskManager.update_task_progress` mirrors progress for WebSocket clients.
+3. **Terminal:** `completed` / `failed` / `cancelled` is written by the task worker or cancel path.
+4. **Retention:** task records follow the shared TaskManager retention policy; expired keys no longer exist.
 
-## Retention (quotation_tasks)
+## MinIO orphan reconcile
 
-- **Global count > 100:** delete oldest terminal rows (`completed` / `failed` / `cancelled`) until total ≤ 50.
-- **`awaiting_approval` > 24h:** hard purge (files + DB + Redis + caches).
-- Non-terminal tasks (`queued`, `running`, `awaiting_approval` within TTL) are never removed by count-based retention.
+The reconciliation scheduler only scans production prefixes still used by document
+processing / OCR (`temp/`, `images/`). Historical business prefixes are no longer
+scanned and are never deleted by reconcile.

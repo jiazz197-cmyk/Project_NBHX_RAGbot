@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.adapters.auth.password_hasher import BcryptPasswordHasherAdapter
 from app.adapters.auth.user_repository import SqlAlchemyUserRepositoryAdapter
 from app.adapters.auth.auth_adapter import JwtTokenIssuerAdapter
+from app.core.config import settings
 from app.core.exceptions import AuthenticationError, NotFoundError, PermissionDeniedError
 from app.core.logging import get_logger
 from app.core.security import get_current_user, require_roles
@@ -15,12 +16,14 @@ from app.ports.dto.auth import (
     LoginCommand,
     RegisterCommand,
     ResetUserPasswordCommand,
+    UpdatePagePermissionsCommand,
     UpdateUserRoleCommand,
     UserDTO,
 )
 from app.adapters.web.platform.token import TokenResponse
 from app.adapters.web.platform.user import (
     UserLogin,
+    UserPagePermissionsUpdate,
     UserPasswordReset,
     UserRead,
     UserRoleUpdate,
@@ -33,6 +36,7 @@ from app.usecases.auth.users import (
     GetUserUseCase,
     ListUsersUseCase,
     ResetUserPasswordUseCase,
+    UpdateUserPagePermissionsUseCase,
     UpdateUserRoleUseCase,
 )
 
@@ -164,6 +168,36 @@ async def update_user_role(
         return _dto_to_user_read(dto)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
+
+
+@router.patch(
+    "/users/{user_id}/page-permissions",
+    response_model=UserRead,
+    summary="修改用户页面可见权限（仅 superuser；默认关闭）",
+    description=(
+        "通用页面权限框架端点，默认由 PAGE_PERMISSION_MANAGEMENT_ENABLED "
+        "关闭；关闭时直接返回 404。"
+    ),
+)
+async def update_user_page_permissions(
+    user_id: uuid.UUID,
+    body: UserPagePermissionsUpdate,
+    current_user: CurrentUserPort = Depends(require_roles(ROLE_SUPERUSER)),
+):
+    """更新用户的通用页面权限；当前框架未启用，默认 404。"""
+    if not settings.PAGE_PERMISSION_MANAGEMENT_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    try:
+        uc = UpdateUserPagePermissionsUseCase(_user_repo)
+        dto = await uc.execute(UpdatePagePermissionsCommand(
+            target_user_id=str(user_id),
+            page_permissions=body.page_permissions,
+            current_user_id=current_user.id,
+        ))
+        return _dto_to_user_read(dto)
+    except NotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
 
 
 @router.post(

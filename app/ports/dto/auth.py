@@ -60,6 +60,21 @@ class UpdateUserRoleCommand:
 
 
 @dataclass
+class UpdatePagePermissionsCommand:
+    """Command to update a user's generic page-visibility permissions.
+
+    ``page_permissions`` maps a page key (e.g. ``report``) to the desired
+    visibility.  The RBAC convention is ``view_<key>`` permission +
+    ``page_<key>`` role.  The framework is retained for later use and is
+    disabled by default via ``PAGE_PERMISSION_MANAGEMENT_ENABLED``.
+    """
+
+    target_user_id: str
+    page_permissions: dict[str, bool]
+    current_user_id: str
+
+
+@dataclass
 class ResetUserPasswordCommand:
     """Command for resetting a user's password."""
 

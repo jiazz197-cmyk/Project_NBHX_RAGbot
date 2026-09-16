@@ -26,18 +26,13 @@
 - `app/core/middleware/monitoring.py:9`
   - `from app.integrations.monitoring.prometheus import metrics`
 
-### 1.3 最厚路由（TOP 10）
+### 1.3 最厚路由（TOP 5）
 
 1. `app/api/v1/chat_summary.py:create_chat_summary` (92 行)
-2. `app/api/v1/quotation_generation.py:create_quotation_task` (83 行)
-3. `app/api/v1/chat_summary.py:query_user_summary` (74 行)
-4. `app/api/v1/quotation_generation.py:approve_quotation_task` (59 行)
-5. `app/api/v1/websocket_notifier.py:websocket_task_endpoint` (55 行)
-6. `app/api/v1/document_processing.py:submit_document_processing` (54 行)
-7. `app/api/v1/pdf2image.py:get_pdf_convert_task_status` (52 行)
-8. `app/api/v1/image2url.py:get_image_upload_task_status` (52 行)
-9. `app/api/v1/context_compression.py:compress_chat_context` (52 行)
-10. `app/api/v1/quotation_generation.py:cancel_quotation_task` (50 行)
+2. `app/api/v1/chat_summary.py:query_user_summary` (74 行)
+3. `app/api/v1/websocket_notifier.py:websocket_task_endpoint` (55 行)
+4. `app/api/v1/document_processing.py:submit_document_processing` (54 行)
+5. `app/api/v1/pdf2image.py:get_pdf_convert_task_status` (52 行)
 
 ---
 
@@ -64,7 +59,7 @@
 未发现独立用例层，导致：
 
 - 业务流程在 route 中“粘合式”存在
-- 多业务线（chat summary / quotation / document task）有重复处理逻辑
+- 多业务线（chat summary / knowledge / document task）有重复处理逻辑
 - 无法形成“可组合、可测、可迁移”的编排中心
 
 ## 2.4 路由过厚
@@ -93,7 +88,7 @@ API Route -> UseCase -> Port(Protocol) -> Adapter(具体实现)
 ### 3.2 指标目标
 
 1. Protocol 接口数 >= 10（首批）
-2. 首批关键业务线全部落地 UseCase（chat_summary、quotation_generation）
+2. 首批关键业务线全部落地 UseCase（chat_summary、knowledge）
 3. 路由 >15 行占比从 64.8% 降至 <20%
 4. 新增 endpoint 禁止直接 import `app.integrations.*`
 5. 消除 `core -> integrations` 反向依赖（至少现有 1 处）
@@ -157,10 +152,6 @@ API Route -> UseCase -> Port(Protocol) -> Adapter(具体实现)
   - `UserLookupPort`
   - `ChatSummaryRepoPort`
   - `ChatArchivePort`
-- `app/ports/quotation.py`
-  - `QuotationTaskRepoPort`
-  - `FileStoragePort`
-  - `TaskDispatchPort`
 - `app/ports/tasking.py`
   - `TaskStatePort`
 
@@ -170,16 +161,14 @@ API Route -> UseCase -> Port(Protocol) -> Adapter(具体实现)
 
 - `app/usecases/chat_summary/create_chat_summary.py`
 - `app/usecases/chat_summary/query_user_summary.py`
-- `app/usecases/quotation/create_task.py`
-- `app/usecases/quotation/cancel_task.py`
-- `app/usecases/quotation/approve_task.py`
+- `app/usecases/document_processing/*`
 
 ### P0-3 路由瘦身改造
 
 优先重构文件：
 
 1. `app/api/v1/chat_summary.py`
-2. `app/api/v1/quotation_generation.py`
+2. `app/api/v1/document_processing.py`
 
 将 route 内部业务逻辑迁移到 usecase，仅保留 DTO/Depends/调用/响应。
 
@@ -263,30 +252,7 @@ grep -R "Protocol" app/ports --include="*.py"
 
 ---
 
-## 6.2 quotation_generation 业务线
-
-### 当前问题
-- create/cancel/approve 路由承载完整状态机流程
-- 文件存储、任务排队、权限与状态判断耦合在 route
-
-### 拆分方案
-
-- UseCase：
-  - `CreateQuotationTaskUseCase`
-  - `CancelQuotationTaskUseCase`
-  - `ApproveQuotationTaskUseCase`
-- Port：
-  - `FileStoragePort`
-  - `QuotationTaskRepoPort`
-  - `TaskDispatchPort`
-
-### 目标结果
-- route 仅接收输入并调用 usecase
-- 队列位置计算、审批状态转换下沉 usecase
-
----
-
-## 6.3 task 型业务线（document/pdf/image）
+## 6.2 task 型业务线（document/pdf/image）
 
 ### 当前问题
 - 多文件重复“提交/状态/结果/取消”流程
@@ -324,13 +290,13 @@ grep -R "Protocol" app/ports --include="*.py"
 - 瘦路由
 - usecase 测试报告
 
-## 第 3 周：quotation_generation 主链路迁移
+## 第 3 周：document_processing / OCR 链路迁移
 
-- create/cancel/approve 三条链路迁移
-- 权限与状态机规则收敛到 usecase
+- document / pdf / image 三条链路接入 UseCase
+- 权限与任务所有权规则收敛到 usecase
 
 交付：
-- 三个 usecase
+- 任务类 usecase
 - adapter 实现
 
 ## 第 4 周：任务类统一 + CI 强化
@@ -365,7 +331,7 @@ grep -R "Protocol" app/ports --include="*.py"
 
 ### 应对
 - 每条链路采用“旧实现保留 + 新实现灰度切换”
-- 补充 contract tests（尤其 chat_summary / quotation）
+- 补充 contract tests（尤其 chat_summary / task 型链路）
 - 关键错误码保持兼容，先做映射层再逐步收敛
 
 ---
@@ -373,11 +339,9 @@ grep -R "Protocol" app/ports --include="*.py"
 ## 10. 第一批执行任务（可直接进入开发）
 
 - [ ] 新增 `app/ports/chat_summary.py`
-- [ ] 新增 `app/ports/quotation.py`
 - [ ] 新增 `app/usecases/chat_summary/*`
-- [ ] 新增 `app/usecases/quotation/*`
 - [ ] 重构 `app/api/v1/chat_summary.py` 为薄路由
-- [ ] 重构 `app/api/v1/quotation_generation.py` 为薄路由
+- [ ] 重构 `app/api/v1/document_processing.py` 为薄路由
 - [ ] 修复 `app/core/middleware/monitoring.py` 反向依赖
 - [ ] 在 CI 增加架构守卫脚本
 

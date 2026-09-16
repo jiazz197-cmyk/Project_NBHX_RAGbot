@@ -41,7 +41,7 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '知识库管理' },
   },
   {
-    // 兜底：未注册路径（含已下线的 /closing-form）重定向到聊天页
+    // 兜底：未注册路径统一重定向到聊天页；后续启用页面权限时仍可配合 requiresPermission 使用
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     redirect: '/chat',

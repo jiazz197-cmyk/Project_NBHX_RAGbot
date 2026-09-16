@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -56,6 +56,17 @@ class UserRead(BaseModel):
     role: UserRole = UserRole.user
     roles: List[RoleSimple] = []
     permissions: List[str] = []
+
+
+class UserPagePermissionsUpdate(BaseModel):
+    """Generic page-permission update payload.
+
+    ``page_permissions`` maps a page key to the desired visibility.  The
+    framework is kept for later use and disabled by default through
+    ``PAGE_PERMISSION_MANAGEMENT_ENABLED``; no page keys are defined now.
+    """
+
+    page_permissions: Dict[str, bool] = Field(default_factory=dict)
 
 
 class RoleCreate(BaseModel):

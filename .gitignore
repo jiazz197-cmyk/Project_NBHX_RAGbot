@@ -28,7 +28,7 @@ charts1/
 charts/
 logs/
 
-# Local test exports (e.g. U8 CSV adapter)
+# Local test exports
 tests/output/
 
 .kilo/

@@ -39,7 +39,6 @@ FIX_BATCH_B_ID=""
 FIX_OCR_IMAGE_TASK_ID=""
 FIX_OCR_PDF_TASK_ID=""
 FIX_DOC_TASK_ID=""
-FIX_Q_TASK_ID=""
 
 OPENAPI_FILE="$WORKDIR/openapi.json"
 
@@ -759,13 +758,13 @@ test_rag() {
   section "11. RAG / Retriever"
 
   # 接口分家：/retriever/db 检索文档表 knowledge_chunks；
-  # /retriever/excel 检索 Excel 表 excel_db_chunks（历史 doc_collection_1 已随 closing_form 下线）。
+  # /retriever/excel 检索 Excel 表 excel_db_chunks（历史集合已下线，保留 Excel 集合）。
 
   curl -sS -D "$WORKDIR/rag_db_2.headers" \
     -X POST "$BASE/retriever/db?collection=knowledge_chunks" \
     -H "$AUTH" \
     -H "Content-Type: application/json" \
-    -d '{"question":"U8 API 如何调用？"}' \
+    -d '{"question":"系统接口 API 如何调用？"}' \
     -o "$WORKDIR/rag_db_2.body"
 
   cat "$WORKDIR/rag_db_2.headers"
@@ -805,7 +804,6 @@ PY
 
   local ws_task_id
   ws_task_id="$FIX_DOC_TASK_ID"
-  if [ -z "$ws_task_id" ]; then ws_task_id="$FIX_Q_TASK_ID"; fi
 
   if [ -z "$ws_task_id" ]; then
     warn "没有可用于 WebSocket 测试的 task_id"
@@ -979,7 +977,7 @@ test_retention_pg_redis() {
 scan_error_logs() {
   section "16. 核心错误扫描"
 
-  sudo grep -i "run_async() cannot be used inside a running event loop\|different loop\|handler is closed\|TCPTransport closed\|调度报价任务失败" \
+  sudo grep -i "run_async() cannot be used inside a running event loop\|different loop\|handler is closed\|TCPTransport closed" \
     "$PROJECT_ROOT/logs/app.log" | tail -n 200 > "$WORKDIR/core_errors.txt" || true
 
   cat "$WORKDIR/core_errors.txt"
@@ -1029,7 +1027,6 @@ summary() {
   echo "WORKDIR=$WORKDIR"
   echo "LOGFILE=$LOGFILE"
   echo "FIX_DOC_TASK_ID=$FIX_DOC_TASK_ID"
-  echo "FIX_Q_TASK_ID=$FIX_Q_TASK_ID"
   echo "FIX_OCR_IMAGE_TASK_ID=$FIX_OCR_IMAGE_TASK_ID"
   echo "FIX_OCR_PDF_TASK_ID=$FIX_OCR_PDF_TASK_ID"
   echo

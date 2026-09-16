@@ -63,7 +63,7 @@ bash scripts/dev.sh docker backend
 bash scripts/dev.sh docker frontend
 
 # 终端 C：测试 / 守卫 / 任意命令
-bash scripts/dev.sh docker test -q -k quotation
+bash scripts/dev.sh docker test -q -k knowledge
 bash scripts/dev.sh docker guard
 bash scripts/dev.sh docker py -c "from app.core.config import settings; print(settings.POSTGRES_SERVER)"
 
@@ -305,7 +305,7 @@ API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up
 | **实际连库** | 容器内 psycopg2 连宿主 `host.docker.internal:5433` → `pgvector 0.8.6` ✅ |
 | 分层架构守卫 | `[layer-check] PASSED` |
 | **pytest** | 容器内 **150 passed / 9.08s**；宿主对照 **150 passed / 36.42s** —— 测试数完全一致（**容器快 4×**，因为 venv 在镜像层=NVMe，宿主 `.venv` 在 5400rpm HDD） |
-| 文档中「218 passed」 | **已过期**：那是 closing_form / quotation 删除前的数字，本分支就是 150，不是回归 |
+| 历史测试数 | 早前记录的 218 / 150 等快照已过期；以当前分支 `pytest -q` 的实际输出为准 |
 
 > 遗留观察：仓库里 `tests/__pycache__`、`tests/output/` 有 **Sep 14 就存在的 root 属主文件**（早于容器化）。
 > 影响很小（Python 只是无法刷新字节码缓存），但容器里以 uid 1001 运行时会静默跳过写入。

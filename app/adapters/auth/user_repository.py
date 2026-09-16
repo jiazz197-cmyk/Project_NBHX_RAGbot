@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.rbac_queries import load_user_permissions
+from app.domain.auth.page_permissions import page_role_name
 from app.ports.outbound.auth import UserRepositoryPort
 from app.ports.dto.auth import UserDTO
 
@@ -58,8 +59,6 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
         self, username: str, email: str, password: str, name: Optional[str]
     ) -> UserDTO:
         from app.models.orm.platform.user import User, UserRole
-        from app.models.orm.platform.role import Role
-        from app.models.orm.platform.user_role import user_role_table
 
         async with AsyncSessionLocal() as db:
             user = User(
@@ -161,3 +160,61 @@ class SqlAlchemyUserRepositoryAdapter(UserRepositoryPort):
             user.password = hashed_password
 
             await db.commit()
+
+    async def update_page_permissions(
+        self, user_id: str, page_permissions: dict[str, bool]
+    ) -> UserDTO:
+        """Toggle generic page role memberships for a user.
+
+        Page keys map to roles through the ``page_<key>`` convention.  Roles
+        that do not exist yet are ignored, so the disabled framework is a safe
+        no-op until an RBAC page-permission seed is added and the feature flag
+        is enabled.
+        """
+        from app.models.orm.platform.user import User
+        from app.models.orm.platform.role import Role
+        from app.models.orm.platform.user_role import user_role_table
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(User).filter(User.id == uuid.UUID(user_id))
+            )
+            user = result.scalars().first()
+            if not user:
+                raise NotFoundError(f"User not found: {user_id}")
+
+            if page_permissions:
+                desired_roles = {
+                    page_role_name(page_key): enabled
+                    for page_key, enabled in page_permissions.items()
+                }
+                roles_result = await db.execute(
+                    select(Role).filter(Role.name.in_(list(desired_roles)))
+                )
+                role_map = {r.name: r.id for r in roles_result.scalars().all()}
+
+                uid = uuid.UUID(user_id)
+                for role_name, enabled in desired_roles.items():
+                    role_id = role_map.get(role_name)
+                    if not role_id:
+                        continue
+                    if enabled:
+                        await db.execute(
+                            pg_insert(user_role_table)
+                            .values(user_id=uid, role_id=role_id)
+                            .on_conflict_do_nothing()
+                        )
+                    else:
+                        await db.execute(
+                            user_role_table.delete().where(
+                                (user_role_table.c.user_id == uid)
+                                & (user_role_table.c.role_id == role_id)
+                            )
+                        )
+
+                await db.commit()
+                await db.refresh(user)
+
+            perms = await load_user_permissions(db, str(user.id))
+            return _orm_user_to_dto(user, perms)

@@ -52,6 +52,13 @@ export interface UpdateRoleRequest {
   role: 'admin' | 'user'
 }
 
+/**
+ * 通用页面权限框架：page key -> 是否可见。
+ * 后端默认由 PAGE_PERMISSION_MANAGEMENT_ENABLED 关闭（PATCH 返回 404），
+ * UserManagePage 暂不启用入口；代码保留供后续业务页面复用。
+ */
+export type UserPagePermissions = Record<string, boolean>
+
 export const login = async (payload: LoginRequest): Promise<LoginResponse> => {
   const response = await fetch(`${config.apiBaseUrl}${config.loginEndpoint}`, {
     method: 'POST',
@@ -102,6 +109,16 @@ export const updateUserRole = (userId: string, payload: UpdateRoleRequest): Prom
   return apiRequest<UserResponse>(`${AUTH_BASE}/users/${userId}/role`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+export const updateUserPagePermissions = (
+  userId: string,
+  payload: UserPagePermissions,
+): Promise<UserResponse> => {
+  return apiRequest<UserResponse>(`${AUTH_BASE}/users/${userId}/page-permissions`, {
+    method: 'PATCH',
+    body: JSON.stringify({ page_permissions: payload }),
   })
 }
 
