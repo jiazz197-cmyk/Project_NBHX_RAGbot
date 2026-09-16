@@ -259,12 +259,7 @@ const chatToDelete = ref<string | null>(null)
 const editingChatId = ref<string | null>(null)
 const editingChatTitle = ref('')
 const showSummaryDialog = ref(false)
-const chatHistory = ref<ChatHistoryItem[]>([
-  {
-    id: '1',
-    title: '新对话',
-  },
-])
+const chatHistory = ref<ChatHistoryItem[]>([])
 const currentConversationId = ref<string | undefined>(undefined)
 const currentTaskId = ref<string | undefined>(undefined)
 const activeGenerationId = ref(0)
@@ -1289,7 +1284,9 @@ onMounted(async () => {
 
   try {
     const response = await getConversations()
-    if (response.data && response.data.length > 0) {
+    // 无条件用后端结果覆盖：空列表就该渲染空列表，否则会残留一条点开即 404 的
+    // 幻影会话（“新聊天”由侧边栏的 + 按钮创建，走 new- 前缀，不依赖默认项）。
+    if (Array.isArray(response.data)) {
       chatHistory.value = response.data.map((conv: Conversation) => ({
         id: conv.id,
         title: conv.name || '新对话',
