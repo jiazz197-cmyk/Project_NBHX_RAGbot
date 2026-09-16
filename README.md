@@ -1,12 +1,12 @@
 <div align="center">
 
-# Yamato AI 助手平台
+# NBHX AI 助手平台
 
-### 大和衡器（上海）企业内部 AI 工作台
+### 宁波华翔企业内部 AI 工作台
 
 <p align="center">
   <a href="#简介">简介</a> •
-  <a href="#为大和带来的价值">为大和带来的价值</a> •
+  <a href="#为宁波华翔带来的价值">为宁波华翔带来的价值</a> •
   <a href="#核心能力">核心能力</a> •
   <a href="#技术栈">技术栈</a> •
   <a href="#架构概览">架构概览</a> •
@@ -25,13 +25,13 @@
 
 ## 简介
 
-Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定制的企业内部 AI 工作台，仅服务于大和自身的业务运转，**不面向外部部署**。它把散落在企业文档、Excel 与员工经验里的知识收敛到一个对话式工作台：员工用自然语言提问，系统从企业知识库中检索依据并作答；文档与 Excel 类数据库上传后自动解析、建库，随后可被对话检索引用。
+NBHX AI 助手平台是为<strong>宁波华翔</strong>量身定制的企业内部 AI 工作台，仅服务于宁波华翔自身的业务运转，**不面向外部部署**。它把散落在企业文档、Excel 与员工经验里的知识收敛到一个对话式工作台：员工用自然语言提问，系统从企业知识库中检索依据并作答；文档与 Excel 类数据库上传后自动解析、建库，随后可被对话检索引用。
 
-平台采用 FastAPI（Python 3.12）后端 + Vue 3（pnpm / Turbo monorepo）前端，遵循 **domain ◄ ports ◄ usecases ◄ adapters ◄ api(组合根)** 的 Clean Architecture。对话编排由 **Dify** 承担（SSE 流式），本服务负责其周围的 RAG 检索、文档建库、对话摘要与上下文压缩；所有业务数据落在大和自有的 PostgreSQL / Redis / MinIO 之中。
+平台采用 FastAPI（Python 3.12）后端 + Vue 3（pnpm / Turbo monorepo）前端，遵循 **domain ◄ ports ◄ usecases ◄ adapters ◄ api(组合根)** 的 Clean Architecture。对话编排由 **Dify** 承担（SSE 流式），本服务负责其周围的 RAG 检索、文档建库、对话摘要与上下文压缩；所有业务数据落在宁波华翔自有的 PostgreSQL / Redis / MinIO 之中。
 
 ---
 
-## 为大和带来的价值
+## 为宁波华翔带来的价值
 
 平台不是通用问答工具，而是围绕企业内部知识与文档资产做的沉淀与再利用。
 
@@ -161,7 +161,7 @@ Yamato AI 助手平台是为<strong>大和衡器（上海）</strong>量身定�
 ```bash
 # 1. 克隆仓库
 git clone <your-repo-url>
-cd project-yamato-shanghai
+cd project-nbhx
 
 # 2. 安装后端依赖（依赖与缓存全部落在仓库内：./.venv 与 ./.cache，见 CLAUDE.md「本地环境」）
 bash scripts/setup_local_env.sh

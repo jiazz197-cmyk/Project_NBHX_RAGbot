@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-Yamato AI 助手平台——大和衡器（上海）企业内部 AI 工作台。核心能力：自然语言知识库对话、文档与 Excel 数据库上传处理、RAG 检索、OCR。
+NBHX AI 助手平台——宁波华翔企业内部 AI 工作台。核心能力：自然语言知识库对话、文档与 Excel 数据库上传处理、RAG 检索、OCR。
 
 技术栈：Python 3.12 + FastAPI 0.116 + SQLAlchemy(async) + LangChain；PostgreSQL 14(pgvector) + Redis + MinIO；前端 Vue 3 + pnpm workspace + Turbo。
 
@@ -48,7 +48,7 @@ app/
     workers/             driving 异步入口（文档处理 / OCR 任务执行器）
     monitoring/          driven（health / metrics）
   models/orm/            SQLAlchemy ORM 模型
-frontend/apps/chat/      主前端应用；frontend/packages/components = @yamato/components 共享包
+frontend/apps/chat/      主前端应用；frontend/packages/components = @nbhx/components 共享包
 scripts/                 架构守卫 / 启动 / 环境（env.sh、setup_local_env.sh、dev.sh）/ nginx / 安全 smoke
 tests/                   pytest 单元/回归（无根 conftest，直接 pytest 跑）
 docker/                  开发容器：dev.Dockerfile / compose.dev.yaml / entrypoint.sh
@@ -93,7 +93,7 @@ source scripts/env.sh
    bash scripts/dev.sh py <args>   # 用项目 venv 的 python 跑任意命令
    bash scripts/dev.sh shell       # 开一个已激活环境的交互 shell
    ```
-2. **自动激活**：本机 `~/.bashrc` 末尾已追加 `_yamato_autoenv` 钩子（PROMPT_COMMAND）——`cd` 进仓库自动 `source scripts/env.sh`，离开自动还原 PATH 与全部缓存变量（含 `HF_HOME` 等）。改动 `~/.bashrc` 后开新终端生效；不需要了就删掉那段。
+2. **自动激活**：本机 `~/.bashrc` 末尾已追加 `_nbhx_autoenv` 钩子（PROMPT_COMMAND）——`cd` 进仓库自动 `source scripts/env.sh`，离开自动还原 PATH 与全部缓存变量（含 `HF_HOME` 等）。改动 `~/.bashrc` 后开新终端生效；不需要了就删掉那段。
 
 **用 uv 管理这个环境**（本机 uv 0.12.x，装在 `~/.local/bin/uv`；仓库没有 `pyproject.toml`，所以用的是 pip 兼容模式 `uv pip ...`，不是 `uv add/lock/sync` 项目模式）：
 
@@ -170,10 +170,10 @@ uv cache dir / size / prune
   - 搬 RAG 时注意这几个**隐藏依赖**（元数据没声明、代码里才 import，容易被漏掉）：`psycopg2-binary`（`app/core/database.py` 的同步 engine 用，**留在主清单**）、`asyncpg`（`postgresql+asyncpg://` URL 用，主清单）、`greenlet`（SQLAlchemy async 需要）、`beautifulsoup4`/`soupsieve`（`readability`/`html_text` 运行时需要，主清单）。
 - **测试工具在 [`requirements-dev.txt`](requirements-dev.txt)**（`pytest==9.1.1` + `pytest-asyncio==1.4.0`，与 `.gitlab-ci.yml` 的 pytest job 对齐），`setup_local_env.sh` 会自动装。pytest 结果以当前分支实际输出为准，历史数字不要当基线。
 - **无 GPU 机器**：`TORCH_INDEX=https://download.pytorch.org/whl/cpu bash scripts/setup_local_env.sh`（省约 7GB CUDA wheel）。本机有 RTX 5090（驱动 580 / CUDA 13.0），装的是 cu130 版本，用 `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"` 验证。
-- **解释器只用 `.venv`**：`scripts/start_backend.sh` 按 `VENV_DIR` → `~/桌面/yamatoenv` → `~/yamatoenv` → `<repo>/.venv` → `<repo>/venv` 顺序解析，本仓库命中 `.venv`。
+- **解释器只用 `.venv`**：`scripts/start_backend.sh` 按 `VENV_DIR` → `~/桌面/nbhxenv` → `~/nbhxenv` → `<repo>/.venv` → `<repo>/venv` 顺序解析，本仓库命中 `.venv`。
 
 **本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY`/`CHAT_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
-- **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `yamato_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
+- **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `nbhx_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
 - **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / Qwen3.6-35B / Qwen3-8B / DOTS-OCR）：本机不跑这些模型，走 HTTP API；`.env` 里现有的 `localhost:80` 是**错误占位值**（这台机器的 80 端口是 GitLab），真实网关地址待定。本机**只**跑 `PaddleOCR` 与 `TagGenerator`（两者正在拆成独立容器，见 issue #9 / #10），它们才是 GPU 的用途。
 
 **MinIO 对账只扫保留功能的 `temp/`、`images/` 前缀**：历史功能曾用过的前缀不再纳入对账，也不再输出相关登记告警；已删历史对象不会被主动删除。

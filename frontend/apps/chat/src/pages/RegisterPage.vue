@@ -67,7 +67,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Input, useToast } from '@yamato/components'
+import { Input, useToast } from '@nbhx/components'
 import { register } from '../services/auth'
 
 const router = useRouter()
@@ -115,27 +115,27 @@ const handleSubmit = async () => {
   justify-content: center;
   width: 100%;
   height: 100vh;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
   padding: 24px;
 }
 
 .register-card {
   width: min(460px, 100%);
   padding: 34px 32px 30px;
-  border-radius: var(--yamato-radius-lg);
+  border-radius: var(--nbhx-radius-lg);
   background: #ffffff;
-  box-shadow: var(--yamato-shadow-card);
+  box-shadow: var(--nbhx-shadow-card);
   box-sizing: border-box;
 }
 
 .register-card__title {
   margin: 0 0 8px;
-  font-family: var(--yamato-font-display);
+  font-family: var(--nbhx-font-display);
   font-size: 34px;
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: 0;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .register-card__subtitle {
@@ -143,7 +143,7 @@ const handleSubmit = async () => {
   font-size: 15px;
   line-height: 1.6;
   letter-spacing: normal;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
 }
 
 .register-form {
@@ -162,12 +162,12 @@ const handleSubmit = async () => {
   font-size: 14px;
   font-weight: 500;
   letter-spacing: normal;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
 }
 
 .required {
   font-style: normal;
-  color: var(--yamato-color-danger);
+  color: var(--nbhx-color-danger);
 }
 
 .register-form__input {
@@ -179,8 +179,8 @@ const handleSubmit = async () => {
   width: 100%;
   min-height: 42px;
   border: none;
-  border-radius: var(--yamato-radius-md);
-  background: var(--yamato-color-accent);
+  border-radius: var(--nbhx-radius-md);
+  background: var(--nbhx-color-accent);
   color: #ffffff;
   font-size: 16px;
   line-height: 1;
@@ -190,7 +190,7 @@ const handleSubmit = async () => {
   transition: background 0.2s ease, transform 0.1s ease, opacity 0.2s ease, box-shadow 0.2s ease;
 
   &:hover:not(:disabled) {
-    background: var(--yamato-color-accent-hover);
+    background: var(--nbhx-color-accent-hover);
   }
 
   &:active:not(:disabled) {
@@ -199,7 +199,7 @@ const handleSubmit = async () => {
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:disabled {
@@ -211,12 +211,12 @@ const handleSubmit = async () => {
 .register-card__footer {
   margin: 20px 0 0;
   font-size: 14px;
-  color: var(--yamato-color-text-secondary);
+  color: var(--nbhx-color-text-secondary);
   text-align: center;
 }
 
 .register-card__link {
-  color: var(--yamato-color-link);
+  color: var(--nbhx-color-link);
   text-decoration: none;
   font-weight: 400;
 

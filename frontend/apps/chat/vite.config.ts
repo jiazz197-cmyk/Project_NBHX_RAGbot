@@ -59,7 +59,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': resolve(__dirname, './src'),
-        '@yamato/components': resolve(root, './packages/components'),
+        '@nbhx/components': resolve(root, './packages/components'),
       },
     },
 

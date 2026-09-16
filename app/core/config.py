@@ -263,7 +263,7 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     MINIO_SECURE: bool = Field(False, env="MINIO_SECURE")
     # Set so minio-py does not call GetBucketLocation on presign; MinIO S3 default is us-east-1
     MINIO_REGION: str = Field("us-east-1", env="MINIO_REGION")
-    MINIO_BUCKET_NAME: str = Field("yamatodev", env="MINIO_BUCKET_NAME")
+    MINIO_BUCKET_NAME: str = Field("nbhxdev", env="MINIO_BUCKET_NAME")
     # Presigned GetObject for OCR / temp files (replaces bucket-wide anonymous read by default)
     MINIO_PRESIGN_EXPIRES_HOURS: int = Field(12, ge=1, le=168, env="MINIO_PRESIGN_EXPIRES_HOURS")
     # Override TLS for presign only (e.g. internal MINIO_ON https but public http). None = infer from URL or MINIO_SECURE

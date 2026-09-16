@@ -4,8 +4,8 @@
   </div>
   <div v-else id="app" class="app-shell">
     <Sidebar
-      title="yamato"
-      logo-url="/yamato_icon.png"
+      title="NBHX"
+      logo-url="/nbhx_icon.png"
       :user-name="userName"
       :user-avatar-url="userAvatarUrl"
       user-desc="在线"
@@ -52,7 +52,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Sidebar, ConfirmDialog } from '@yamato/components'
+import { Sidebar, ConfirmDialog } from '@nbhx/components'
 import { config } from './config'
 import { useIdleTimer } from './composables/useIdleTimer'
 import { clearAuthTokenFromStorage, getAuthTokenFromStorage } from './services/token_storage'
@@ -146,21 +146,21 @@ watch(isShellFreePage, (onShellFreePage) => {
   width: 100%;
   height: 100vh;
   overflow: hidden;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
 }
 
 .login-shell {
   width: 100%;
   height: 100vh;
   overflow: hidden;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
 }
 
 .app-main {
   height: 100%;
   padding-left: 224px;
   overflow: hidden;
-  background: var(--yamato-color-bg-light);
+  background: var(--nbhx-color-bg-light);
 }
 
 .sidebar-extra {
@@ -183,8 +183,8 @@ watch(isShellFreePage, (onShellFreePage) => {
   align-items: center;
   height: 38px;
   padding: 0 14px;
-  border-radius: var(--yamato-radius-sm);
-  color: var(--yamato-color-text-secondary);
+  border-radius: var(--nbhx-radius-sm);
+  color: var(--nbhx-color-text-secondary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 400;
@@ -196,8 +196,8 @@ watch(isShellFreePage, (onShellFreePage) => {
   }
 
   &.is-active {
-    background: var(--yamato-color-accent-soft);
-    color: var(--yamato-color-accent);
+    background: var(--nbhx-color-accent-soft);
+    color: var(--nbhx-color-accent);
     font-weight: 600;
   }
 }
@@ -205,23 +205,23 @@ watch(isShellFreePage, (onShellFreePage) => {
 .logout-btn {
   min-height: 28px;
   padding: 0 12px;
-  border-radius: var(--yamato-radius-pill);
+  border-radius: var(--nbhx-radius-pill);
   border: 1px solid rgba(201, 100, 66, 0.32);
   background: rgba(201, 100, 66, 0.12);
-  color: var(--yamato-color-accent);
+  color: var(--nbhx-color-accent);
   font-size: 12px;
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
 
   &:hover {
-    background: var(--yamato-color-accent-soft-strong);
+    background: var(--nbhx-color-accent-soft-strong);
     border-color: rgba(201, 100, 66, 0.44);
   }
 
   &:focus-visible {
     outline: none;
-    box-shadow: var(--yamato-focus-ring);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &:active {

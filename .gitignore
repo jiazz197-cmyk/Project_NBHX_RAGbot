@@ -62,3 +62,6 @@ node_modules/
 infra-migration/
 
 docs/issues
+
+# 本地进度清单（issue-<n>-progress.md）：只作本机工作记录，不入库
+issue-*-progress.md

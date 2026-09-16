@@ -17,7 +17,7 @@ FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1}"
 SUPER_USER="${SUPER_USER:-superuser}"
 SUPER_PASS="${SUPER_PASS:-superuser.5001}"
 RUN_ID="${RUN_ID:-issue6_smoke_$(date +%Y%m%d_%H%M%S)}"
-WORKDIR="${WORKDIR:-/tmp/yamato_issue6_smoke_$RUN_ID}"
+WORKDIR="${WORKDIR:-/tmp/nbhx_issue6_smoke_$RUN_ID}"
 
 mkdir -p "$WORKDIR"
 

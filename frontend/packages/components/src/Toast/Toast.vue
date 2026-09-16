@@ -92,10 +92,10 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 20px;
-  border-radius: var(--yamato-radius-sm);
+  border-radius: var(--nbhx-radius-sm);
   background: #ffffff;
-  border: 1px solid var(--yamato-color-border-subtle);
-  box-shadow: var(--yamato-shadow-card);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  box-shadow: var(--nbhx-shadow-card);
   z-index: 9999;
   max-width: 500px;
   min-width: 300px;
@@ -113,30 +113,30 @@ onMounted(() => {
     flex: 1;
     font-size: 15px;
     line-height: 1.6;
-    color: var(--yamato-color-text-primary);
+    color: var(--nbhx-color-text-primary);
   }
 
   &--success {
     .toast__icon {
-      color: var(--yamato-color-success);
+      color: var(--nbhx-color-success);
     }
   }
 
   &--error {
     .toast__icon {
-      color: var(--yamato-color-danger);
+      color: var(--nbhx-color-danger);
     }
   }
 
   &--warning {
     .toast__icon {
-      color: var(--yamato-color-warning);
+      color: var(--nbhx-color-warning);
     }
   }
 
   &--info {
     .toast__icon {
-      color: var(--yamato-color-accent);
+      color: var(--nbhx-color-accent);
     }
   }
 }

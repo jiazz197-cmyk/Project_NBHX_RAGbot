@@ -123,25 +123,25 @@ watch(
 .input {
   width: 100%;
   padding: 10px 14px;
-  border: 1px solid var(--yamato-color-border-subtle);
-  border-radius: var(--yamato-radius-sm);
+  border: 1px solid var(--nbhx-color-border-subtle);
+  border-radius: var(--nbhx-radius-sm);
   box-sizing: border-box;
   font-size: 16px;
   line-height: 1.6;
   letter-spacing: normal;
-  color: var(--yamato-color-text-primary);
+  color: var(--nbhx-color-text-primary);
   outline: none;
   transition: all 0.2s ease;
   background: #ffffff;
 
   &:focus {
-    border-color: var(--yamato-color-accent);
-    box-shadow: var(--yamato-focus-ring);
+    border-color: var(--nbhx-color-accent);
+    box-shadow: var(--nbhx-focus-ring);
   }
 
   &--disabled {
-    background: var(--yamato-color-surface-alt);
-    color: var(--yamato-color-text-muted);
+    background: var(--nbhx-color-surface-alt);
+    color: var(--nbhx-color-text-muted);
     cursor: not-allowed;
     opacity: 0.72;
   }
@@ -189,7 +189,7 @@ watch(
   }
 
   &::placeholder {
-    color: var(--yamato-color-text-muted);
+    color: var(--nbhx-color-text-muted);
   }
 }
 </style>

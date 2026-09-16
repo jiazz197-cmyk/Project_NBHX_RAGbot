@@ -273,7 +273,7 @@ async def lifespan(app: FastAPI):
         try:
             if hasattr(app.state, "rag") and app.state.rag:
                 try:
-                    from app.adapters.ragsystem.retriever_for_yamato import ModelManager
+                    from app.adapters.ragsystem.retriever_for_nbhx import ModelManager
 
                     ModelManager().clear_cache()
                 except Exception as mm_exc:

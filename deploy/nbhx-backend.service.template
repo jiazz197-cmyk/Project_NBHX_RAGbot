@@ -1,8 +1,8 @@
-# Yamato 后端 systemd 服务单元（模板）。
-# 由 scripts/install_systemd.sh 渲染后安装到 /etc/systemd/system/yamato-backend.service。
+# NBHX 后端 systemd 服务单元（模板）。
+# 由 scripts/install_systemd.sh 渲染后安装到 /etc/systemd/system/nbhx-backend.service。
 # 占位符：__ROOT__ / __USER__ / __VENV_DIR__
 [Unit]
-Description=Yamato AI Backend (uvicorn)
+Description=NBHX AI Backend (uvicorn)
 Documentation=file://__ROOT__/README.md
 # Docker 容器（nginx/postgres/redis/minio/dify）靠 restart=always 自启，
 # 这里仅在 docker.service 之后拉起，并等待网络就绪。
@@ -38,7 +38,7 @@ TimeoutStopSec=60
 KillSignal=SIGINT
 KillMode=mixed
 
-# 日志走 journald：journalctl -u yamato-backend -f
+# 日志走 journald：journalctl -u nbhx-backend -f
 StandardOutput=journal
 StandardError=journal
 

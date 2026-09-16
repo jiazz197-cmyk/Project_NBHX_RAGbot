@@ -529,7 +529,7 @@ class RAGRetrieverSystem:
                     logger.debug("PGVectorStore 缓存已清理")
 
             try:
-                from app.adapters.ragsystem.retriever_for_yamato import ModelManager
+                from app.adapters.ragsystem.retriever_for_nbhx import ModelManager
 
                 ModelManager().clear_cache()
             except Exception as e:
