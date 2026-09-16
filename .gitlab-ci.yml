@@ -46,8 +46,9 @@ pytest:
       fastapi==0.116.1 starlette==0.47.3 SQLAlchemy==2.0.43 PyJWT==2.10.1
       pydantic==2.12.3 pydantic-settings==2.10.1 bcrypt==5.0.0
       psycopg2-binary==2.9.11 redis==7.0.1 asyncpg==0.31.0 openpyxl==3.1.5
-      tenacity==9.1.2 miniopy-async==1.23.5 minio==7.2.16 urllib3==2.5.0
-      python-multipart==0.0.20 email-validator==2.3.0 dnspython==2.8.0
+      tenacity==9.1.2 httpx==0.28.1 miniopy-async==1.23.5 minio==7.2.16
+      urllib3==2.5.0 python-multipart==0.0.20 email-validator==2.3.0
+      dnspython==2.8.0
     - pytest -q --junitxml=pytest-report.xml
   artifacts:
     when: always
