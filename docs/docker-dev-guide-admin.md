@@ -225,8 +225,8 @@ docker system df                                                # 磁盘总览
 |---|---|---|
 | PaddleOCR 拆成独立容器 | #9 | 本地 OCR 现在走 CPU（慢）；完成后 dev 镜像瘦 3.1GB |
 | TagGenerator 拆成独立容器 | #10 | 完成后可去 torch/nvidia（再瘦 5.4GB），dev 容器彻底无 GPU 需求 |
-| 前端 dev 网络可配置化 | #12 | `VITE_WS_BASE_URL=ws://localhost:8000` 写死，多人多端口时 WS 可能连错 |
-| `.env.production` 泄露密钥 | #13 | 已提交的历史聊天服务 key，需轮换 + 移出 git |
+| ~~前端 dev 网络可配置化~~ | #12 | ✅ 已完成（2026-09-16）：WS 默认走同源 vite 代理，多人端口实测互不串；`.env` 已拆分（模板 `env.example`），详见 `docs/issues/004` |
+| `.env.production` 泄露密钥 | #13 | 已移出 git 跟踪并补 `.gitignore` 的 `.env.*` 规则（2026-09-16）；历史 key 轮换 / 历史清理仍待做，见 `docs/issues/005` |
 | 工作副本是否迁 NVMe | #11 | 实测**不必**（venv/缓存已在 NVMe，源码 ~3MB 留在 HDD 无感） |
 
 ---

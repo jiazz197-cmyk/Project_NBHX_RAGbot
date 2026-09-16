@@ -18,7 +18,7 @@
                                      │              │ host.docker.internal                  │
                                      │  infra（已有，不动）：pgvector:5433 / redis:6379       │
                                      │                      minio:9000                       │
-                                     │  外部推理 API：DOTS-OCR / BGE-M3 / Reranker / Qwen     │
+                                     │  外部推理 API：BGE-M3 / Reranker / Qwen               │
                                      │  （过渡期）PaddleOCR 仍在进程内；TagGenerator 已容器化  │
                                      └──────────────────────────────────────────────────────┘
 ```
@@ -95,10 +95,10 @@ bash scripts/dev.sh docker guard
 | 你想改的东西 | 改哪个文件 | 为什么 |
 |---|---|---|
 | 数据库/Redis/MinIO 地址、账号密码、密钥、JWT、限流、日志级别… (**应用配置**) | **仓库根 `.env`**（每人一份，gitignored） | 由 `app/core/config.py` 的 `settings` 读取；模板见 `.env.example` |
-| 外部推理网关地址（BGE-M3 / Reranker / Qwen / DOTS-OCR） | 先看下面「谁来覆盖谁」——**要覆盖成容器可达的地址就写 compose** | 容器里的 `localhost` 不是宿主 |
+| 外部推理网关地址（BGE-M3 / Reranker / Qwen） | 先看下面「谁来覆盖谁」——**要覆盖成容器可达的地址就写 compose** | 容器里的 `localhost` 不是宿主 |
 | 端口映射、挂载、网络别名、命令、`gpus`、容器内环境变量 (**容器运行时**) | **`docker/compose.dev.yaml`**（入库，改动会影响所有人） | 这是容器编排，不是应用配置 |
 | **只跟你有关**的运行时参数（宿主端口、用哪个 registry 镜像） | **`.env.dev`**（`cp .env.dev.example .env.dev`，已 gitignore） | `dev.sh` 会 `set -a; source` 它，覆盖 compose 里的 `${...}` 默认值 |
-| 前端 dev server 的 `VITE_*` | **`frontend/apps/chat/.env`** | vite 用 `loadEnv` 从那个目录读（清理计划见 issue #12） |
+| 前端 dev server 的 `VITE_*` | **`frontend/apps/chat/.env`** | vite 用 `loadEnv` 从那个目录读（模板见同目录 `env.example`；issue #12 已完成） |
 
 ### 谁来覆盖谁（优先级）
 
@@ -334,5 +334,5 @@ du -sh .        # 13G  ← 真实占用（每个 inode 只算一次）
   → 两者完成后，dev 镜像可再瘦 ~8.5 GB（paddle 3.1G + torch/nvidia 5.4G）：
     实测当前镜像 **磁盘占 19 GB / 按层汇总（≈推拉传输量）12.3 GB**，
     拆掉后按层估算降到 **~4 GB 量级**，Dockerfile 里删掉对应层即可。
-- **#12**：前端 dev 网络（`VITE_WS_BASE_URL` 写死 8000、`.env` 拆分）。
+- ~~**#12**：前端 dev 网络（`VITE_WS_BASE_URL` 写死 8000、`.env` 拆分）~~ ✅ **已完成（2026-09-16）**：`VITE_WS_BASE_URL` 默认不再设置，`src/services/ws.ts` 空值回退 `window.location`（同源），WS 经 vite 代理（`ws: true`）到同容器后端——宿主端口实测 101 建连、多人端口互不串；前端 `.env` 只含 `VITE_*`（模板 `env.example`），缺变量报错自导航。结论与验收记录见 `docs/issues/004-frontend-dev-networking-hardcoded.md`。
 - 外部推理 API 的真实地址确定后，加进 `docker/compose.dev.yaml` 的 `environment:`（覆盖 `.env`，容器里的 `localhost` 不是宿主）。

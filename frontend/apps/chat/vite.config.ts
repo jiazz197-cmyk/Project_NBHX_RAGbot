@@ -9,9 +9,13 @@ const root = resolve(__dirname, '../..')
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
 
-  if (!env.VITE_PORT) throw new Error('VITE_PORT is required in .env file')
-  if (!env.VITE_BACKEND_TARGET) throw new Error('VITE_BACKEND_TARGET is required in .env file')
-  if (!env.VITE_API_BASE_URL) throw new Error('VITE_API_BASE_URL is required in .env file')
+  // 报错要能自导航：直接告诉新人模板在哪、复制到哪（issue #12）
+  const missingEnv = (name: string) =>
+    `${name} is required in .env — copy frontend/apps/chat/env.example to frontend/apps/chat/.env and set it`
+
+  if (!env.VITE_PORT) throw new Error(missingEnv('VITE_PORT'))
+  if (!env.VITE_BACKEND_TARGET) throw new Error(missingEnv('VITE_BACKEND_TARGET'))
+  if (!env.VITE_API_BASE_URL) throw new Error(missingEnv('VITE_API_BASE_URL'))
 
   const port = Number(env.VITE_PORT)
   if (isNaN(port) || port <= 0) throw new Error('VITE_PORT must be a valid positive number')

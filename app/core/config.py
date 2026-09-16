@@ -275,7 +275,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
 
     OCR_PDFTEXT_ENABLED: bool = Field(True, env="OCR_PDFTEXT_ENABLED")
     OCR_PDFTEXT_TIMEOUT: int = Field(30, ge=5, le=120, env="OCR_PDFTEXT_TIMEOUT")
-    OCR_DOTSOCR_MAX_TOKENS: int = Field(4096, ge=1024, le=16384, env="OCR_DOTSOCR_MAX_TOKENS")
 
     HTTP_CLIENT_TIMEOUT: float = Field(30.0, env="HTTP_CLIENT_TIMEOUT")
     HTTP_CLIENT_MAX_CONNECTIONS: int = Field(100, env="HTTP_CLIENT_MAX_CONNECTIONS")
@@ -360,8 +359,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
 
     # 网关 Bearer Key；为空时不发送 Authorization 头（兼容无鉴权的旧端点）
     AI_INFERENCE_API_KEY: str = Field("", env="AI_INFERENCE_API_KEY")
-    
-    DOTS_OCR_ENDPOINT: str = Field("http://10.10.216.232:8001/v1/chat/completions", env="DOTS_OCR_ENDPOINT")
 
     # 独立 tagger 容器（issue #10）：主应用不再在进程内跑 SentenceTransformer /
     # KeyBERT，标签提取走 HTTP。请求 {"text", "num_tags", "diversity"}，

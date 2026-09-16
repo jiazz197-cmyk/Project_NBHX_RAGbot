@@ -16,12 +16,11 @@ build/
 # Generated nginx config (from nginx/nginx.conf.template; see scripts/render_nginx_conf.sh)
 nginx/nginx.conf
 
-# Environment variables
+# Environment variables（.env.* 兜底：历史曾把 .env.production 漏进了版本库）
 .env
-.env.local
-.env.*.local
-.env.bak.*
-.env.backup
+.env.*
+!.env.example
+!.env.*.example
 
 # Charts output
 charts1/
@@ -65,3 +64,9 @@ docs/issues
 
 # 本地进度清单（issue-<n>-progress.md）：只作本机工作记录，不入库
 issue-*-progress.md
+
+.pytest_cache/
+
+.github/
+
+.github/workflows/

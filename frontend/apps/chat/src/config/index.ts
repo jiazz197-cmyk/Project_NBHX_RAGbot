@@ -13,10 +13,14 @@ interface AppConfig {
   settingsStorageKey: string
 }
 
+// 报错要能自导航：直接告诉新人模板在哪、复制到哪（issue #12）
+const missingEnv = (name: string) =>
+  `${name} is required in .env — copy frontend/apps/chat/env.example to frontend/apps/chat/.env and set it`
+
 const getConfig = (): AppConfig => {
   const port = import.meta.env.VITE_PORT
   if (!port) {
-    throw new Error('VITE_PORT is required in .env file')
+    throw new Error(missingEnv('VITE_PORT'))
   }
 
   const portNumber = Number(port)
@@ -26,27 +30,27 @@ const getConfig = (): AppConfig => {
 
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   if (!apiBaseUrl) {
-    throw new Error('VITE_API_BASE_URL is required in .env file')
+    throw new Error(missingEnv('VITE_API_BASE_URL'))
   }
 
   const loginEndpoint = import.meta.env.VITE_LOGIN_ENDPOINT
   if (!loginEndpoint) {
-    throw new Error('VITE_LOGIN_ENDPOINT is required in .env file')
+    throw new Error(missingEnv('VITE_LOGIN_ENDPOINT'))
   }
 
   const meEndpoint = import.meta.env.VITE_ME_ENDPOINT
   if (!meEndpoint) {
-    throw new Error('VITE_ME_ENDPOINT is required in .env file')
+    throw new Error(missingEnv('VITE_ME_ENDPOINT'))
   }
 
   const authTokenStorageKey = import.meta.env.VITE_AUTH_TOKEN_KEY
   if (!authTokenStorageKey) {
-    throw new Error('VITE_AUTH_TOKEN_KEY is required in .env file')
+    throw new Error(missingEnv('VITE_AUTH_TOKEN_KEY'))
   }
 
   const settingsStorageKey = import.meta.env.VITE_SETTINGS_STORAGE_KEY
   if (!settingsStorageKey) {
-    throw new Error('VITE_SETTINGS_STORAGE_KEY is required in .env file')
+    throw new Error(missingEnv('VITE_SETTINGS_STORAGE_KEY'))
   }
 
   return {

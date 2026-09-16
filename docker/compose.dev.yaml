@@ -67,7 +67,7 @@ services:
       REDIS_HOST: host.docker.internal
       MINIO_ENDPOINT: host.docker.internal:9000
       MINIO_APP_ENDPOINT: host.docker.internal:9000
-      # 外部推理服务（BGE-M3 / Reranker / Qwen / DOTS-OCR）地址待定，
+      # 外部推理服务（BGE-M3 / Reranker / Qwen）地址待定，
       # 定了之后加在这里（同样覆盖 .env）；容器里的 localhost 不是宿主。
       # 独立 tagger 容器（issue #10）在宿主 8004 暴露：dev 容器与 tagenerator
       # **不在同一个 docker 网络**（前者 nbhx-<user>_default，后者 infra_infra-net），

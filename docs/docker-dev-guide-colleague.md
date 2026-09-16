@@ -153,7 +153,7 @@ bash scripts/dev.sh docker build && bash scripts/dev.sh docker up
 | `ModuleNotFoundError` / 缺包 | 依赖过期：`check` → `pull`（或 `build`）→ `up` |
 | `[info] PyTorch CUDA 不可用` | **正常**，开发容器不用 GPU（OCR/模型走独立服务，issue #9/#10） |
 | 前端报 `Proxy target unavailable: http://127.0.0.1:8000` | 后端没起：另开终端 `dev.sh docker backend` |
-| RAG/OCR/嵌入 探活失败 | **预期内**：这些模型服务在外部，`.env` 里的 `localhost:80` 是待替换的占位值 |
+| RAG/OCR/嵌入 探活失败 | **预期内**：这些模型服务在外部（GPUStack 网关等），dev 容器里不可达时需在 compose 覆盖地址（见 docker-dev-env.md §5.5） |
 | `dev.sh backend` 报「宿主环境不存在」 | 宿主 `.venv` 已删（容器化后不需要）→ 用 `dev.sh docker backend` |
 | 保存文件后宿主里属主变 root | 容器里的 VS Code 以 compose 配的用户（`user: "0"`，即 root）运行，entrypoint 的降权只作用于 `dev.sh docker ...` —— 所以**尽量在宿主编辑**；已经变 root 的文件在宿主 `sudo chown -R $USER:$USER <路径>` 修回 |
 | **「重启」** | 先看 §3.1 对号入座 —— 大多数情况**什么都不用做** |
