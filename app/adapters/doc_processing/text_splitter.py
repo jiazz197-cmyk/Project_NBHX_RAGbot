@@ -3,25 +3,14 @@ import os
 from typing import List, Optional, Dict, Any
 
 import pandas as pd
-import torch
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sklearn.feature_extraction.text import CountVectorizer
 
-try:
-    from keybert import KeyBERT
-    from sentence_transformers import SentenceTransformer
+from .exceptions import TextSplitError
+from .tagger_client import HttpTagGeneratorClient
 
-    KEYBERT_AVAILABLE = True
-except ImportError:
-    KeyBERT = None
-    SentenceTransformer = None
-    KEYBERT_AVAILABLE = False
-
-from .exceptions import EmbeddingError, TextSplitError
-from .model_pool import BoundedInstancePool
-
-from app.core.config import settings
+from app.ports.outbound.tag_generator import TagGeneratorPort
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +18,8 @@ logger = logging.getLogger(__name__)
 def _simple_tags(text: str, num_tags: int) -> List[str]:
     """CPU 兜底标签提取（CountVectorizer，无模型依赖）。
 
-    模块级函数，供 TagGenerator 代理在池满/降级时，以及 worker 内部异常时复用。
+    tagger 服务不可用 / 熔断冷却期内使用，保证文档流程不阻塞。
+    与 tagger 容器内的同名实现保持一致的算法与参数。
     """
     try:
         vectorizer = CountVectorizer(max_features=num_tags * 2, stop_words=None, ngram_range=(1, 2))
@@ -44,135 +34,55 @@ def _simple_tags(text: str, num_tags: int) -> List[str]:
         return []
 
 
-class _TagGeneratorWorker:
-    """真实加载模型的标签生成器（SentenceTransformer + KeyBERT + keyphrase pipeline）。
-
-    实例由全局 ``_taggen_pool`` 持有并复用；自身推理为只读，无内部状态变更。
-    ``extract_tags`` 内部已 try/except 并自带 ``_simple_tags`` 降级，正常运行不抛错，
-    故池中实例在正常归还时 release（不丢弃，避免昂贵的模型重建）。
-    """
-
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2", device: str = "auto"):
-        try:
-            # 从环境变量读取 GPU 设备配置
-            gpu_device_id = int(os.environ.get("LOCAL_MODEL_GPU_DEVICE", "0"))
-
-            if device == "auto":
-                if torch.cuda.is_available():
-                    self.device = f"cuda:{gpu_device_id}"
-                    logger.info(f"TagGenerator 将使用 GPU:{gpu_device_id}")
-                else:
-                    self.device = "cpu"
-                    logger.info("TagGenerator 将使用 CPU（CUDA 不可用）")
-            else:
-                self.device = device
-
-            if KEYBERT_AVAILABLE:
-                try:
-                    # KeyBERT 不直接收 device，需先构造指定 device 的 SentenceTransformer
-                    # 再传入，否则 sentence-transformers 默认落到 cuda:0
-                    embedder = SentenceTransformer(model_name, device=self.device)
-                    self.keyword_model = KeyBERT(model=embedder)
-                except Exception:
-                    logger.warning("KeyBERT 指定模型加载失败，尝试默认模型", exc_info=True)
-                    try:
-                        fallback_embedder = SentenceTransformer("all-MiniLM-L6-v2", device=self.device)
-                        self.keyword_model = KeyBERT(model=fallback_embedder)
-                    except Exception:
-                        logger.warning("KeyBERT 默认模型加载失败", exc_info=True)
-                        self.keyword_model = KeyBERT()
-            else:
-                self.keyword_model = None
-
-            try:
-                # pipeline 使用指定的 GPU 设备
-                pipeline_device = gpu_device_id if self.device.startswith("cuda") else -1
-                self.keyphrase_model = pipeline(
-                    "token-classification",
-                    model="ml6team/keyphrase-extraction-kbir-inspec",
-                    device=pipeline_device,
-                )
-                if pipeline_device >= 0:
-                    logger.info(f"Keyphrase pipeline 使用 GPU:{pipeline_device}")
-            except Exception:
-                logger.warning("Keyphrase pipeline 加载失败，将跳过备用模型", exc_info=True)
-                self.keyphrase_model = None
-        except Exception as exc:
-            raise EmbeddingError(f"初始化 TagGenerator 失败: {exc}") from exc
-
-    def extract_tags(self, text: str, num_tags: int = 5, diversity: float = 0.5) -> List[str]:
-        if not text.strip():
-            return []
-
-        tags: List[str] = []
-        try:
-            if self.keyword_model is not None:
-                keywords = self.keyword_model.extract_keywords(
-                    text,
-                    keyphrase_ngram_range=(1, 2),
-                    stop_words=None,
-                    top_n=num_tags * 2,
-                    use_mmr=True,
-                    diversity=diversity,
-                )
-                tags = [kw[0] for kw in keywords if kw[1] > 0.2]
-
-            if len(tags) < num_tags and self.keyphrase_model is not None:
-                additional_tags = list(
-                    {
-                        item["word"]
-                        for item in self.keyphrase_model(text)
-                        if item.get("score", 0) > 0.3
-                    }
-                )
-                tags.extend(additional_tags)
-                tags = list(set(tags))
-
-            if len(tags) < num_tags:
-                tags.extend(_simple_tags(text, num_tags - len(tags)))
-            return tags[:num_tags]
-        except Exception as exc:
-            logger.warning("标签生成失败，使用降级策略: %s", exc, exc_info=True)
-            return _simple_tags(text, num_tags)
-
-
-# 全局有界池：所有文档处理任务共享 max_size 个 worker，把 TagGenerator 的
-# ~1.9GB 显存占用封顶为常数（max_size 份），而非每任务一份线性增长。
-_taggen_pool = BoundedInstancePool(
-    factory=_TagGeneratorWorker,
-    max_size=settings.TAGGENERATOR_POOL_MAX_SIZE,
-    name="tag_generator",
-    logger=logger,
-)
-
-
 class TagGenerator:
-    """标签生成器代理（薄壳）：``extract_tags`` 时从全局池借一个 worker 委托。
+    """标签生成器代理（薄壳）：委托独立 tagger 服务（``TagGeneratorPort``）。
 
-    保留原 ``__init__(model_name, device)`` 签名以兼容 pipeline.py 的构造调用，
-    但自身不再加载任何模型——模型由 ``_taggen_pool`` 中的 worker 持有并复用。
-    池满超时 / 借取失败时退化为 CPU ``_simple_tags``，文档仍可处理。
+    模型（SentenceTransformer + KeyBERT + keyphrase pipeline）与 GPU 都在 tagger
+    容器里，主应用进程不再 import torch、不再持有模型池——``model_name`` /
+    ``device`` 仅保留为向后兼容 ``pipeline.py`` 构造调用的占位参数，真正的模型与
+    设备由容器侧 ``TAGGER_MODEL_NAME`` / ``TAGGER_DEVICE`` 决定。
+
+    降级策略（与拆分前一致）：服务不可达 / 返回异常 / 熔断冷却期内，退化为本地
+    CPU ``_simple_tags``，文档仍可处理；失败日志每个实例只告警一次，避免逐
+    chunk 刷屏。
     """
 
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2", device: str = "auto"):
-        # 代理不加载模型；参数仅为兼容旧签名，由 worker 内部按环境变量取 device。
+    def __init__(
+        self,
+        model_name: str = "paraphrase-multilingual-MiniLM-L12-v2",
+        device: str = "auto",
+        client: Optional[TagGeneratorPort] = None,
+    ):
         self._model_name = model_name
         self._device = device
+        self._client = client
+        self._degraded_logged = False
+
+    @property
+    def client(self) -> TagGeneratorPort:
+        """惰性构造默认 HTTP 客户端；显式注入时以注入的 client 为准（便于测试）。"""
+        if self._client is None:
+            self._client = HttpTagGeneratorClient()
+        return self._client
 
     def extract_tags(self, text: str, num_tags: int = 5, diversity: float = 0.5) -> List[str]:
         if not text.strip():
             return []
         try:
-            with _taggen_pool.acquire(
-                timeout=settings.TAGGENERATOR_ACQUIRE_TIMEOUT_SEC
-            ) as worker:
-                if worker is None:
-                    # 池满超时 / 创建失败 → CPU 兜底，不阻断文档处理。
-                    return _simple_tags(text, num_tags)
-                return worker.extract_tags(text, num_tags, diversity)
-        except Exception as e:
-            logger.warning("TagGenerator 降级到简单标签: %s", e)
+            tags = self.client.extract_tags(text, num_tags, diversity)
+        except Exception as exc:
+            self._log_degraded(exc)
             return _simple_tags(text, num_tags)
+        # 上一次降级过、这次成功 → 允许下次失败时重新告警
+        self._degraded_logged = False
+        return tags
+
+    def _log_degraded(self, exc: Exception) -> None:
+        if self._degraded_logged:
+            logger.debug("TagGenerator 仍不可用，继续使用本地兜底标签: %s", exc)
+            return
+        self._degraded_logged = True
+        logger.warning("TagGenerator 服务不可用，降级为本地简单标签: %s", exc)
 
 
 class TokenAwareTextSplitter:

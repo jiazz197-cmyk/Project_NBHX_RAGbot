@@ -96,13 +96,31 @@ class LlmCallFailedError(RuntimeError):
 
 
 def _llm_api_key() -> str:
-    """Reuse the shared inference-gateway key when one is configured."""
+    """Sub-LLM key, falling back to the main-LLM key then a placeholder."""
 
-    return (settings.AI_INFERENCE_API_KEY or "").strip() or "not-needed"
+    return (
+        (settings.SUB_LLM_API_KEY or "").strip()
+        or (settings.MAIN_LLM_API_KEY or "").strip()
+        or "not-needed"
+    )
+
+
+def _sub_llm_extra_body() -> Dict[str, Any]:
+    """Qwen3 hybrid-thinking switch for the sub LLM.
+
+    Default (``SUB_LLM_ENABLE_THINKING=False``) sends
+    ``chat_template_kwargs.enable_thinking=false`` — the toggle verified against
+    the Sophnet gateway. When thinking is enabled nothing is sent, so the
+    gateway default applies.
+    """
+
+    if settings.SUB_LLM_ENABLE_THINKING:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 class ContextCompressor:
-    """Compress recent/older dialogue lists with an OpenAI-compatible LLM."""
+    """Compress recent/older dialogue lists with the sub LLM (``SUB_LLM_*``)."""
 
     def __init__(
         self,
@@ -111,8 +129,12 @@ class ContextCompressor:
         temperature: float = 0.3,
         max_tokens: Optional[int] = None,
     ):
-        self.base_url = base_url or settings.QWEN3_6_35B_API_URL
-        self.model_name = model_name or settings.QWEN3_6_35B_MODEL
+        self.base_url = (
+            base_url or settings.SUB_LLM_API_URL or settings.MAIN_LLM_API_URL
+        )
+        self.model_name = (
+            model_name or settings.SUB_LLM_MODEL or settings.MAIN_LLM_MODEL
+        )
         self.temperature = temperature
         self.max_tokens = (
             int(max_tokens)
@@ -127,6 +149,7 @@ class ContextCompressor:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             timeout=float(settings.LANGCHAIN_CHAT_TIMEOUT_SEC),
+            extra_body=_sub_llm_extra_body(),
         )
 
     async def compress(self, context_data: Dict[str, Any]) -> str:
@@ -202,10 +225,10 @@ class ContextCompressor:
             if _is_upstream_html_response(exc):
                 logger.error(
                     "Context compression: upstream LLM URL returned HTML (not JSON). "
-                    "Check QWEN3_6_35B_API_URL / LANGCHAIN_CHAT_BASE_URL and the reverse proxy."
+                    "Check SUB_LLM_API_URL / MAIN_LLM_API_URL and the reverse proxy."
                 )
                 raise LlmEndpointMisconfiguredError(
-                    "LLM 接口返回了网页而非 API 结果。请检查 QWEN3_6_35B_API_URL 与 Nginx/网关："
+                    "LLM 接口返回了网页而非 API 结果。请检查 SUB_LLM_API_URL 与 Nginx/网关："
                     "路径需指向 OpenAI 兼容的推理服务（如 vLLM）。"
                 ) from exc
 
@@ -242,6 +265,7 @@ class ContextCompressor:
                 temperature=self.temperature,
                 max_tokens=retry_max_tokens,
                 timeout=float(settings.LANGCHAIN_CHAT_TIMEOUT_SEC),
+                extra_body=_sub_llm_extra_body(),
             )
             retry_chain = prompt | retry_llm | StrOutputParser()
             try:

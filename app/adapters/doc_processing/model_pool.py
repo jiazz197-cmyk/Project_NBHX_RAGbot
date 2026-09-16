@@ -1,4 +1,6 @@
-"""有界对象池：用于 PaddleOCR / TagGenerator 等重 GPU 模型的全局复用。
+"""有界对象池：用于 PaddleOCR 等重 GPU 模型的全局复用。
+
+（TagGenerator 已迁到独立 tagger 容器、不再走本池，见 issue #10。）
 
 泛型化（factory 注入）有界对象池。核心约束：
 
@@ -6,7 +8,7 @@
 - checkout 互斥：一个实例同一时刻只被一个线程持有。PaddleOCR 3.x 的 ``ocr()``
   非线程安全，靠这一互斥保证共享实例不崩，同时保留 ``max_size`` 路并行推理。
 - ``acquire`` 超时或 ``factory()`` 失败时返回 ``None``，调用方自行降级（OCR 跳过
-  该页 / 标签退 CPU），不抛错——重模型是降级路径，不应让任务整体失败。
+  该页），不抛错——重模型是降级路径，不应让任务整体失败。
 - 正常归还 → release 回 idle；调用期间抛异常 → discard（保守丢弃，防 CUDA 损坏
   残留进 idle 被后续线程复用）。
 """

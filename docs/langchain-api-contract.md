@@ -324,7 +324,7 @@ data: <JSON>
 | 超时 / 重试 | 摘要生成带 LLM 调用，可重试；若消息仓储为空则直接返回，不调用 LLM。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL（`user_chat_profile` 主键为内部用户 ID=JWT `sub`；消息源为 `chat_message`）、OpenAI 兼容 LLM（`QWEN3_6_35B_*`，key 复用 `AI_INFERENCE_API_KEY`）。 |
+| 依赖 | PostgreSQL（`user_chat_profile` 主键为内部用户 ID=JWT `sub`；消息源为 `chat_message`）、OpenAI 兼容 LLM（`SUB_LLM_*`，留空回退 `MAIN_LLM_*`；key 用 `SUB_LLM_API_KEY`/`MAIN_LLM_API_KEY`，默认关思考）。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、query_count、LLM 结果长度。 |
 | 实现状态 | 已完成：本地消息仓储已接通，摘要真实生成并 upsert；该会话无 query 时返回 `query_count=0/db_updated=false` 且不改动画像。 |
 | 前端调用方 | `frontend/packages/components/src/ChatSummary/useChatSummary.ts` 的 `archiveConversation()`；`ChatPage.vue` 的 `archiveChat()`。 |

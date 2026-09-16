@@ -95,12 +95,10 @@ async def shutdown_all_pools() -> None:
     except Exception as e:
         print(f"[warning] 关闭 Redis 时出错: {e}")
 
-    # 3. 文档处理模型池（PaddleOCR / TagGenerator）
+    # 3. 文档处理模型池（PaddleOCR；TagGenerator 已迁到独立 tagger 容器，无本地池）
     try:
         from app.adapters.doc_processing.doc_reader import _paddleocr_pool
-        from app.adapters.doc_processing.text_splitter import _taggen_pool
         _paddleocr_pool.close()
-        _taggen_pool.close()
         print("[success] 文档处理模型池已关闭")
     except Exception as e:
         print(f"[warning] 关闭文档处理模型池时出错: {e}")
@@ -256,6 +254,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[warning] RAG 系统初始化失败: {e}")
         app.state.rag = None
+
+    # tagger 容器探活（issue #10）：地址写错 / 容器没起 / 路径不对在启动阶段暴露，
+    # 而不是推迟到首次文档上传。同步 httpx 调用放到线程里，避免阻塞事件循环；
+    # 失败仅告警、不阻断启动——文档标签会自动降级为本地 CPU 简单标签。
+    try:
+        from app.adapters.doc_processing.tagger_client import HttpTagGeneratorClient
+
+        tagger_info = await asyncio.to_thread(HttpTagGeneratorClient().probe)
+        if tagger_info.get("fallback"):
+            print(
+                f"  - [warning] TagGenerator 服务已就绪但模型未加载，当前返回容器内 CPU 兜底标签: "
+                f"{tagger_info['endpoint']} (model={tagger_info.get('model')})"
+            )
+        else:
+            print(
+                f"  - [success] TagGenerator 服务探活成功: {tagger_info['endpoint']} "
+                f"(model={tagger_info.get('model')}, {tagger_info.get('processing_time_ms')}ms)"
+            )
+    except Exception as tagger_probe_exc:
+        print(
+            f"  - [warning] TagGenerator 服务探活失败: {tagger_probe_exc}，"
+            f"文档标签将降级为本地简单标签"
+        )
     
     yield
     

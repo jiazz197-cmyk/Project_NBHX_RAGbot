@@ -19,7 +19,7 @@
                                      │  infra（已有，不动）：pgvector:5433 / redis:6379       │
                                      │                      minio:9000                       │
                                      │  外部推理 API：DOTS-OCR / BGE-M3 / Reranker / Qwen     │
-                                     │  （过渡期）PaddleOCR / TagGenerator 仍在应用进程内      │
+                                     │  （过渡期）PaddleOCR 仍在进程内；TagGenerator 已容器化  │
                                      └──────────────────────────────────────────────────────┘
 ```
 

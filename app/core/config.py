@@ -191,9 +191,9 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
         env="KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB",
     )
 
-    # 文档处理重模型有界池上限。PaddleOCR / TagGenerator 各自一个全局池，
-    # checkout 互斥（一实例一线程）既绕开 PaddleOCR 线程安全问题，又把 GPU
-    # 显存占用从“随任务数线性增长”封顶为常数上限（5×0.8 + 5×1.9 ≈ 13.5GB）。
+    # 文档处理重模型有界池上限。PaddleOCR 一个全局池，checkout 互斥（一实例
+    # 一线程）既绕开 PaddleOCR 线程安全问题，又把 GPU 显存占用从“随任务数线性
+    # 增长”封顶为常数上限（5×0.8 ≈ 4GB）。
     # PaddleOCR 池实例数上限；0 = 禁用 OCR（PDF 仅走 pdfplumber 文本提取）。
     PADDLEOCR_POOL_MAX_SIZE: int = Field(
         5, ge=0, le=32, env="PADDLEOCR_POOL_MAX_SIZE"
@@ -201,14 +201,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # 从 PaddleOCR 池借一个实例的最长等待秒数；超时该页跳过 OCR（降级路径，不致命）。
     PADDLEOCR_ACQUIRE_TIMEOUT_SEC: int = Field(
         30, ge=1, le=300, env="PADDLEOCR_ACQUIRE_TIMEOUT_SEC"
-    )
-    # TagGenerator（SentenceTransformer + keyphrase pipeline）池实例数上限。
-    TAGGENERATOR_POOL_MAX_SIZE: int = Field(
-        5, ge=1, le=32, env="TAGGENERATOR_POOL_MAX_SIZE"
-    )
-    # 从 TagGenerator 池借一个实例的最长等待秒数；超时退化为 CPU 简单标签。
-    TAGGENERATOR_ACQUIRE_TIMEOUT_SEC: int = Field(
-        30, ge=1, le=300, env="TAGGENERATOR_ACQUIRE_TIMEOUT_SEC"
     )
 
     @property
@@ -370,29 +362,72 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     AI_INFERENCE_API_KEY: str = Field("", env="AI_INFERENCE_API_KEY")
     
     DOTS_OCR_ENDPOINT: str = Field("http://10.10.216.232:8001/v1/chat/completions", env="DOTS_OCR_ENDPOINT")
+
+    # 独立 tagger 容器（issue #10）：主应用不再在进程内跑 SentenceTransformer /
+    # KeyBERT，标签提取走 HTTP。请求 {"text", "num_tags", "diversity"}，
+    # 响应 {"tags", "model", "processing_time_ms", "fallback"}。
+    TAGGER_ENDPOINT: str = Field("http://localhost:8004/v1/tags", env="TAGGER_ENDPOINT")
+    # 单次标签请求超时（秒）。tagger 容器是单模型串行推理（内含 GPU 计算），
+    # 文档处理并发调用时会排队，故不宜过短。
+    TAGGER_TIMEOUT_SEC: int = Field(30, ge=1, le=600, env="TAGGER_TIMEOUT_SEC")
+    # 失败重试次数与间隔（仅传输层失败 / 5xx / 429 重试，4xx 直接判定失败）。
+    TAGGER_MAX_RETRIES: int = Field(2, ge=1, le=10, env="TAGGER_MAX_RETRIES")
+    TAGGER_RETRY_DELAY_SEC: int = Field(1, ge=0, le=120, env="TAGGER_RETRY_DELAY_SEC")
+    # 启动探活超时（秒）：单次最小请求，不重试。
+    TAGGER_PROBE_TIMEOUT_SEC: float = Field(
+        5.0, ge=0.5, le=60.0, env="TAGGER_PROBE_TIMEOUT_SEC"
+    )
+    # 连续失败熔断：连续 TAGGER_FAILURE_THRESHOLD 次失败后冷却 TAGGER_COOLDOWN_SEC 秒，
+    # 冷却期内直接走本地 CPU 兜底标签（不再逐 chunk 发请求）；threshold=0 关闭熔断。
+    TAGGER_FAILURE_THRESHOLD: int = Field(
+        3, ge=0, le=100, env="TAGGER_FAILURE_THRESHOLD"
+    )
+    TAGGER_COOLDOWN_SEC: int = Field(60, ge=0, le=3600, env="TAGGER_COOLDOWN_SEC")
     
     LOCAL_MODEL_GPU_DEVICE: int = Field(3, env="LOCAL_MODEL_GPU_DEVICE")
 
-    QWEN3_6_35B_API_URL: str = Field(
-        "http://localhost:80/llm/qwen36b/v1",
-        env="QWEN3_6_35B_API_URL",
-        description="OpenAI-compatible API root (…/v1) for Qwen3.6-35B; the proxy must target the inference service (vLLM), not a web frontend.",
+    # ---- OpenAI 兼容 LLM 网关（Sophnet 等）：主/辅双模型 ----
+    # 主 LLM（MAIN_LLM）：对话与编排主模型（原 QWEN3_6_35B_* 字段更名而来）。
+    MAIN_LLM_API_URL: str = Field(
+        "",
+        env="MAIN_LLM_API_URL",
+        description="OpenAI-compatible API root (…/v1) for the main LLM; the URL must target the inference API, not a web frontend.",
     )
-    QWEN3_6_35B_MODEL: str = Field(
-        "/models/Qwen3.6-35B-A3B",
-        env="QWEN3_6_35B_MODEL",
-        description="Served model id (GET /v1/models on the same base as QWEN3_6_35B_API_URL). vLLM often uses path-style ids, not Hub names.",
+    MAIN_LLM_MODEL: str = Field(
+        "",
+        env="MAIN_LLM_MODEL",
+        description="Served model id (GET /v1/models on the same base as MAIN_LLM_API_URL); case-sensitive — use the exact id the gateway reports.",
     )
+    MAIN_LLM_API_KEY: str = Field(
+        "",
+        env="MAIN_LLM_API_KEY",
+        description="Bearer key for MAIN_LLM_API_URL; empty = no Authorization header.",
+    )
+    # 辅 LLM（SUB_LLM）：memory 压缩、用户画像生成等后台任务用的小模型；
+    # 通常与 MAIN 同网关同 Key（URL/Key 留空时代码侧回退 MAIN_LLM_*）。
+    SUB_LLM_API_URL: str = Field(
+        "",
+        env="SUB_LLM_API_URL",
+        description="OpenAI-compatible API root (…/v1) for background LLM tasks (memory compression / user profiling).",
+    )
+    SUB_LLM_MODEL: str = Field(
+        "",
+        env="SUB_LLM_MODEL",
+        description="Served model id (GET /v1/models on the same base as SUB_LLM_API_URL); case-sensitive.",
+    )
+    SUB_LLM_API_KEY: str = Field(
+        "",
+        env="SUB_LLM_API_KEY",
+        description="Bearer key for SUB_LLM_API_URL; usually the same value as MAIN_LLM_API_KEY.",
+    )
+    # Qwen3 系混合思考开关：默认关闭（False 时经 chat_template_kwargs.enable_thinking=false 下发）。
+    SUB_LLM_ENABLE_THINKING: bool = Field(False, env="SUB_LLM_ENABLE_THINKING")
 
     # ---- LangChain 聊天编排预留配置（当前仅预留，未实现） ----
     LANGCHAIN_CHAT_ENABLED: bool = Field(False, env="LANGCHAIN_CHAT_ENABLED")
-    # OpenAI 兼容 LLM 根地址；默认可复用 QWEN3_6_35B_*，实现时按需改为独立网关。
-    LANGCHAIN_CHAT_BASE_URL: str = Field(
-        "http://localhost:80/llm/qwen36b/v1", env="LANGCHAIN_CHAT_BASE_URL"
-    )
-    LANGCHAIN_CHAT_MODEL: str = Field(
-        "/models/Qwen3.6-35B-A3B", env="LANGCHAIN_CHAT_MODEL"
-    )
+    # OpenAI 兼容 LLM 根地址 / served model id；留空（未配置）时实现方应回退 MAIN_LLM_*。
+    LANGCHAIN_CHAT_BASE_URL: str = Field("", env="LANGCHAIN_CHAT_BASE_URL")
+    LANGCHAIN_CHAT_MODEL: str = Field("", env="LANGCHAIN_CHAT_MODEL")
     LANGCHAIN_CHAT_TIMEOUT_SEC: float = Field(
         300.0, ge=1.0, le=3600.0, env="LANGCHAIN_CHAT_TIMEOUT_SEC"
     )

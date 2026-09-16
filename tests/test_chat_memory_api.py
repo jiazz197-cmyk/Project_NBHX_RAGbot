@@ -742,7 +742,7 @@ class TestLlmFailureHandling:
             / "message_extractor.py"
         ).read_text(encoding="utf-8")
         assert "localhost:80" not in source
-        assert "settings.QWEN3_6_35B_API_URL" in source
+        assert "settings.SUB_LLM_API_URL" in source
 
     def test_compression_maps_llm_failure_to_external_service_error(self):
         import asyncio

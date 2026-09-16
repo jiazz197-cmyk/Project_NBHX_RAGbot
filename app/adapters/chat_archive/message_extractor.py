@@ -3,14 +3,16 @@
 Message text comes exclusively from the local
 :class:`app.ports.outbound.chat.ChatMessageRepositoryPort`; the only external
 dependency is the configured OpenAI-compatible LLM used for summarization.
-Both the endpoint and the model come from ``settings`` (``QWEN3_6_35B_*``), so
-pointing the app at a real inference gateway is a pure configuration change.
+Both the endpoint and the model come from ``settings`` (``SUB_LLM_*``, falling
+back to ``MAIN_LLM_*`` when the sub-LLM fields are left empty), so pointing
+the app at a real inference gateway is a pure configuration change.
+Thinking is disabled by default via ``SUB_LLM_ENABLE_THINKING=False``.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -31,9 +33,26 @@ class LlmSummarizationError(RuntimeError):
 
 
 def _llm_credentials() -> str:
-    """Reuse the shared inference-gateway key when one is configured."""
+    """Sub-LLM key, falling back to the main-LLM key then a placeholder."""
 
-    return (settings.AI_INFERENCE_API_KEY or "").strip() or _NO_AUTH_PLACEHOLDER
+    return (
+        (settings.SUB_LLM_API_KEY or "").strip()
+        or (settings.MAIN_LLM_API_KEY or "").strip()
+        or _NO_AUTH_PLACEHOLDER
+    )
+
+
+def _sub_llm_extra_body() -> Dict[str, Any]:
+    """Qwen3 hybrid-thinking switch for the sub LLM (off by default).
+
+    ``chat_template_kwargs.enable_thinking=false`` is the toggle verified
+    against the Sophnet gateway; when thinking is enabled nothing is sent, so
+    the gateway default applies.
+    """
+
+    if settings.SUB_LLM_ENABLE_THINKING:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 class MessageExtractor:
@@ -47,8 +66,16 @@ class MessageExtractor:
         timeout: Optional[float] = None,
     ):
         self._messages = message_repository
-        self.llm_base_url = llm_base_url or settings.QWEN3_6_35B_API_URL
-        self.llm_model_name = llm_model_name or settings.QWEN3_6_35B_MODEL
+        self.llm_base_url = (
+            llm_base_url
+            or settings.SUB_LLM_API_URL
+            or settings.MAIN_LLM_API_URL
+        )
+        self.llm_model_name = (
+            llm_model_name
+            or settings.SUB_LLM_MODEL
+            or settings.MAIN_LLM_MODEL
+        )
         self.timeout = (
             float(timeout)
             if timeout is not None
@@ -105,6 +132,7 @@ class MessageExtractor:
             max_tokens=max_tokens,
             timeout=self.timeout,
             api_key=_llm_credentials(),
+            extra_body=_sub_llm_extra_body(),
         )
 
         if previous_summary:

@@ -549,7 +549,7 @@ Content-Type: application/json
 - 代码：`app/api/v1/chat_summary.py` → `app/usecases/chat_summary/*` → `app/adapters/chat_summary.py` → `app/adapters/chat_archive/message_extractor.py`。
 - 存储：PostgreSQL 表 `user_chat_profile(user_id VARCHAR(128) PRIMARY KEY, latest_summary TEXT, update_time TIMESTAMP)`，由 ORM 模型 `app/models/orm/chat.py::UserChatProfile` 管理，随启动时 `create_all` 建表。
 - 访问方式：SQLAlchemy async（`SqlAlchemyUserProfileRepositoryAdapter`），不再用同步 psycopg2，也不再有"首次调用懒建表"。
-- 生成逻辑：从 `ChatMessageRepositoryPort`（本地 `chat_message` 表）取该用户该会话的历史 query → 调 `settings.QWEN3_6_35B_API_URL` / `QWEN3_6_35B_MODEL` 生成 150 字以内摘要 → upsert。
+- 生成逻辑：从 `ChatMessageRepositoryPort`（本地 `chat_message` 表）取该用户该会话的历史 query → 调 `settings.SUB_LLM_API_URL` / `SUB_LLM_MODEL`（辅 LLM，默认关思考；留空回退 `MAIN_LLM_*`）生成 150 字以内摘要 → upsert。
 - **`user_id` 主键口径**：内部用户 ID（`users.id` 字符串，即 JWT `sub`），不是 username；调用方传 UUID / username / 中文姓名都能解析到同一个键。
 - LLM 不可达时返回 **502**（`EXTERNAL_SERVICE_ERROR`），且不会把错误文本写进画像；该会话没有 query 时返回 `query_count=0 / db_updated=false` 并保持画像不变。
 - 鉴权：Bearer JWT；普通用户只能操作自己；admin/superuser 可指定其他 UUID/用户名。
@@ -559,7 +559,7 @@ Content-Type: application/json
 接口：`POST /api/v1/context-compression/compress`
 
 - 代码：`app/api/v1/context_compression.py` → `app/usecases/context_compression/compress.py` → `app/adapters/context_compression.py` → `ContextCompressor`。
-- 逻辑：优先使用请求体里的 `recent_dialogues` / `older_dialogues`；否则从本地 `chat_message` 表取该用户该会话的历史，`recent` 取最近 `n_recent` 轮、`older` 取更早的 `n_recent*4` 轮（两段不重叠）；调用 `QWEN3_6_35B_API_URL` / `QWEN3_6_35B_MODEL` 输出三段式压缩结果。
+- 逻辑：优先使用请求体里的 `recent_dialogues` / `older_dialogues`；否则从本地 `chat_message` 表取该用户该会话的历史，`recent` 取最近 `n_recent` 轮、`older` 取更早的 `n_recent*4` 轮（两段不重叠）；调用 `SUB_LLM_API_URL` / `SUB_LLM_MODEL`（辅 LLM，默认关思考；留空回退 `MAIN_LLM_*`）输出三段式压缩结果。
 - 当前不做持久化，只把压缩文本返回给调用方。
 - LLM 不可达 / 返回网页 / 超窗且重试失败 → **502**。
 - 长对话场景中，RAG 容器可以在构造 prompt 前调用它，把更早历史压成 `compressed_context`，然后作为 system/history 注入。
@@ -744,7 +744,7 @@ Content-Type: application/json
 RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 
 - 配置：`LANGCHAIN_CHAT_BASE_URL`、`LANGCHAIN_CHAT_MODEL`、`LANGCHAIN_CHAT_TIMEOUT_SEC`、`LANGCHAIN_MAX_OUTPUT_TOKENS`。
-- 默认复用 Qwen3.6-35B，后续可换独立网关。
+- 默认对齐主 LLM（`MAIN_LLM_*`，Sophnet 网关 `qwen3.8-27b`），后续可换独立网关。
 - 请求按 OpenAI 兼容协议：`POST {base_url}/chat/completions`，支持 `stream: true`。
 - LLM 失败建议映射为 SSE `error` 事件或 503，不要把模型错误当 500。
 
