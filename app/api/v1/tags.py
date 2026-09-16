@@ -66,9 +66,11 @@ OPENAPI_TAG_METADATA: list[dict] = [
     {
         "name": LANGCHAIN_CHAT,
         "description": (
-            "Reserved LangChain chat orchestration endpoints. External paths and "
-            "SSE event names are preserved; until the orchestrator is configured "
-            "they return 501 CHAT_ORCHESTRATOR_NOT_CONFIGURED."
+            "Chat memory API (conversations / messages, served locally from "
+            "PostgreSQL) plus the reserved LangChain generation endpoints. "
+            "External paths and SSE event names are preserved; only "
+            "POST /chat-messages and its /stop route still return "
+            "501 CHAT_ORCHESTRATOR_NOT_CONFIGURED."
         ),
     },
 ]

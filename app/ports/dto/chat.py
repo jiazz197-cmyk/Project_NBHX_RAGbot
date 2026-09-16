@@ -112,6 +112,41 @@ class MessagePage:
 
 
 @dataclass
+class MessageInput:
+    """One message to persist, as sent by a caller (frontend / RAG container).
+
+    ``created_at`` is an epoch-seconds integer (the shape the frontend already
+    consumes); ``None`` means "use the server clock".
+    """
+
+    role: str
+    content: str = ""
+    query: str = ""
+    answer: str = ""
+    created_at: Optional[int] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CreateConversationCommand:
+    """Create one conversation owned by ``user_id``."""
+
+    user_id: str
+    conversation_id: Optional[str] = None
+    name: str = ""
+    inputs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AppendMessagesCommand:
+    """Append messages to one owned conversation."""
+
+    user_id: str
+    conversation_id: str
+    messages: list[MessageInput]
+
+
+@dataclass
 class RenameConversationCommand:
     """Rename one conversation owned by ``user_id``."""
 

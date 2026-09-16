@@ -32,7 +32,7 @@ class QueryUserSummaryUseCase:
             requested_user_id=query.user_id,
             current_user=query.current_user,
         )
-        latest_summary = self._summary_repo.get_latest_summary(effective_user_id)
+        latest_summary = await self._summary_repo.get_latest_summary(effective_user_id)
         return QueryUserSummaryResult(
             user_id=effective_user_id,
             latest_summary=latest_summary,

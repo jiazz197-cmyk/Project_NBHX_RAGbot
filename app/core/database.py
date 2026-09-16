@@ -91,6 +91,11 @@ async def check_db_connection_async() -> bool:
 def init_db_tables():
     """create_all；并尝试补齐历史表的缺列；最后写种子 superuser。"""
     try:
+        from app.models.orm.chat import (  # noqa: F401
+            ChatConversation,
+            ChatMessage,
+            UserChatProfile,
+        )
         from app.models.orm.file_resource import FileResource  # noqa: F401
         from app.models.orm.knowledge import KnowledgeInstance  # noqa: F401
         from app.models.orm.platform import (  # noqa: F401

@@ -3,8 +3,9 @@
 > 口径已按你的描述修订：
 > - **RAG 容器只跑 RAG 核心链**：LangChain prompt、检索调用、LLM 调用、SSE 输出、停止/取消协作。
 > - **Retriever 不进容器**：继续作为容器外部服务/接口提供。
-> - **长短期 memory 处理不进容器**：容器只通过外部 Memory API 读取和写入，不直接管理记忆存储。
+> - **长短期 memory 处理不进容器**：容器只通过 Memory API 读取和写入，不直接管理记忆存储。
 > - **前端路径保持旧协议**：六个聊天相关路径和 SSE 事件名不变，RAG 容器需要兼容。
+> - **当前 Memory API 就是主应用**：会话/消息（短期）、画像摘要（长期）、上下文压缩（工作记忆）都已在主应用落地并可用，见第 9 节；主应用里只有两个生成接口（`POST /chat-messages` 与 `/stop`）仍是 501 预留。
 >
 > 本文分两部分：
 > 1. **RAG 容器对前端暴露什么**（照着这部分写容器 HTTP 层）。
@@ -33,16 +34,18 @@
 
 ### 模式 A（推荐，按你的口径）
 
-RAG 容器只承接核心链的两个接口，Nginx 把记忆 CRUD 继续路由到外部 Memory API：
+RAG 容器只承接核心链的两个接口，Nginx 把记忆 CRUD 继续路由到 Memory API（当前即主应用）：
 
 | Path | 归属 |
 |---|---|
 | `POST /api/v1/chat-messages` | RAG 容器 |
 | `POST /api/v1/chat-messages/{task_id}/stop` | RAG 容器 |
-| `GET /api/v1/conversations` | 外部 Memory API |
-| `GET /api/v1/messages` | 外部 Memory API |
-| `POST /api/v1/conversations/{conversation_id}/name` | 外部 Memory API |
-| `DELETE /api/v1/conversations/{conversation_id}` | 外部 Memory API |
+| `POST /api/v1/conversations` | Memory API（主应用，已实现） |
+| `POST /api/v1/conversations/{conversation_id}/messages` | Memory API（主应用，已实现） |
+| `GET /api/v1/conversations` | Memory API（主应用，已实现） |
+| `GET /api/v1/messages` | Memory API（主应用，已实现） |
+| `POST /api/v1/conversations/{conversation_id}/name` | Memory API（主应用，已实现） |
+| `DELETE /api/v1/conversations/{conversation_id}` | Memory API（主应用，已实现） |
 
 RAG 容器在生成过程中调用外部 Retriever / Memory API，前端无感知。
 
@@ -519,7 +522,7 @@ Content-Type: application/json
 
 **结论：当前没有一个独立的 Memory 服务。** 记忆相关逻辑都在主应用 FastAPI 里，情况如下：
 
-#### A. 长期记忆（用户画像摘要）——当前可用，但数据源还没接通
+#### A. 长期记忆（用户画像摘要）——已可用，数据源已接通
 
 接口：
 
@@ -531,36 +534,40 @@ Content-Type: application/json
 当前实现：
 
 - 代码：`app/api/v1/chat_summary.py` → `app/usecases/chat_summary/*` → `app/adapters/chat_summary.py` → `app/adapters/chat_archive/message_extractor.py`。
-- 存储：PostgreSQL 表 `user_chat_profile(user_id VARCHAR(128) PRIMARY KEY, latest_summary TEXT, update_time TIMESTAMP)`。
-- 访问方式：同步 `psycopg2`（`UserProfileDB`），不是 SQLAlchemy ORM；表第一次使用时由 `ensure_profile_table()` 懒创建。
-- 生成逻辑：从 `ChatMessageRepositoryPort` 取用户历史 query → 调 LangChain + OpenAI 兼容 LLM 生成 150 字以内摘要 → upsert。
-- 当前限制：`ChatMessageRepositoryPort` 是占位实现 `LocalChatMessageRepositoryAdapter`，始终返回空列表，所以 **create 接口目前通常不会生成新摘要**，只会返回 `query_count=0 / db_updated=false`。
-- 鉴权：Bearer JWT；普通用户只能操作自己的 `user_id` 别名；admin/superuser 可指定其他 UUID/用户名。
+- 存储：PostgreSQL 表 `user_chat_profile(user_id VARCHAR(128) PRIMARY KEY, latest_summary TEXT, update_time TIMESTAMP)`，由 ORM 模型 `app/models/orm/chat.py::UserChatProfile` 管理，随启动时 `create_all` 建表。
+- 访问方式：SQLAlchemy async（`SqlAlchemyUserProfileRepositoryAdapter`），不再用同步 psycopg2，也不再有"首次调用懒建表"。
+- 生成逻辑：从 `ChatMessageRepositoryPort`（本地 `chat_message` 表）取该用户该会话的历史 query → 调 `settings.QWEN3_6_35B_API_URL` / `QWEN3_6_35B_MODEL` 生成 150 字以内摘要 → upsert。
+- **`user_id` 主键口径**：内部用户 ID（`users.id` 字符串，即 JWT `sub`），不是 username；调用方传 UUID / username / 中文姓名都能解析到同一个键。
+- LLM 不可达时返回 **502**（`EXTERNAL_SERVICE_ERROR`），且不会把错误文本写进画像；该会话没有 query 时返回 `query_count=0 / db_updated=false` 并保持画像不变。
+- 鉴权：Bearer JWT；普通用户只能操作自己；admin/superuser 可指定其他 UUID/用户名。
 
-#### B. 工作记忆（上下文压缩）——当前可用，数据源同样未接通
+#### B. 工作记忆（上下文压缩）——已可用，数据源已接通
 
 接口：`POST /api/v1/context-compression/compress`
 
 - 代码：`app/api/v1/context_compression.py` → `app/usecases/context_compression/compress.py` → `app/adapters/context_compression.py` → `ContextCompressor`。
-- 逻辑：优先使用请求体里的 `recent_dialogues` / `older_dialogues`；否则从本地消息仓储取（当前为空）；调用 `QWEN3_6_35B_API_URL` / `QWEN3_6_35B_MODEL` 输出三段式压缩结果。
+- 逻辑：优先使用请求体里的 `recent_dialogues` / `older_dialogues`；否则从本地 `chat_message` 表取该用户该会话的历史，`recent` 取最近 `n_recent` 轮、`older` 取更早的 `n_recent*4` 轮（两段不重叠）；调用 `QWEN3_6_35B_API_URL` / `QWEN3_6_35B_MODEL` 输出三段式压缩结果。
 - 当前不做持久化，只把压缩文本返回给调用方。
+- LLM 不可达 / 返回网页 / 超窗且重试失败 → **502**。
 - 长对话场景中，RAG 容器可以在构造 prompt 前调用它，把更早历史压成 `compressed_context`，然后作为 system/history 注入。
 
-#### C. 短期记忆（会话/消息历史）——当前是预留接口，还没有真实实现
+#### C. 短期记忆（会话/消息历史）——已实现，主应用自建本地存储
 
 | 方法 | 路径 | 当前状态 |
 |---|---|---|
-| `GET` | `/api/v1/conversations` | 注册了路由、要求 JWT、做归属校验，但最终返回 `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `GET` | `/api/v1/messages` | 同上 |
-| `POST` | `/api/v1/conversations/{id}/name` | 同上 |
-| `DELETE` | `/api/v1/conversations/{id}` | 同上 |
+| `POST` | `/api/v1/conversations` | 已实现：建会话（同 ID 重复创建幂等，他人占用返回 403） |
+| `POST` | `/api/v1/conversations/{id}/messages` | 已实现：批量追加 user/assistant 消息 |
+| `GET` | `/api/v1/conversations` | 已实现：分页会话列表 |
+| `GET` | `/api/v1/messages` | 已实现：分页消息列表 |
+| `POST` | `/api/v1/conversations/{id}/name` | 已实现：重命名 |
+| `DELETE` | `/api/v1/conversations/{id}` | 已实现：删除会话（连带消息级联删除） |
 
 关键事实：
 
-- 仓库中**还没有** `conversation` / `message` ORM 表。
-- `app/ports/outbound/chat.py` 里的 `ChatMessageRepositoryPort` 只是占位，返回空列表。
-- 前端最需要的“读取历史消息”和“持久化新消息”目前都没有真实数据层。
-- 因此如果现在就把前端切到 RAG 容器，这些接口会返回 501，必须由外部 Memory API 后续补齐。
+- 表：`chat_conversation`（会话）与 `chat_message`（消息），ORM 见 `app/models/orm/chat.py`，随启动 `create_all` 建表。
+- 归属：两张表都带 `user_id`（内部用户 ID = JWT `sub`），所有查询在 SQL 层按 `user_id` 过滤；跨用户读他人会话统一返回 **404**（不泄露存在性），跨用户指定 `user_id` 返回 **403**。
+- 写消息的 `role` 只接受 `user` / `assistant` / `system`；`created_at` 为 epoch 秒，省略则用服务端时间。
+- "读取历史消息"和"持久化新消息"现在都是真实数据层，RAG 容器可直接通过 Memory API 读写。
 
 ### 9.2 RAG 容器调用长期记忆的契约
 
@@ -649,20 +656,32 @@ RAG 容器建议：
 - 把压缩结果作为 system prompt 或 summary turn 注入 LangChain chain；
 - 不要把完整长历史直接塞给 LLM。
 
-### 9.4 短期记忆：外部 Memory API 还需要补的写接口
+### 9.4 短期记忆：写接口（已实现）
 
-RAG 容器如果要管理多轮会话，至少需要下面这些能力。前端契约路径已经存在，但**写入和真实持久化还没有实现**，这是你写容器时最需要对外部 Memory 团队确认的部分：
+下面这些能力现已全部落地，RAG 容器可以直接按此调用；主应用即 Memory API。
 
-| 能力 | 推荐接口 | 状态 |
+| 能力 | 接口 | 状态 |
 |---|---|---|
-| 创建会话 | `POST /api/v1/conversations` | 暂缺 |
-| 追加用户消息/助手消息 | `POST /api/v1/conversations/{id}/messages` | 暂缺 |
-| 查询会话列表 | `GET /api/v1/conversations?page&limit` | 已注册，当前 501 |
-| 查询消息列表 | `GET /api/v1/messages?conversation_id&page&limit` | 已注册，当前 501 |
-| 重命名会话 | `POST /api/v1/conversations/{id}/name` | 已注册，当前 501 |
-| 删除会话 | `DELETE /api/v1/conversations/{id}` | 已注册，当前 501 |
+| 创建会话 | `POST /api/v1/conversations` | ✅ 已实现（同 ID 幂等） |
+| 追加用户消息/助手消息 | `POST /api/v1/conversations/{id}/messages` | ✅ 已实现 |
+| 查询会话列表 | `GET /api/v1/conversations?page&limit` | ✅ 已实现 |
+| 查询消息列表 | `GET /api/v1/messages?conversation_id&page&limit` | ✅ 已实现 |
+| 重命名会话 | `POST /api/v1/conversations/{id}/name` | ✅ 已实现 |
+| 删除会话 | `DELETE /api/v1/conversations/{id}` | ✅ 已实现（消息级联删除） |
 
-RAG 容器需要的写入语义建议：
+**创建会话**
+
+```http
+POST /api/v1/conversations
+Authorization: Bearer <JWT>
+Content-Type: application/json
+
+{"conversation_id": "可选，省略则服务端生成 uuid4", "name": "会话名", "inputs": {"search_mode": "本地检索"}}
+```
+
+返回 201 + 会话对象。同一 `conversation_id` 重复创建是幂等的（返回已存在的那个）；该 ID 已被别人占用时返回 **403**。
+
+**写入消息**
 
 ```http
 POST /api/v1/conversations/{conversation_id}/messages
@@ -678,9 +697,32 @@ Content-Type: application/json
 }
 ```
 
-响应建议返回落库后的 Message 数组；如果暂不实现，至少要让 RAG 容器知道写入的 message id 和 conversation_id。
+字段规则（均为实测行为）：
 
-如果最终让 RAG 容器直接写 PostgreSQL，需要和主应用/外部 Memory API 对齐表结构和归属校验，不推荐容器直连业务表。
+- `role` 必填，取值 `user` / `assistant` / `system`；其他值 **422**。
+- `messages` 单次 **1–200 条**：空数组或超过 200 条都是 **422**。
+- `content` 是主字段；只传 `query`（user）/ `answer`（assistant）时，落库的 `content` 会回退成该值（返回体里两个字段同值），所以 `content` 为空也能存。
+- `created_at` 为 epoch 秒（前端按 `created_at * 1000` 渲染）；省略或传 0 用服务端时间。
+- `conversation_id`（建会话时可选传）最长 64 字符，超出 **422**；省略则服务端生成 uuid4。
+
+返回 201：
+
+```json
+{"data": [{"id": "1", "conversation_id": "…", "role": "user", "content": "用户问题",
+           "query": "用户问题", "answer": "", "created_at": 1760000000, "metadata": {}}],
+ "conversation_id": "…", "stored": 1}
+```
+
+错误：会话不存在或不属于当前用户 → **404**（不区分二者，避免泄露存在性）。
+
+**分页语义**（`GET /messages`）
+
+- `page=1` 返回**最新的** `limit` 条，数组内按时间**升序**（前端直接顺序渲染）。
+- `page=2` 是更早的一窗，`has_more` 表示还有更早的消息。
+- 返回字段：`{"data": [...], "page": n, "limit": n, "has_more": bool}`。
+- 会话列表按 `updated_at` 倒序（最近有消息的排前面）。
+
+> 不建议 RAG 容器直连业务表：写消息走上面的 HTTP 接口即可，归属校验与索引都由主应用负责。
 
 ---
 
@@ -727,15 +769,16 @@ RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 |---|---|---|---|
 | `POST /chat-messages` | 应迁入 RAG 容器 | 当前主应用返回 501 | 实现 SSE 核心链 |
 | `POST /chat-messages/{id}/stop` | 应迁入 RAG 容器 | 当前主应用返回 501 | 实现取消标记 |
-| `GET /conversations` | 外部 Memory API | 主应用预留 501 | 读取时调用；容器自身也可代理 |
-| `GET /messages` | 外部 Memory API | 主应用预留 501 | 读取时调用 |
-| `rename/delete conversation` | 外部 Memory API | 主应用预留 501 | 转发或由 Nginx 外部分流 |
-| 长期画像摘要 | 主应用 Memory API | 可用，但消息源为空 | 读取/可选写入 |
-| 上下文压缩 | 主应用 Memory API | 可用，消息源为空 | 调用来压缩历史 |
-| 短期消息持久化 | 外部 Memory API | **未实现，缺写接口** | 先与 Memory 团队定写消息接口 |
+| `GET /conversations` | 主应用（本地记忆库） | ✅ 已实现 | 直接调用 |
+| `POST /conversations` / `{id}/messages` | 主应用（本地记忆库） | ✅ 已实现 | 生成结束后落库 |
+| `GET /messages` | 主应用（本地记忆库） | ✅ 已实现 | 直接调用 |
+| `rename/delete conversation` | 主应用（本地记忆库） | ✅ 已实现 | 直接调用 |
+| 长期画像摘要 | 主应用 Memory API | ✅ 可用，数据源已接通 | 读取/可选写入 |
+| 上下文压缩 | 主应用 Memory API | ✅ 可用，数据源已接通 | 调用来压缩历史 |
+| 短期消息持久化 | 主应用 Memory API | ✅ 已实现（`chat_conversation` / `chat_message`） | 走写消息接口 |
 | Retriever | 容器外部服务 | `app/api/v1/retriever/*` 可用 | 封装成 LangChain Tool 调用 |
 | BGE-M3 / Reranker | Retriever 所在服务内部 | 可用，HTTP 模型服务 | 不需要 RAG 容器直接调 |
-| LLM | 外部推理网关 | 预留在主应用配置 | RAG 容器内部直接调 OpenAI 兼容接口 |
+| LLM | 外部推理网关 | 配置项已就绪，**真实网关地址待定** | RAG 容器内部直接调 OpenAI 兼容接口 |
 
 ---
 
@@ -744,7 +787,8 @@ RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 1. 前端六个路径是由 Nginx 拆给 RAG 容器 + Memory API（模式 A），还是全部由 RAG 容器承接（模式 B）？
 2. RAG 容器收到 JWT 后，是本地验签，还是必须调 `GET /api/v1/auth/me` 做用户有效性校验？
 3. 调 Retriever / Memory 时透传用户 JWT，还是用 `INTERNAL_API_KEY` + `X-User-Id`？
-4. 短期记忆的“写消息”接口由哪边定义？当前仓库里没有 `POST /messages`，也没有消息 ORM 表。
-5. 长期摘要的消息源 `ChatMessageRepositoryPort` 现在返回空；是先实现消息表再让摘要真正生成，还是由 RAG 容器把历史 query 直接传给 `POST /chat-summary/create` 的新增字段（当前不支持）？
+4. ~~短期记忆的"写消息"接口由哪边定义？~~ **已定**：主应用自建（见 §9.4），接口按本文字段形状实现，容器直接调用。
+5. ~~长期摘要的消息源 `ChatMessageRepositoryPort` 现在返回空~~ **已解决**：`ChatMessageRepositoryPort` 现由 `SqlAlchemyChatMemoryRepositoryAdapter` 实现，直接读本地 `chat_message` 表；RAG 容器不需要把历史 query 塞给 `POST /chat-summary/create`。
 6. `task_id` / `conversation_id` / 取消状态是否需要落 Redis 供跨容器协作？当前主应用的任务体系只覆盖文档/OCR。
 7. `search_mode` 与 `inputs` 的最终字段名和取值，需要和前端再确认；目前前端发送的就是本文第 2.2 节的样子。
+8. 新增：RAG 容器调 Retriever / Memory 时，是透传用户 JWT，还是走服务间身份？目前 `INTERNAL_API_KEY` 只在配置里定义、代码中**没有任何使用点**，所以现在只能透传用户 JWT（本文各接口都要求 Bearer JWT）。

@@ -1,18 +1,23 @@
-"""Reserved LangChain chat orchestration HTTP routes.
+"""Chat memory + reserved LangChain orchestration HTTP routes.
 
 The external paths and SSE event names are intentionally identical to the
 previous chat protocol at:
 
-* ``POST   /api/v1/chat-messages``
-* ``POST   /api/v1/chat-messages/{task_id}/stop``
+* ``POST   /api/v1/chat-messages``                 (reserved, 501 for now)
+* ``POST   /api/v1/chat-messages/{task_id}/stop``  (reserved, 501 for now)
+* ``POST   /api/v1/conversations``                 (local memory, live)
+* ``POST   /api/v1/conversations/{id}/messages``   (local memory, live)
 * ``GET    /api/v1/conversations``
 * ``GET    /api/v1/messages``
 * ``POST   /api/v1/conversations/{conversation_id}/name``
 * ``DELETE /api/v1/conversations/{conversation_id}``
 
-Until the LangChain adapter is implemented every route fails with the agreed
-``501 CHAT_ORCHESTRATOR_NOT_CONFIGURED`` JSON error.  All routes require a
-Bearer JWT and derive the effective user id from the JWT subject.
+Conversation/message persistence (short-term memory) is served locally from
+PostgreSQL and is fully live.  Only the generation pipeline — the two
+``chat-messages`` routes — still fails closed with the agreed
+``501 CHAT_ORCHESTRATOR_NOT_CONFIGURED`` until the LangChain orchestrator
+adapter is implemented.  All routes require a Bearer JWT and derive the
+effective user id from the JWT subject.
 """
 
 from __future__ import annotations
@@ -27,12 +32,28 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette import status
 
+from app.adapters.chat_archive.memory_repository import (
+    SqlAlchemyChatMemoryRepositoryAdapter,
+)
 from app.adapters.langchain_chat.adapter import LangChainChatOrchestratorAdapter
 from app.core.exceptions import NotFoundError
 from app.core.security import get_current_user
 from app.core.validators.conversation_id import validate_conversation_id
 from app.ports.contracts.identity import CurrentUserPort
-from app.ports.dto.chat import ChatStreamEvent, ConversationPage, MessagePage
+from app.ports.dto.chat import (
+    ChatStreamEvent,
+    ConversationPage,
+    MessageInput,
+    MessagePage,
+)
+from app.usecases.chat.append_messages import (
+    AppendMessagesInput,
+    AppendMessagesUseCase,
+)
+from app.usecases.chat.create_conversation import (
+    CreateConversationInput,
+    CreateConversationUseCase,
+)
 from app.usecases.chat.delete_conversation import (
     DeleteConversationInput,
     DeleteConversationUseCase,
@@ -94,6 +115,54 @@ class RenameConversationRequest(BaseModel):
     auto_generate: bool = False
 
 
+class CreateConversationRequest(BaseModel):
+    """Body for ``POST /api/v1/conversations``."""
+
+    conversation_id: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="Optional caller-supplied id; omit to let the server generate one.",
+    )
+    name: str = Field("", max_length=255)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="仅 admin / superuser 可指定他人 user_id；普通用户始终使用 JWT 自身。",
+    )
+
+    @field_validator("conversation_id")
+    @classmethod
+    def conversation_id_path_safe(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_conversation_id(value)
+
+
+class ChatMessageInput(BaseModel):
+    """One message inside an append request."""
+
+    role: Literal["user", "assistant", "system"]
+    content: str = Field("", max_length=200_000)
+    query: str = Field("", max_length=200_000)
+    answer: str = Field("", max_length=200_000)
+    created_at: Optional[int] = Field(
+        None, ge=0, description="Epoch seconds; omit to use the server clock."
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppendMessagesRequest(BaseModel):
+    """Body for ``POST /api/v1/conversations/{conversation_id}/messages``."""
+
+    messages: list[ChatMessageInput] = Field(..., min_length=1, max_length=200)
+    user_id: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="仅 admin / superuser 可指定他人 user_id；普通用户始终使用 JWT 自身。",
+    )
+
+
 def _validate_path_id(raw: str) -> str:
     """Validate one path/query id and convert ValueError to a 422 response."""
 
@@ -106,13 +175,19 @@ def _validate_path_id(raw: str) -> str:
 
 
 def _orchestrator() -> LangChainChatOrchestratorAdapter:
-    """Composition-root factory.
+    """Composition-root factory for the (still reserved) generation pipeline.
 
     Future LangChain integration replaces only this adapter implementation;
     route paths, the frontend and Nginx stay unchanged.
     """
 
     return LangChainChatOrchestratorAdapter()
+
+
+def _conversation_store() -> SqlAlchemyChatMemoryRepositoryAdapter:
+    """Composition-root factory for the live local memory store."""
+
+    return SqlAlchemyChatMemoryRepositoryAdapter()
 
 
 def _as_payload(value: Any) -> Any:
@@ -216,9 +291,33 @@ async def stop_chat_message(
     return {"result": "success"}
 
 
+@router.post(
+    "/conversations",
+    summary="创建会话（本地记忆库）",
+    response_description="新建或已存在的会话对象；同一 ID 重复创建为幂等",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_conversation(
+    request: CreateConversationRequest,
+    current_user: CurrentUserPort = Depends(get_current_user),
+) -> JSONResponse:
+    """Create one conversation owned by the JWT user (or an admin target)."""
+
+    result = await CreateConversationUseCase(_conversation_store()).execute(
+        CreateConversationInput(
+            current_user=current_user,
+            conversation_id=request.conversation_id,
+            name=request.name,
+            inputs=dict(request.inputs or {}),
+            requested_user_id=request.user_id,
+        )
+    )
+    return JSONResponse(content=_as_payload(result), status_code=status.HTTP_201_CREATED)
+
+
 @router.get(
     "/conversations",
-    summary="获取会话列表（LangChain 预留）",
+    summary="获取会话列表（本地记忆库）",
     response_description="分页会话列表，保持旧前端字段形状",
 )
 async def list_conversations(
@@ -233,7 +332,7 @@ async def list_conversations(
 ) -> JSONResponse:
     """List conversations owned by the JWT user (or an admin target)."""
 
-    result = await ListConversationsUseCase(_orchestrator()).execute(
+    result = await ListConversationsUseCase(_conversation_store()).execute(
         ListConversationsQuery(
             current_user=current_user,
             requested_user_id=user_id,
@@ -246,7 +345,7 @@ async def list_conversations(
 
 @router.get(
     "/messages",
-    summary="获取会话消息列表（LangChain 预留）",
+    summary="获取会话消息列表（本地记忆库）",
     response_description="分页消息列表，保持旧前端字段形状",
 )
 async def list_messages(
@@ -263,7 +362,7 @@ async def list_messages(
     """List messages of one owned conversation."""
 
     cid = _validate_path_id(conversation_id)
-    result = await ListMessagesUseCase(_orchestrator()).execute(
+    result = await ListMessagesUseCase(_conversation_store()).execute(
         ListMessagesQuery(
             conversation_id=cid,
             current_user=current_user,
@@ -276,8 +375,51 @@ async def list_messages(
 
 
 @router.post(
+    "/conversations/{conversation_id}/messages",
+    summary="追加会话消息（本地记忆库）",
+    response_description="落库后的消息数组（含服务端生成的 id 与时间戳）",
+    status_code=status.HTTP_201_CREATED,
+)
+async def append_conversation_messages(
+    request: AppendMessagesRequest,
+    conversation_id: str = Path(..., min_length=1, max_length=128),
+    current_user: CurrentUserPort = Depends(get_current_user),
+) -> JSONResponse:
+    """Persist user/assistant messages into one owned conversation.
+
+    This is the short-term-memory write endpoint the RAG container calls after a
+    generation completes; it accepts the batch shape documented in
+    ``docs/langchain-rag-container-api-contract.md`` §9.4.
+    """
+
+    cid = _validate_path_id(conversation_id)
+    stored = await AppendMessagesUseCase(_conversation_store()).execute(
+        AppendMessagesInput(
+            conversation_id=cid,
+            messages=[
+                MessageInput(
+                    role=item.role,
+                    content=item.content,
+                    query=item.query,
+                    answer=item.answer,
+                    created_at=item.created_at,
+                    metadata=dict(item.metadata or {}),
+                )
+                for item in request.messages
+            ],
+            current_user=current_user,
+            requested_user_id=request.user_id,
+        )
+    )
+    return JSONResponse(
+        content={"data": _as_payload(stored), "conversation_id": cid, "stored": len(stored)},
+        status_code=status.HTTP_201_CREATED,
+    )
+
+
+@router.post(
     "/conversations/{conversation_id}/name",
-    summary="重命名会话（LangChain 预留）",
+    summary="重命名会话（本地记忆库）",
 )
 async def rename_conversation(
     request: RenameConversationRequest,
@@ -287,7 +429,7 @@ async def rename_conversation(
     """Rename an owned conversation."""
 
     cid = _validate_path_id(conversation_id)
-    result = await RenameConversationUseCase(_orchestrator()).execute(
+    result = await RenameConversationUseCase(_conversation_store()).execute(
         RenameConversationInput(
             conversation_id=cid,
             name=request.name,
@@ -300,7 +442,7 @@ async def rename_conversation(
 
 @router.delete(
     "/conversations/{conversation_id}",
-    summary="删除会话（LangChain 预留）",
+    summary="删除会话（本地记忆库）",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_conversation(
@@ -310,7 +452,7 @@ async def delete_conversation(
     """Delete an owned conversation."""
 
     cid = _validate_path_id(conversation_id)
-    await DeleteConversationUseCase(_orchestrator()).execute(
+    await DeleteConversationUseCase(_conversation_store()).execute(
         DeleteConversationInput(conversation_id=cid, current_user=current_user)
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

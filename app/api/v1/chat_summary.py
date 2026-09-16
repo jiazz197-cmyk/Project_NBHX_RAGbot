@@ -12,12 +12,14 @@ from app.adapters.web.base import (
     UserSummaryResponse,
     FormatJSONResponse
 )
+from app.adapters.chat_archive.message_extractor import LlmSummarizationError
 from app.adapters.chat_summary import (
     MessageExtractorChatArchiveAdapter,
     SqlAlchemyUserLookupAdapter,
     UserProfileSummaryRepoAdapter,
 )
 from app.core.dependencies import get_async_db
+from app.core.exceptions import APIException, ExternalServiceError
 from app.core.security import get_current_user
 from app.ports.contracts.identity import CurrentUserPort
 from app.usecases.chat_summary.create_chat_summary import (
@@ -97,6 +99,11 @@ async def create_chat_summary(
 
     except HTTPException:
         raise
+    except APIException:
+        raise
+    except LlmSummarizationError as e:
+        logger.warning("Summary LLM unavailable for user %s: %s", request.user_id, e)
+        raise ExternalServiceError("chat_summary", str(e)) from e
     except Exception as e:
         logger.error(f"Failed to create chat summary: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to create chat summary")
@@ -144,6 +151,8 @@ async def query_user_summary(
         )
 
     except HTTPException:
+        raise
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Failed to query user summary: {str(e)}")

@@ -7,7 +7,7 @@ from typing import Optional
 
 from app.ports.contracts.identity import CurrentUserPort
 from app.ports.dto.chat import ConversationPage, ConversationPageQuery
-from app.ports.outbound.chat import ChatOrchestratorPort
+from app.ports.outbound.chat import ConversationStorePort
 from app.usecases.chat.authorization import resolve_effective_chat_user_id
 
 
@@ -20,15 +20,15 @@ class ListConversationsQuery:
 
 
 class ListConversationsUseCase:
-    def __init__(self, orchestrator: ChatOrchestratorPort):
-        self._orchestrator = orchestrator
+    def __init__(self, store: ConversationStorePort):
+        self._store = store
 
     async def execute(self, query: ListConversationsQuery) -> ConversationPage:
         user_id = resolve_effective_chat_user_id(
             query.requested_user_id,
             query.current_user,
         )
-        return await self._orchestrator.list_conversations(
+        return await self._store.list_conversations(
             ConversationPageQuery(
                 user_id=user_id,
                 page=query.page,

@@ -85,7 +85,7 @@ data: <JSON>
 4. 生成失败发送 `error`。
 5. 空闲超过 15 秒由 API 层发送 `ping` 心跳；客户端应忽略心跳。
 
-当前实现状态：六个 `LangChain Chat` 接口均在进入 SSE / 数据库逻辑前抛出 501，不会返回空流或 502。
+当前实现状态：只有两个生成接口（`POST /chat-messages` 与 `/{task_id}/stop`）仍在进入 SSE 逻辑前抛出 501，不会返回空流或 502；会话/消息的增删改查已在主应用本地记忆库落地（见第 0.6 节）。
 
 ### 0.5 超时 / 重试 / 取消 / 限流 / 观测
 
@@ -104,12 +104,14 @@ data: <JSON>
 |---------------|------|--------------|----------------------|
 | `POST /api/v1/chat-messages` | 发送聊天消息（SSE） | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
 | `POST /api/v1/chat-messages/{task_id}/stop` | 停止生成 | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `GET /api/v1/conversations` | 会话列表 | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `GET /api/v1/messages` | 消息列表 | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `POST /api/v1/conversations/{conversation_id}/name` | 重命名会话 | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `DELETE /api/v1/conversations/{conversation_id}` | 删除会话 | 预留未实现 | `501 CHAT_ORCHESTRATOR_NOT_CONFIGURED` |
-| `POST /api/v1/context-compression/compress` | 上下文压缩 | 已实现（本地消息仓储当前为空，需 LLM 可用） | 200 / 502 / 503 |
-| `POST /api/v1/chat-summary/create` | 创建/更新用户摘要 | 实现中（本地消息仓储当前为空） | 200；空仓储时不调用 LLM |
+| `POST /api/v1/conversations` | 创建会话 | 已完成（本地记忆库，同 ID 幂等） | 201 / 403 / 422 |
+| `POST /api/v1/conversations/{conversation_id}/messages` | 追加会话消息 | 已完成（本地记忆库） | 201 / 404 / 422 |
+| `GET /api/v1/conversations` | 会话列表 | 已完成（按 user_id 过滤，`{data,page,limit,has_more}`） | 200 / 403 |
+| `GET /api/v1/messages` | 消息列表 | 已完成（最新一窗、升序返回） | 200 / 403 / 404 |
+| `POST /api/v1/conversations/{conversation_id}/name` | 重命名会话 | 已完成 | 200 / 404 |
+| `DELETE /api/v1/conversations/{conversation_id}` | 删除会话 | 已完成（消息级联删除） | 204 / 404 |
+| `POST /api/v1/context-compression/compress` | 上下文压缩 | 已完成（本地消息仓储已接通，需 LLM 可用） | 200 / 502 / 503 |
+| `POST /api/v1/chat-summary/create` | 创建/更新用户摘要 | 已完成（本地消息仓储已接通） | 200 / 502 |
 | `GET /api/v1/chat-summary/query/{user_id}` | 查询用户摘要 | 已完成 | 200 |
 
 ---
@@ -177,14 +179,14 @@ data: <JSON>
 | Request Body | 无。 |
 | Response Body | `{"data":[{"id":"...","name":"...","user_id":"...","inputs":{},"status":"normal","introduction":"","created_at":0,"updated_at":0}],"page":1,"limit":20,"has_more":false}` |
 | SSE 协议 | 不适用。 |
-| 错误码 | 401/403/429/501/503。 |
+| 错误码 | 401/403/429/503。 |
 | 分页 | `page`/`limit`/`has_more`，见 0.3。 |
 | 超时 / 重试 | 只读，可安全重试；超时按部署默认 HTTP 超时。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL。 |
+| 依赖 | PostgreSQL（`chat_conversation`，按 `user_id` 过滤，`updated_at` 倒序）。 |
 | 日志与观测 | `request_id`、`user_id`、分页参数、返回数量。 |
-| 实现状态 | 预留未实现。 |
+| 实现状态 | 已完成（`ListConversationsUseCase` + `SqlAlchemyChatMemoryRepositoryAdapter`）。 |
 | 前端调用方 | `frontend/apps/chat/src/services/chat.ts` 的 `getConversations()`；`ChatPage.vue` `onMounted()`。 |
 
 ## 4. `GET /api/v1/messages`
@@ -201,14 +203,14 @@ data: <JSON>
 | Request Body | 无。 |
 | Response Body | `{"data":[{"id":"...","conversation_id":"...","role":"user","content":"...","query":"...","answer":"...","created_at":0,"metadata":{}}],"page":1,"limit":20,"has_more":false}` |
 | SSE 协议 | 不适用。 |
-| 错误码 | 401/403/404/422/429/501/503。 |
-| 分页 | 见 0.3；消息按时间升序。 |
+| 错误码 | 401/403/404/422/429/503。 |
+| 分页 | 见 0.3；`page=1` 是最新一窗，数组内按时间升序。 |
 | 超时 / 重试 | 只读，可安全重试。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL。 |
+| 依赖 | PostgreSQL（`chat_message`，同时按 `user_id` 与 `conversation_id` 过滤）。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、返回数量。 |
-| 实现状态 | 预留未实现。 |
+| 实现状态 | 已完成；会话不存在或不属于当前用户统一 404。 |
 | 前端调用方 | `frontend/apps/chat/src/services/chat.ts` 的 `getMessages()`；`ChatPage.vue` `loadChat()`。 |
 
 ## 5. `POST /api/v1/conversations/{conversation_id}/name`
@@ -225,15 +227,34 @@ data: <JSON>
 | Request Body | `name: string` 必填，1–255 字符；`auto_generate?: boolean` 默认 false。示例 `{"name":"售后费用分析","auto_generate":false}`。 |
 | Response Body | 返回更新后 Conversation：`{"id":"...","name":"...","user_id":"...","inputs":{},"status":"normal","introduction":"","created_at":0,"updated_at":0}`。 |
 | SSE 协议 | 不适用。 |
-| 错误码 | 400/401/403/404/422/429/501/503。 |
+| 错误码 | 400/401/403/404/422/429/503。 |
 | 分页 | 不适用。 |
 | 超时 / 重试 | 幂等：相同名称重复提交结果一致。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL。 |
+| 依赖 | PostgreSQL（`chat_conversation.name`）。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、新旧名称。 |
-| 实现状态 | 预留未实现。 |
+| 实现状态 | 已完成；`auto_generate=true` 且 `name` 为空时用该会话首个用户提问前 50 字生成标题。 |
 | 前端调用方 | `frontend/packages/components/src/MessageList/MessageList.vue` 的 `onRenameCommit()`；包装方为 `ChatPage.vue` 的 `MessageList` props 和 `saveRename()`。 |
+
+## 5.1 `POST /api/v1/conversations` 与 `POST /api/v1/conversations/{conversation_id}/messages`（记忆写入）
+
+这两个写接口是短期记忆落库入口，RAG 容器生成结束后调用；字段级契约与示例见
+[`docs/langchain-rag-container-api-contract.md`](langchain-rag-container-api-contract.md) §9.4。
+
+| 项目 | 内容 |
+|------|------|
+| 接口名称 / OpenAPI tag | 创建会话 / 追加会话消息 · `LangChain Chat` |
+| Method + Path | `POST /api/v1/conversations`；`POST /api/v1/conversations/{conversation_id}/messages` |
+| 功能说明 | 新建会话；向已有会话批量追加 `user`/`assistant`/`system` 消息并返回落库结果。 |
+| 认证 | Bearer JWT。 |
+| 归属校验 | 会话必须属于 JWT 当前用户；`user_id` 仅 admin/superuser 可指定他人（普通用户传他人身份 403）。 |
+| Request Body | 建会话：`conversation_id?`（≤64，省略则生成 uuid4）、`name?`（≤255）、`inputs?`、`user_id?`。写消息：`messages: [{role, content?, query?, answer?, created_at?, metadata?}]`（1–200 条）、`user_id?`。 |
+| Response Body | 建会话：201 + Conversation 对象（同 ID 重复创建返回已存在的那个）。写消息：201 + `{"data":[Message...],"conversation_id":"...","stored":n}`。 |
+| 错误码 | 401/403/404/422/429/503。 |
+| 分页 | 不适用。 |
+| 依赖 | PostgreSQL（`chat_conversation` / `chat_message`）。 |
+| 实现状态 | 已完成。 |
 
 ## 6. `DELETE /api/v1/conversations/{conversation_id}`
 
@@ -247,16 +268,16 @@ data: <JSON>
 | Request Header | `Authorization: Bearer <JWT>`。 |
 | Request Query | 无。 |
 | Request Body | 无。 |
-| Response Body | 成功：`204 No Content`；当前未配置：501 统一错误。 |
+| Response Body | 成功：`204 No Content`；会话不存在或不属于当前用户：404。 |
 | SSE 协议 | 不适用。 |
-| 错误码 | 401/403/404/429/501/503。 |
+| 错误码 | 401/403/404/429/503。 |
 | 分页 | 不适用。 |
 | 超时 / 重试 | 幂等：不存在时返回 404 或成功由实现统一；建议 404 以避免猜测他人会话是否存在。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
 | 依赖 | PostgreSQL；如附件/对象存储需级联清理。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、删除结果。 |
-| 实现状态 | 预留未实现。 |
+| 实现状态 | 已完成（`SqlAlchemyChatMemoryRepositoryAdapter.delete_conversation`，同事务删除会话与其消息）。 |
 | 前端调用方 | `frontend/packages/components/src/MessageList/MessageList.vue` 的 `deleteConversation()`；`ChatPage.vue` 的 `deleteChat()` / `confirmDelete()`。 |
 
 ## 7. `POST /api/v1/context-compression/compress`
@@ -278,9 +299,9 @@ data: <JSON>
 | 超时 / 重试 | LLM 调用超时/上下文窗口错误可由适配器内部降级 `max_tokens`；客户端可重试幂等压缩。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL（本地消息仓储；当前实现为空列表回退到请求上下文）、外部 OpenAI 兼容 LLM。 |
+| 依赖 | PostgreSQL（`chat_message`，按 `user_id` + `conversation_id` 读取；请求体自带 `recent_dialogues`/`older_dialogues` 时优先用请求体）、外部 OpenAI 兼容 LLM。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、压缩前后长度。 |
-| 实现状态 | 已实现；但如果未来接入 LangChain 消息仓储，将只替换 `ChatMessageRepositoryPort` 实现。 |
+| 实现状态 | 已完成：本地消息仓储已接通；LLM 不可达/返回网页/超窗重试失败统一 502。 |
 | 前端调用方 | `frontend/apps/chat/src/services/chat.ts` 的 `compressContext()`；`ChatPage.vue` 的 `handleCompressContext()`。 |
 
 ## 8. `POST /api/v1/chat-summary/create`
@@ -297,14 +318,14 @@ data: <JSON>
 | Request Body | `user_id: string` 必填；`conversation_id: string` 必填，本服务内部会话 ID；`limit?: int` 默认 20。 |
 | Response Body | `{"code":200,"message":"Chat summary created successfully","data":{"user_id":"...","conversation_id":"...","query_count":0,"previous_summary":null,"new_summary":null,"is_first_time":true,"db_updated":false}}` |
 | SSE 协议 | 不适用。 |
-| 错误码 | 400/401/403/422/429/500/503。 |
+| 错误码 | 400/401/403/422/429/500 未预期异常/502 LLM 不可达或返回非 API 响应/503。 |
 | 分页 | 不适用。 |
 | 超时 / 重试 | 摘要生成带 LLM 调用，可重试；若消息仓储为空则直接返回，不调用 LLM。 |
 | 取消 | 不适用。 |
 | 限流 | 普通限流。 |
-| 依赖 | PostgreSQL（`user_chat_profile`；本地消息仓储当前为空）、OpenAI 兼容 LLM。 |
+| 依赖 | PostgreSQL（`user_chat_profile` 主键为内部用户 ID=JWT `sub`；消息源为 `chat_message`）、OpenAI 兼容 LLM（`QWEN3_6_35B_*`，key 复用 `AI_INFERENCE_API_KEY`）。 |
 | 日志与观测 | `request_id`、`user_id`、`conversation_id`、query_count、LLM 结果长度。 |
-| 实现状态 | 实现中：已移除外部聊天服务提取，仍等待 LangChain 消息表落库；本地仓储为空时不生成摘要。 |
+| 实现状态 | 已完成：本地消息仓储已接通，摘要真实生成并 upsert；该会话无 query 时返回 `query_count=0/db_updated=false` 且不改动画像。 |
 | 前端调用方 | `frontend/packages/components/src/ChatSummary/useChatSummary.ts` 的 `archiveConversation()`；`ChatPage.vue` 的 `archiveChat()`。 |
 
 ## 9. `GET /api/v1/chat-summary/query/{user_id}`
@@ -315,7 +336,7 @@ data: <JSON>
 | Method + Path | `GET /api/v1/chat-summary/query/{user_id}` |
 | 功能说明 | 查询指定用户最新画像摘要。 |
 | 认证 | Bearer JWT。 |
-| 归属校验 | 普通用户只能查自己；`admin`/`superuser` 可查任意 user_id（UUID 时解析为用户名）。 |
+| 归属校验 | 普通用户只能查自己；`admin`/`superuser` 可查任意 user_id（UUID 或用户名都会解析为内部用户 ID）。 |
 | Request Header | `Authorization: Bearer <JWT>`。 |
 | Request Query | 无；`user_id` 在 path 中。 |
 | Request Body | 无。 |
@@ -333,8 +354,8 @@ data: <JSON>
 
 ## 10. 后续接入 LangChain 的施工边界
 
-1. 只实现 `app/ports/outbound/chat.py` 的 `ChatOrchestratorPort`。
+1. 只实现 `app/ports/outbound/chat.py` 的 `ChatOrchestratorPort`（**只有** `stream_message` 与 `stop` 两个方法）。
 2. 替换 `app/adapters/langchain_chat/adapter.py` 中的占位方法；路由、前端路径、Nginx 与 `prefixes.py` 不再修改。
-3. 如需本地消息仓储，实现 `ChatMessageRepositoryPort`，供 `context_compression` / `chat_summary` 读取。
-4. 补齐 PostgreSQL 会话/消息表、任务状态观察者与 token usage 记录；SSE 事件名和 `{data,page,limit,has_more}` 响应形状不得改变。
-5. 接入后删除本文件「预留状态表」中的 501 说明，保留其他契约要求。
+3. 会话/消息存储**已完成**：`chat_conversation` / `chat_message` 两张表 + `SqlAlchemyChatMemoryRepositoryAdapter` 同时实现 `ConversationStorePort` 与 `ChatMessageRepositoryPort`，`context_compression` / `chat_summary` 已直接读它，容器侧无需再补数据层。
+4. 仍需补齐的是生成侧：任务状态观察者与 token usage 记录；SSE 事件名和 `{data,page,limit,has_more}` 响应形状不得改变。
+5. 接入后把本文件「预留状态表」中剩下两条 501 说明改为已完成，保留其他契约要求。

@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.core.logging import get_logger
-from app.adapters.chat_archive.local_message_repository import (
-    LocalChatMessageRepositoryAdapter,
+from app.adapters.chat_archive.memory_repository import (
+    SqlAlchemyChatMemoryRepositoryAdapter,
 )
 from app.adapters.context_compressor import (
+    LlmCallFailedError,
     LlmEndpointMisconfiguredError,
     compress_context,
 )
@@ -26,7 +27,7 @@ class IntegrationContextCompressorAdapter(ContextCompressorPort):
         self,
         message_repository: Optional[ChatMessageRepositoryPort] = None,
     ):
-        self._messages = message_repository or LocalChatMessageRepositoryAdapter()
+        self._messages = message_repository or SqlAlchemyChatMemoryRepositoryAdapter()
 
     async def _with_local_dialogues(self, context_data: dict) -> dict:
         data = dict(context_data)
@@ -47,10 +48,13 @@ class IntegrationContextCompressorAdapter(ContextCompressorPort):
                 conversation_id=conversation_id,
                 limit=max(1, min(n_recent, 100)),
             )
+            # ``recent`` keeps the older window strictly before the recent one,
+            # so the same turns are never compressed twice.
             data["older_dialogues"] = await self._messages.list_older_dialogues(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 limit=max(1, min(n_recent * 4, 400)),
+                recent=max(1, min(n_recent, 100)),
             )
         except Exception as exc:  # noqa: BLE001 - compression can still run with request inputs
             logger.warning(
@@ -66,5 +70,6 @@ class IntegrationContextCompressorAdapter(ContextCompressorPort):
         try:
             enriched = await self._with_local_dialogues(context_data)
             return await compress_context(enriched)
-        except LlmEndpointMisconfiguredError as exc:
+        except (LlmEndpointMisconfiguredError, LlmCallFailedError) as exc:
+            # Upstream model problem -> 502, never a blanket 500.
             raise ExternalServiceError("context_compression", str(exc)) from exc

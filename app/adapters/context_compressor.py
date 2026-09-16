@@ -87,6 +87,20 @@ class LlmEndpointMisconfiguredError(RuntimeError):
     """Configured OpenAI-compatible base_url returned an HTML error page."""
 
 
+class LlmCallFailedError(RuntimeError):
+    """The configured LLM endpoint is unreachable or returned an error.
+
+    Kept distinct from a generic exception so the HTTP layer can answer 502
+    "upstream model unavailable" instead of a blanket 500.
+    """
+
+
+def _llm_api_key() -> str:
+    """Reuse the shared inference-gateway key when one is configured."""
+
+    return (settings.AI_INFERENCE_API_KEY or "").strip() or "not-needed"
+
+
 class ContextCompressor:
     """Compress recent/older dialogue lists with an OpenAI-compatible LLM."""
 
@@ -108,10 +122,11 @@ class ContextCompressor:
 
         self.llm = ChatOpenAI(
             base_url=self.base_url,
-            api_key="not-needed",
+            api_key=_llm_api_key(),
             model=self.model_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            timeout=float(settings.LANGCHAIN_CHAT_TIMEOUT_SEC),
         )
 
     async def compress(self, context_data: Dict[str, Any]) -> str:
@@ -198,7 +213,9 @@ class ContextCompressor:
             match = re.search(r"\((\d+)\s*>\s*(\d+)\s*-\s*(\d+)\)", error_text)
             if not match:
                 logger.error("Error during context compression: %s", error_text[:2000])
-                raise
+                raise LlmCallFailedError(
+                    f"上下文压缩失败（LLM {self.base_url}）：{error_text[:500]}"
+                ) from exc
 
             requested_max = int(match.group(1))
             max_context = int(match.group(2))
@@ -207,7 +224,9 @@ class ContextCompressor:
             retry_max_tokens = min(requested_max, self.max_tokens, max(64, available))
             if retry_max_tokens <= 0:
                 logger.error("Error during context compression: %s", error_text[:2000])
-                raise
+                raise LlmCallFailedError(
+                    f"上下文压缩失败（LLM {self.base_url}）：提示词超出模型上下文窗口"
+                ) from exc
 
             logger.warning(
                 "Context close to model limit, retrying with reduced max_tokens: "
@@ -218,13 +237,22 @@ class ContextCompressor:
             )
             retry_llm = ChatOpenAI(
                 base_url=self.base_url,
-                api_key="not-needed",
+                api_key=_llm_api_key(),
                 model=self.model_name,
                 temperature=self.temperature,
                 max_tokens=retry_max_tokens,
+                timeout=float(settings.LANGCHAIN_CHAT_TIMEOUT_SEC),
             )
             retry_chain = prompt | retry_llm | StrOutputParser()
-            raw_result = await retry_chain.ainvoke(payload)
+            try:
+                raw_result = await retry_chain.ainvoke(payload)
+            except Exception as retry_exc:  # noqa: BLE001 - mapped to HTTP 502
+                logger.error(
+                    "Retry with reduced max_tokens failed: %s", str(retry_exc)[:2000]
+                )
+                raise LlmCallFailedError(
+                    f"上下文压缩失败（LLM {self.base_url}）：{str(retry_exc)[:500]}"
+                ) from retry_exc
 
         processed_result = re.sub(
             r"<think>.*?</think>", "", raw_result, flags=re.DOTALL | re.IGNORECASE
