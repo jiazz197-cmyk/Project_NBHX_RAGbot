@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 _EMBEDDING_INSTANCES: Dict[str, "BGEM3EmbeddingWrapper"] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
-_EMBEDDING_MAX_RETRIES = 3
-_EMBEDDING_RETRY_DELAY_SEC = 3
+# 调用参数从配置读取（.env）：BGE_M3_MAX_RETRIES / BGE_M3_RETRY_DELAY_SEC；
+# 装饰器在函数定义期求值，模块导入时固化（settings 为导入期单例，与全局常量语义一致）
+_EMBEDDING_MAX_RETRIES = settings.BGE_M3_MAX_RETRIES
+_EMBEDDING_RETRY_DELAY_SEC = settings.BGE_M3_RETRY_DELAY_SEC
 
 
 def _embedding_retry_before_sleep(label: str):
@@ -82,6 +84,11 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
         except Exception as exc:
             raise EmbeddingError(f"初始化 BGE-M3 远程接口失败: {exc}") from exc
 
+    def _auth_headers(self) -> Dict[str, str]:
+        """网关鉴权头；AI_INFERENCE_API_KEY 为空时返回空 dict（兼容无鉴权端点）。"""
+        key = (settings.AI_INFERENCE_API_KEY or "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
     def _parse_embedding(self, data: dict) -> List[float]:
         embedding = None
         if isinstance(data, dict):
@@ -134,7 +141,9 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
         async def _single_async_embedding() -> List[float]:
             payload = {"model": self.model_name, "input": [text]}
             client = await get_http_client()
-            response = await client.post(self.api_url, json=payload, timeout=30)
+            response = await client.post(
+                self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
+            )
             response.raise_for_status()
             return self._parse_embedding(response.json())
 
@@ -159,7 +168,9 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
         def _single_sync_embedding() -> List[float]:
             payload = {"model": self.model_name, "input": [text]}
             client = get_sync_http_client()
-            response = client.post(self.api_url, json=payload, timeout=30)
+            response = client.post(
+                self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
+            )
             response.raise_for_status()
             return self._parse_embedding(response.json())
 
@@ -194,7 +205,9 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
             def _single_batch_sync() -> List[List[float]]:
                 payload = {"model": self.model_name, "input": non_empty_texts}
                 client = get_sync_http_client()
-                response = client.post(self.api_url, json=payload, timeout=30)
+                response = client.post(
+                    self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
+                )
                 response.raise_for_status()
                 return self._parse_embeddings_batch(response.json())
 
@@ -247,7 +260,9 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
         """
         payload = {"model": self.model_name, "input": ["ping"]}
         client = await get_http_client()
-        response = await client.post(self.api_url, json=payload, timeout=timeout_sec)
+        response = await client.post(
+            self.api_url, json=payload, timeout=timeout_sec, headers=self._auth_headers()
+        )
         response.raise_for_status()
         return self._parse_embedding(response.json())
 

@@ -1,4 +1,4 @@
-"""PGVector + HTTP 嵌入/重排 API 的 RAG 检索；环境变量 BGE_M3_API_URL、RERANKER_API_URL。"""
+"""PGVector + HTTP 嵌入/重排 API 的 RAG 检索；环境变量 BGE_M3_API_URL、RERANKER_API_URL、AI_INFERENCE_API_KEY。"""
 
 import asyncio
 import inspect
@@ -42,12 +42,17 @@ class HTTPReranker(BaseNodePostprocessor):
         super().__init__(api_url=api_url, top_n=top_n, timeout=timeout)
         logger.debug(f"重排序模型 API: {api_url}")
 
+    def _auth_headers(self) -> Dict[str, str]:
+        """网关鉴权头；AI_INFERENCE_API_KEY 为空时返回空 dict（兼容无鉴权端点）。"""
+        key = (settings.AI_INFERENCE_API_KEY or "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
     def _rerank_payload(self, query_str: str, documents: List[str]) -> dict:
         return {
             "query": query_str,
             "documents": documents,
             "top_n": self.top_n,
-            "model": "BAAI/bge-reranker-v2-m3",
+            "model": settings.RERANKER_MODEL_NAME,
         }
 
     async def _rerank_request(self, query_str: str, documents: List[str]) -> dict:
@@ -56,6 +61,7 @@ class HTTPReranker(BaseNodePostprocessor):
             self.api_url,
             json=self._rerank_payload(query_str, documents),
             timeout=self.timeout,
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json()
@@ -66,6 +72,7 @@ class HTTPReranker(BaseNodePostprocessor):
             self.api_url,
             json=self._rerank_payload(query_str, documents),
             timeout=self.timeout,
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json()
@@ -135,6 +142,7 @@ class HTTPReranker(BaseNodePostprocessor):
             self.api_url,
             json=self._rerank_payload("ping", ["ping"]),
             timeout=timeout_sec,
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         result = response.json()

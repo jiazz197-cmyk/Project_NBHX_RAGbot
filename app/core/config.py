@@ -350,11 +350,20 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     CACHE_API_RESPONSE_TTL: int = Field(300, env="CACHE_API_RESPONSE_TTL")
     CACHE_JOB_STATUS_TTL: int = Field(86400, env="CACHE_JOB_STATUS_TTL")
 
-    BGE_M3_API_URL: str = Field("http://10.10.216.232:8002/v1/embeddings", env="BGE_M3_API_URL")
-    BGE_M3_MODEL_NAME: str = Field("BAAI/bge-m3", env="BGE_M3_MODEL_NAME")
+    # AI 推理网关（GPUStack）：BGE-M3 嵌入与 Reranker 共用同一网关与鉴权 Key
+    BGE_M3_API_URL: str = Field("http://172.28.16.50:8096/v1/embeddings", env="BGE_M3_API_URL")
+    BGE_M3_MODEL_NAME: str = Field("bge-m3", env="BGE_M3_MODEL_NAME")
     BGE_M3_TOKENIZER_NAME: str = Field("BAAI/bge-m3", env="BGE_M3_TOKENIZER_NAME")
-    
-    RERANKER_API_URL: str = Field("http://10.10.216.232:8003/v1/rerank", env="RERANKER_API_URL")
+    # 嵌入接口调用参数（原硬编码：timeout=30s / 重试 3 次 / 间隔 3s）
+    BGE_M3_TIMEOUT_SEC: int = Field(30, ge=1, le=600, env="BGE_M3_TIMEOUT_SEC")
+    BGE_M3_MAX_RETRIES: int = Field(3, ge=1, le=10, env="BGE_M3_MAX_RETRIES")
+    BGE_M3_RETRY_DELAY_SEC: int = Field(3, ge=0, le=120, env="BGE_M3_RETRY_DELAY_SEC")
+
+    RERANKER_API_URL: str = Field("http://172.28.16.50:8096/v1/rerank", env="RERANKER_API_URL")
+    RERANKER_MODEL_NAME: str = Field("bge-reranker-v2-m3", env="RERANKER_MODEL_NAME")
+
+    # 网关 Bearer Key；为空时不发送 Authorization 头（兼容无鉴权的旧端点）
+    AI_INFERENCE_API_KEY: str = Field("", env="AI_INFERENCE_API_KEY")
     
     DOTS_OCR_ENDPOINT: str = Field("http://10.10.216.232:8001/v1/chat/completions", env="DOTS_OCR_ENDPOINT")
     
