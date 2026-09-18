@@ -21,6 +21,12 @@ export default defineConfig(({ mode }) => {
   if (isNaN(port) || port <= 0) throw new Error('VITE_PORT must be a valid positive number')
 
   const apiBase = env.VITE_API_BASE_URL
+  // 聊天两接口（POST /chat-messages 与 /{task_id}/stop）分流到 ragchain 容器；
+  // 优先读真实进程环境变量（docker compose / shell 注入），再退回 .env 文件。
+  const chatOrchestratorTarget =
+    process.env.VITE_CHAT_ORCHESTRATOR_TARGET ||
+    env.VITE_CHAT_ORCHESTRATOR_TARGET ||
+    env.VITE_BACKEND_TARGET
 
   const makeProxy = (target: string) => ({
     target,
@@ -59,7 +65,8 @@ export default defineConfig(({ mode }) => {
 
       proxy: {
         [`${apiBase}/auth`]: makeProxy(env.VITE_BACKEND_TARGET),
-        [`${apiBase}/chat-messages`]: makeProxy(env.VITE_BACKEND_TARGET),
+        // 前缀匹配天然覆盖 /chat-messages 与 /{task_id}/stop
+        [`${apiBase}/chat-messages`]: makeProxy(chatOrchestratorTarget),
         [`${apiBase}/chat-summary`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/conversations`]: makeProxy(env.VITE_BACKEND_TARGET),
         [`${apiBase}/messages`]: makeProxy(env.VITE_BACKEND_TARGET),

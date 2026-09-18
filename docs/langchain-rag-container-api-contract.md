@@ -489,6 +489,25 @@ Content-Type: application/json
 |---|---|
 | `answer` | 命中的文档块内容按换行拼接；RAG 容器可直接作为工具结果/Prompt 上下文 |
 | `sources` | 来源标识列表，可用于前端展示或引用 |
+| `chunks` | （2026-09 增量）显式 `top_k` 时的结构化检索结果；未显式传 `top_k` 时为 `[]` |
+
+**增量扩展（2026-09-18 落地，向后兼容）：**
+
+- 新增 Query 参数 `top_k: int | None`（`ge=1, le=50`）：**显式传入**时返回结构化 `chunks`，直接做纯向量检索（不经过内部 query engine、不重排），上限 = `top_k`；不传时走原有 `answer/sources` 路径，行为不变。
+- 新增 Query 参数 `rerank: bool = true`：仅在**未显式传 `top_k`** 的旧路径生效（该路径内部重排 top_n=3）。显式传 `top_k` 时始终走纯向量 `chunks`，不做内部重排；需要重排的调用方（RAG 容器）自行调 `RERANKER_API_URL`。
+- 显式 `top_k` 响应示例：
+
+```json
+{
+  "answer": "chunk 文本按换行拼接",
+  "sources": ["a.pdf"],
+  "chunks": [
+    {"content": "chunk 文本", "source": "a.pdf", "score": 0.83, "metadata": {"minio_object_path": "documents/x.pdf"}}
+  ]
+}
+```
+
+- RAG 容器的固定调用：`POST /api/v1/retriever/db?collection=knowledge_chunks&top_k=<RAG_RETRIEVE_TOP_K>&rerank=false`，随后用返回的 `chunks[*].content` 调容器侧 reranker。
 
 约束：
 
@@ -509,7 +528,12 @@ Content-Type: application/json
 {"question": "哪个供应商交付延期最多？"}
 ```
 
-成功响应同 `/db`，但 `answer` 是 Excel 数据/分析结果的 JSON 字符串，`sources` 为空；底层会先检索 Excel 源文件，再从 MinIO 读取并转 JSON。
+成功响应同 `/db`，但语义为：
+
+- `answer` 是 Excel 数据/分析结果的 JSON 字符串（`{"data": <excel_to_json 结果>, "sources": [...]}` 中的 `data` 序列化结果）；
+- `sources` 是定位成功的 Excel **源文件名**列表（如 `["华翔定价表.xlsx"]`），供来源页脚展示；失败时 `answer` 为错误信息、`sources=[]`；
+- 可选 Query 参数 `top_k` 透传给底层检索；`/excel` 不做内部重排（`rerank` 参数仅为契约一致，传入不报错）；
+- 底层先检索 Excel 源文件，再从 MinIO 读取并转 JSON。
 
 ### 8.3 `POST /api/v1/retriever/charts`
 
@@ -795,13 +819,56 @@ RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 
 ---
 
-## 13. 需要确认的问题
+## 13. 已决问题（2026-09-18 实施回填）
 
-1. 前端六个路径是由 Nginx 拆给 RAG 容器 + Memory API（模式 A），还是全部由 RAG 容器承接（模式 B）？
-2. RAG 容器收到 JWT 后，是本地验签，还是必须调 `GET /api/v1/auth/me` 做用户有效性校验？
-3. 调 Retriever / Memory 时透传用户 JWT，还是用 `INTERNAL_API_KEY` + `X-User-Id`？
-4. ~~短期记忆的"写消息"接口由哪边定义？~~ **已定**：主应用自建（见 §9.4），接口按本文字段形状实现，容器直接调用。
-5. ~~长期摘要的消息源 `ChatMessageRepositoryPort` 现在返回空~~ **已解决**：`ChatMessageRepositoryPort` 现由 `SqlAlchemyChatMemoryRepositoryAdapter` 实现，直接读本地 `chat_message` 表；RAG 容器不需要把历史 query 塞给 `POST /chat-summary/create`。
-6. `task_id` / `conversation_id` / 取消状态是否需要落 Redis 供跨容器协作？当前主应用的任务体系只覆盖文档/OCR。
-7. `search_mode` 与 `inputs` 的最终字段名和取值，需要和前端再确认；目前前端发送的就是本文第 2.2 节的样子。
-8. 新增：RAG 容器调 Retriever / Memory 时，是透传用户 JWT，还是走服务间身份？目前 `INTERNAL_API_KEY` 只在配置里定义、代码中**没有任何使用点**，所以现在只能透传用户 JWT（本文各接口都要求 Bearer JWT）。
+| # | 问题 | 结论 |
+|---|---|---|
+| 1 | 六个前端路径由 Nginx 拆分（模式 A）还是 RAG 容器全承接（模式 B）？ | **Vite 代理分流**（当前 nginx 不可用）：`/api/v1/chat-messages` 前缀（含 `/{task_id}/stop`）→ ragchain 容器宿主 8010；`/api/v1/conversations`、`/messages` 等其余路径 → 主应用 8000，由主应用继续做本地记忆库。`nginx/nginx.conf.template` 已同步备用 upstream `nbhx_ragchain`。 |
+| 2 | RAG 容器收到 JWT 后本地验签还是调 `/auth/me`？ | **本地验签**（共享 `SECRET_KEY`/`ALGORITHM`，校验签名、`exp`、`sub`）+ 出站透传用户 JWT。`pv`/用户有效性每次入站由主应用校验，容器不查 DB、不调 `/auth/me`。 |
+| 3 | 调 Retriever / Memory 用透传 JWT 还是内部身份？ | **透传用户 JWT**（`Authorization: Bearer <同前端 token>`）。`INTERNAL_API_KEY` 当前无任何使用点，不引入服务间身份。 |
+| 4 | 短期记忆写接口由哪边定义？ | **已定**：主应用（见 §9.4），容器直接调用。 |
+| 5 | 长期摘要消息源为空？ | **已解决**：主应用 `ChatMessageRepositoryPort` 直读本地 `chat_message`，容器只读画像，不回写。 |
+| 6 | task_id / 会话 / 取消状态是否落 Redis？ | **进程内内存注册表**（单副本部署）；stop 幂等窗口 = `TASK_REGISTRY_TTL_SEC`（默认 600s），过期/他人任务 404。多副本部署时再迁 Redis。 |
+| 7 | search_mode / inputs 字段名与取值？ | 固定三值 `联网搜索` / `本地检索` / `本地&网络`（默认 `本地&网络`），非法值在 SSE 建立前返回 JSON 422 `VALIDATION_ERROR`。 |
+| 8 | Retriever / Memory 身份？ | 同 #3：**透传用户 JWT**，容器不伪造身份。 |
+
+---
+
+## 14. ragchain 容器配置（环境变量）
+
+ragchain 独立包位于 `ragchain/`，配置以 `ragchain/.env.example` 为唯一示例源，加载到 `app.config.Settings`；构建上下文 = `ragchain/` 自身（`ragchain/Dockerfile`），镜像 `nbhx-ragchain:py312` 仅本地构建。
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `RAGCHAIN_HOST` / `RAGCHAIN_PORT` | `0.0.0.0` / `8000` | 容器内监听地址/端口（宿主映射 8010:8000） |
+| `RAGCHAIN_LOG_LEVEL` | `INFO` | root logger 级别 |
+| `SECRET_KEY` / `ALGORITHM` | 空 / `HS256` | 与主应用一致，本地验签 JWT |
+| `MAIN_APP_BASE_URL` | `http://host.docker.internal:8000/api/v1` | 主应用（Retriever + Memory API） |
+| `MAIN_LLM_API_URL` / `MAIN_LLM_MODEL` / `MAIN_LLM_API_KEY` | 空 / `qwen3.8-27b` / 空 | 主生成 LLM（OpenAI 兼容） |
+| `LANGCHAIN_CHAT_TIMEOUT_SEC` / `LANGCHAIN_MAX_OUTPUT_TOKENS` / `MAIN_LLM_TEMPERATURE` | `300` / `4096` / `0.3` | 主 LLM 超时、最大输出、温度 |
+| `SUB_LLM_API_URL` / `SUB_LLM_MODEL` / `SUB_LLM_API_KEY` | 空 | 防注入/改写/意图辅 LLM；留空回退 `MAIN_LLM_*` |
+| `SUB_LLM_ENABLE_THINKING` | `False` | 辅 LLM 思考开关；关闭时发 `chat_template_kwargs.enable_thinking=false` |
+| `SUB_LLM_TIMEOUT_SEC` / `SUB_LLM_TEMPERATURE` | `60` / `0.1` | 辅 LLM 超时/温度 |
+| `RERANKER_API_URL` / `RERANKER_MODEL_NAME` / `AI_INFERENCE_API_KEY` | 见 `.env.example` | 容器直连 reranker（主应用 /db 已关内部重排） |
+| `SEARCH_ENGINE_URL` / `SEARCH_RESULT_COUNT` / `SEARCH_TIMEOUT_SEC` | 见 `.env.example` | SearXNG 风格 `POST form: q, format=json`，解析 `results[]` |
+| `DOC_COLLECTION` / `EXCEL_COLLECTION` | `knowledge_chunks` / `excel_db_chunks` | 主应用 Retriever 集合名 |
+| `RAG_RETRIEVE_TOP_K` / `RAG_RERANK_TOP_N` | `10` / `5` | 容器侧检索/重排参数 |
+| `MEMORY_RECENT_TURNS` / `MEMORY_COMPRESS_THRESHOLD` / `MEMORY_COMPRESS_N_RECENT` | `10` / `20` / `5` | 短期/工作记忆参数；单点失败降级为空 |
+| `EXCEL_CONTEXT_MAX_CHARS` | `8000` | Excel JSON 进 prompt 前截断上限 |
+| `TOOL_MAX_ITERATIONS` / `TOOL_EXEC_TIMEOUT_SEC` / `TOOL_CODE_MAX_CHARS` / `TOOL_OUTPUT_MAX_CHARS` | `3` / `10` / `8000` / `4000` | 有界工具循环与沙箱限制 |
+| `SSE_HEARTBEAT_SEC` / `TASK_REGISTRY_TTL_SEC` / `RAGCHAIN_GUARD_STRICT` | `15` / `600` / `False` | 心跳、stop 幂等 TTL、防注入不可达时是否严格拒绝 |
+
+> 本地 dev（主应用跑在宿主 8000、SearXNG 映射宿主 8080）时建议：`MAIN_APP_BASE_URL=http://host.docker.internal:8000/api/v1`、`SEARCH_ENGINE_URL=http://host.docker.internal:8080/search`；`~/.env` 不入库（gitignored）。
+
+---
+
+## 15. 沙箱 Python 计算工具（ragchain 容器内）
+
+当回答涉及财务数据计算（增长率、占比、汇总、趋势等）时，主 LLM 通过 OpenAI 兼容 tool calling 调用 `python_exec`：
+
+- 执行方式：`asyncio.create_subprocess_exec(sys.executable, "-I", <临时脚本>)`；代码写入 `/tmp` 下临时目录，用后即删。
+- 环境脱敏：子进程仅保留 `PATH`、`LANG`、`LC_*`、`TZ`、`SYSTEMROOT`，不继承 `SECRET_KEY` / LLM Key / DB 凭据。
+- 限制：代码长度 ≤ `TOOL_CODE_MAX_CHARS`；墙钟超时 `TOOL_EXEC_TIMEOUT_SEC` 后 kill；stdout/stderr 合并截断到 `TOOL_OUTPUT_MAX_CHARS`；无网络/文件/系统操作能力（提示词禁止 + 沙箱兜底）。
+- 工具循环有界 ≤ `TOOL_MAX_ITERATIONS`；执行失败/超时降级为“LLM 手算并列算式”，正文追加“自动计算失败，结果为模型计算，请复核”。
+- 镜像预装 pandas / numpy；这是**进程级隔离**（隔离子进程 + 脱敏 env + 超时），不是 OS 级强隔离（不引入 gVisor/K8s sandbox）。
+- 回答仍由 system prompt 要求列出计算过程/算式，并标注数据来源文件名或“基于用户提供数据”。

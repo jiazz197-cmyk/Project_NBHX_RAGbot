@@ -73,6 +73,10 @@ services:
       # **不在同一个 docker 网络**（前者 nbhx-<user>_default，后者 infra_infra-net），
       # 所以只能走 host-gateway，写服务名 tagenerator 会 DNS 解析失败。
       TAGGER_ENDPOINT: http://host.docker.internal:8004/v1/tags
+      # RAG 核心链容器（ragchain，宿主 8010 暴露）与 dev 容器不在同一 docker
+      # 网络，只能走 host-gateway；供 vite.config.ts 的聊天两接口代理分流使用。
+      # 注意：vite 需要真实进程环境变量，vite.config.ts 优先读 process.env。
+      VITE_CHAT_ORCHESTRATOR_TARGET: http://host.docker.internal:8010
       # 过渡期本进程内仍会跑 PaddleOCR（issue #9 服务化）：
       # PADDLE_OCR_ENDPOINT: http://host.docker.internal:8080
     extra_hosts:

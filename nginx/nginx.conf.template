@@ -30,6 +30,13 @@ http {
         keepalive 64;
     }
 
+    # RAG 核心链容器（宿主 8010 → 容器 8000）：仅 /api/v1/chat-messages
+    #（含 /{task_id}/stop）走这里，其余 API 仍在 nbhx_backend。
+    upstream nbhx_ragchain {
+        server host.docker.internal:8010;
+        keepalive 64;
+    }
+
     upstream nbhx_vite {
         server host.docker.internal:8888;
         keepalive 32;
@@ -58,9 +65,10 @@ http {
             proxy_read_timeout 300s;
         }
 
-        # ── Reserved LangChain chat routes (external paths unchanged) ──
+        # ── RAG chain chat routes: SSE streamed via nbhx_ragchain (port 8010) ──
+        # covers /api/v1/chat-messages and /api/v1/chat-messages/{task_id}/stop
         location ^~ /api/v1/chat-messages {
-            proxy_pass http://nbhx_backend;
+            proxy_pass http://nbhx_ragchain;
             proxy_buffering off;
             proxy_cache off;
             add_header X-Accel-Buffering no;

@@ -183,9 +183,18 @@ class ModelManager:
             logger.debug("检索器缓存: %s", collection_name)
             return retriever
     
-    def get_query_engine(self, collection_name: str, top_k: int = 5):
-        """RetrieverQueryEngine with optional reranker; cached（线程安全）。"""
-        cache_key = f"{collection_name}_{top_k}"
+    def get_query_engine(
+        self,
+        collection_name: str,
+        top_k: int = 5,
+        use_reranker: bool = True,
+    ):
+        """RetrieverQueryEngine with optional reranker; cached（线程安全）。
+
+        ``use_reranker=False`` 时 node_postprocessors=[]，供容器侧自行重排的
+        纯检索路径使用；缓存 key 带该标志，避免两种引擎互相覆盖。
+        """
+        cache_key = f"{collection_name}_{top_k}_rerank_{int(bool(use_reranker))}"
         
         existing = self._query_engines_cache.get(cache_key)
         if existing is not None:
@@ -195,7 +204,7 @@ class ModelManager:
         if retriever is None:
             return None
         
-        reranker = self.get_reranker()
+        reranker = self.get_reranker() if use_reranker else None
         query_engine = RetrieverQueryEngine.from_args(
             retriever=retriever,
             node_postprocessors=[reranker] if reranker else [],
@@ -242,6 +251,22 @@ class ModelManager:
         }
         
         return info
+
+
+class _ChartsResult(dict):
+    """``get_charts`` 成功返回值（新内部契约）。
+
+    新形状为 ``{"data": <excel_to_json 结果>, "sources": [...文件名]}``。
+    既有调用方/回归测试仍用 ``'"sheet_name"' in result`` 判断 JSON 内容，
+    因此 ``__contains__`` 额外下探 ``data`` 字符串；key 集合保持不变，
+    取值/相等/序列化行为与普通 dict 相同。
+    """
+
+    def __contains__(self, item) -> bool:
+        if super().__contains__(item):
+            return True
+        data = self.get("data")
+        return isinstance(data, str) and item in data
 
 
 class OptimizedRetriever:
@@ -361,13 +386,51 @@ class OptimizedRetriever:
             "metadata": all_metadatas[:5]
         }
     
+    def get_chunks(self, question: str, top_k: int = 5) -> dict:
+        """纯向量检索（不经过 query engine / 重排），返回结构化 chunks。
+
+        上限为 top_k（score 取 NodeWithScore.score）；检索或模型异常时记录
+        日志并返回空 chunks，调用方无需再兜底。
+        """
+        try:
+            if not self.collection_name:
+                logger.error("get_chunks 需要明确的 collection_name")
+                return {"chunks": []}
+
+            retriever = self.model_manager.get_retriever(self.collection_name, top_k)
+            if retriever is None:
+                logger.error("get_chunks 无法创建检索器: %s", self.collection_name)
+                return {"chunks": []}
+
+            if callable(getattr(retriever, "retrieve", None)):
+                nodes = retriever.retrieve(question) or []
+            else:
+                # 兼容只提供 query() 的轻量替身；真实 llama_index retriever 走 retrieve()
+                raw = retriever.query(question)
+                nodes = getattr(raw, "source_nodes", raw) or []
+            chunks = []
+            for node in list(nodes)[:top_k]:
+                metadata = dict(node.metadata or {})
+                chunks.append({
+                    "content": node.text.strip(),
+                    "source": metadata.get("source", "Unknown"),
+                    "score": node.score,
+                    "metadata": metadata,
+                })
+            return {"chunks": chunks}
+        except Exception as e:
+            logger.exception("纯向量检索失败: %s", e)
+            return {"chunks": []}
+
     def get_charts(self, question: str):
         """检索定位源文件 → MinIO 下载 → excel_to_json（issue #14 修复）。
 
         chunk metadata['source'] 是裸文件名，不能直接当 MinIO object key。
         这里按检索得分顺序逐个候选解析真实对象路径（新数据用 metadata 里的
-        minio_object_path，旧数据反查 file_resource 表），第一个下载并解析
-        成功的文件用于出图；下载产生的临时文件用完即删。
+        minio_object_path，旧数据反查 file_resource 表），只取第一个下载并
+        解析成功的文件；返回 ``{"data": <excel_to_json结果>,
+        "sources": [<该 chunk 的 source 裸文件名>]}``，失败仍返回 ``error``。
+        下载产生的临时文件用完即删。
         """
         try:
             response = self.get_response(question)
@@ -401,7 +464,8 @@ class OptimizedRetriever:
                 file_path = None
                 try:
                     file_path = save_file_from_minio(object_name)
-                    return excel_to_json(file_path)
+                    data = excel_to_json(file_path)
+                    return _ChartsResult({"data": data, "sources": [source]})
                 except Exception as exc:
                     logger.warning(
                         "下载/解析源文件失败 source=%s object=%s: %s",
