@@ -132,7 +132,7 @@ docker exec gitlab gitlab-ctl status | head          # 期望十来个 run: 服�
 ```
 **数据安全**：GitLab 所有状态都在 bind mount（`/srv/infra/gitlab/{config,logs,data}`），重启容器不丢数据。
 
-### 4.2 容器数据目录被宿主侧「权限归一化」刷坏（2026-09-16 实测，GitLab + Redis 同时中招）
+### 4.2 容器数据目录被宿主侧「权限归一化」刷坏（2026-09-16 实测，GitLab + Redis 同时中招；registry 存储子树两天后才暴露，见 §4.3）
 
 **症状**：`docker ps` 全是 Up，但功能已废 ——
 - GitLab 全站 **502**（返回它自己的 `Waiting for GitLab to boot` 页），`git push` / `git ls-remote` 全部 HTTP 502；容器**内部**自测 `curl localhost:80` 也是 502（所以不是网络问题）。
@@ -186,6 +186,36 @@ journalctl -u infra-doctor -n 50 --no-pager       # 看历史结果（正常时�
 
 **为什么不能用"给容器加 `group_add`"来免疫**（实测过）：redis 官方 entrypoint 用 `setpriv --clear-groups`、postgres 用 `gosu`（initgroups）、gitlab 用 `chpst -P` / nginx `user gitlab-www` —— 服务进程的补充组一律由**容器内 `/etc/group`** 决定，docker 的 `group_add` 只作用于 PID 1，传不到服务进程。要真免疫只能派生镜像（把 gid 1005 加进容器内服务用户的组），代价是每次上游升版都要重做，性价比低。
 
+### 4.3 Registry 推送 500 —— §4.2 的第三个受害者（2026-09-18 发现）
+
+**症状**：`docker push` 新层一个都没传（全 `Waiting`），最终 `error from registry: unknown error`；
+但已存在的层 HEAD 全 200（`Layer already exists`），pull 正常。registry 日志特征：
+`POST /v2/<repo>/blobs/uploads/` **秒回 500**（duration_ms≈1）——与 §3.1 的 manifest 竞态
+（层全传成功、只有 manifest PUT 400）**不是一回事**，别混淆。
+
+**根因**：§4.2 的递归权限归一化把 `shared/registry/docker/` 整棵子树（13GB，blobs +
+repositories 元数据）刷成了 `git:gitlab-www 2775`。registry 进程跑在 `registry` 用户
+（993:993）下——既非属主也不在组，创建上传目录即失败。顶层 `shared/registry/` 当时
+被修回 `registry:git`，但**子树没有任何进程会自动修复**；infra_doctor 只探读路径
+（GET/HEAD，other 可读），探不出写路径损坏 → 拖了两天、到下一次 push（issue-15 依赖
+更新）才暴露。
+
+**修复**（§0 不变量 #4 允许的容器内模式，宿主侧禁止递归 chmod/chown）：
+
+```bash
+docker exec -u 0 gitlab chown -R registry:git /var/opt/gitlab/gitlab-rails/shared/registry/docker
+# 验证（以 registry 用户身份写入）：
+docker exec -u registry gitlab sh -c \
+  'cd /var/opt/gitlab/gitlab-rails/shared/registry/docker/registry/v2/repositories/<repo路径> \
+   && touch _uploads/t && rm _uploads/t && echo WRITE_OK'
+```
+
+修完**直接重推**即可。实测：重推一次成功，~20 层全部 `Pushed`，两个 tag 正常落库。
+
+**教训**：这类「权限刷坏」事故的修复必须**整棵数据树核对属主**，别只看顶层——
+受害者会随功能被使用陆续暴露（09-16 当天 GitLab 502 / Redis MISCONF，
+09-18 registry push）。日后遇到「读都正常、写秒挂」的存储类服务，先查属主再查别的。
+
 ---
 
 ## 5. 磁盘与缓存回收
@@ -228,6 +258,7 @@ docker system df                                                # 磁盘总览
 | ~~前端 dev 网络可配置化~~ | #12 | ✅ 已完成（2026-09-16）：WS 默认走同源 vite 代理，多人端口实测互不串；`.env` 已拆分（模板 `env.example`），详见 `docs/issues/004` |
 | `.env.production` 泄露密钥 | #13 | 已移出 git 跟踪并补 `.gitignore` 的 `.env.*` 规则（2026-09-16）；历史 key 轮换 / 历史清理仍待做，见 `docs/issues/005` |
 | 工作副本是否迁 NVMe | #11 | 实测**不必**（venv/缓存已在 NVMe，源码 ~3MB 留在 HDD 无感） |
+| /srv/infra/gitlab 74 个普通文件残留 setgid 位（09-16 事故指纹，infra_doctor 持续告警） | — | 不影响功能；维护窗口内容器内清理：`docker exec -u 0 gitlab sh -c 'find /var/opt/gitlab -type f -perm -2000 -exec chmod g-s {} +'`（**禁宿主侧**，§0 不变量 #4） |
 
 ---
 
