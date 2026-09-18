@@ -1,6 +1,7 @@
 import gc
 import os
 import threading
+from datetime import datetime
 from typing import Optional, Dict, List
 
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -12,6 +13,97 @@ from app.adapters.ragsystem.data_analyze import excel_to_json
 from app.adapters.ragsystem.RAGretriever import create_rag_retriever_system, HTTPReranker
 
 logger = get_logger("ragsystem.retriever_for_nbhx")
+
+
+def _parse_naive_utc(value) -> Optional[datetime]:
+    """ISO 字符串 → naive UTC datetime（与 FileResource.created_at 的存储口径一致）。"""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _lookup_minio_object_path(
+    file_name: str,
+    uploader: Optional[str] = None,
+    upload_time: Optional[str] = None,
+) -> Optional[str]:
+    """旧数据兜底：按裸文件名反查 file_resource 表，取真实 MinIO 对象路径。
+
+    选择策略（issue #14）：uploader 一致的候选优先；再取「不晚于 chunk
+    upload_time 的最新一条」——源文件必然先于处理批次入库，避免把后来的
+    同名重传误判为来源；若候选全部晚于 upload_time 则取最早一条。
+    """
+    from sqlalchemy import select
+
+    from app.core.database import SessionLocal
+    from app.models.orm.file_resource import FileResource
+
+    chunk_time = _parse_naive_utc(upload_time)
+    try:
+        with SessionLocal() as db:
+            stmt = (
+                select(
+                    FileResource.minio_object_path,
+                    FileResource.uploader,
+                    FileResource.created_at,
+                )
+                .filter(FileResource.file_name == file_name)
+                .order_by(FileResource.created_at.desc(), FileResource.id.desc())
+                .limit(50)
+            )
+            rows = db.execute(stmt).all()
+    except Exception as exc:
+        logger.error("按文件名反查 MinIO 对象路径失败 file=%s: %s", file_name, exc)
+        return None
+
+    if not rows:
+        return None
+
+    candidates = list(rows)
+    if uploader:
+        matched = [row for row in candidates if row.uploader == uploader]
+        if matched:
+            candidates = matched
+
+    if chunk_time is not None:
+        before = [
+            row
+            for row in candidates
+            if row.created_at is not None and row.created_at <= chunk_time
+        ]
+        # 全部晚于 chunk 时间（异常场景）：退而取最早一条，而非最新一条
+        candidates = before if before else list(reversed(candidates))
+
+    return candidates[0].minio_object_path
+
+
+def _resolve_minio_object_name(source, metadata: Optional[Dict] = None) -> Optional[str]:
+    """chunk metadata['source']（裸文件名）→ 真实 MinIO object key（issue #14）。
+
+    优先级：
+    1. 新数据：写入端（pipeline）已把 minio_object_path 落进 chunk metadata，直接用；
+    2. 旧数据：按 file_name 反查 file_resource 表（uploader / upload_time 就近匹配）。
+    """
+    if not source or not isinstance(source, str):
+        return None
+    source = source.strip()
+    if not source:
+        return None
+
+    if metadata:
+        object_name = metadata.get("minio_object_path")
+        if isinstance(object_name, str) and object_name.strip():
+            return object_name.strip()
+
+    return _lookup_minio_object_path(
+        file_name=source,
+        uploader=(metadata or {}).get("uploader"),
+        upload_time=(metadata or {}).get("upload_time"),
+    )
 
 
 def format_docs(docs):
@@ -206,6 +298,7 @@ class OptimizedRetriever:
         
         sources = []
         contents = []
+        metadatas = []
         
         for i, node in enumerate(source_nodes):
             logger.debug(
@@ -218,15 +311,21 @@ class OptimizedRetriever:
             content = node.text.strip()
             sources.append(source)
             contents.append(content)
+            # issue #14：附带 chunk 原始 metadata（含 minio_object_path），
+            # 供 get_charts 解析真实 MinIO 对象路径；get_response 的既有
+            # 消费方只读 content / source，不受影响。
+            metadatas.append(dict(node.metadata or {}))
         
         return {
             "content": contents[:5],
-            "source": sources[:5]
+            "source": sources[:5],
+            "metadata": metadatas[:5]
         }
     
     def _get_multi_collection_response(self, question: str, max_collections: int) -> dict:
         all_contents = []
         all_sources = []
+        all_metadatas = []
         
         collections_to_query = self.available_collections[:max_collections]
         
@@ -249,6 +348,8 @@ class OptimizedRetriever:
                     content = node.text.strip()
                     all_sources.append(source)
                     all_contents.append(content)
+                    # issue #14：附带 chunk 原始 metadata（含 minio_object_path）
+                    all_metadatas.append(dict(node.metadata or {}))
                     
             except Exception as e:
                 logger.error("查询collection %s 失败: %s", collection_name, e)
@@ -256,22 +357,63 @@ class OptimizedRetriever:
         
         return {
             "content": all_contents[:5],
-            "source": all_sources[:5]
+            "source": all_sources[:5],
+            "metadata": all_metadatas[:5]
         }
     
     def get_charts(self, question: str):
-        """Resolve source path via retrieval, load from MinIO, excel_to_json."""
+        """检索定位源文件 → MinIO 下载 → excel_to_json（issue #14 修复）。
+
+        chunk metadata['source'] 是裸文件名，不能直接当 MinIO object key。
+        这里按检索得分顺序逐个候选解析真实对象路径（新数据用 metadata 里的
+        minio_object_path，旧数据反查 file_resource 表），第一个下载并解析
+        成功的文件用于出图；下载产生的临时文件用完即删。
+        """
         try:
-            response_filename = self.get_response(question)
-            filename = response_filename["source"]
+            response = self.get_response(question)
+            sources = response.get("source", [])
+            metadatas = response.get("metadata", [])
             
-            if not filename or filename == ["error"]:
+            if not sources or sources == ["error"]:
                 return {"error": "未找到相关文件"}
             
-            object_name = filename[0] if isinstance(filename, list) else filename
-            file_path = save_file_from_minio(object_name)
-            data_source = excel_to_json(file_path)
-            return data_source
+            if not isinstance(sources, list):
+                sources = [sources]
+            
+            tried_sources = set()
+            last_error = None
+            for idx, source in enumerate(sources):
+                if not source or source in ("error", "Unknown") or source in tried_sources:
+                    continue
+                tried_sources.add(source)
+                
+                metadata = (
+                    metadatas[idx]
+                    if isinstance(metadatas, list) and idx < len(metadatas)
+                    else None
+                )
+                object_name = _resolve_minio_object_name(source, metadata)
+                if not object_name:
+                    logger.warning("无法定位源文件的 MinIO 对象: source=%s", source)
+                    last_error = f"未找到源文件 {source} 的存储路径"
+                    continue
+                
+                file_path = None
+                try:
+                    file_path = save_file_from_minio(object_name)
+                    return excel_to_json(file_path)
+                except Exception as exc:
+                    logger.warning(
+                        "下载/解析源文件失败 source=%s object=%s: %s",
+                        source, object_name, exc,
+                    )
+                    last_error = str(exc)
+                finally:
+                    # save_file_from_minio 的契约：路径由调用方清理
+                    if file_path is not None:
+                        file_path.unlink(missing_ok=True)
+            
+            return {"error": last_error or "未找到相关文件"}
         except Exception as e:
             logger.exception("获取图表数据失败: %s", e)
             return {"error": str(e)}

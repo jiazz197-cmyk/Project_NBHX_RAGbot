@@ -205,6 +205,10 @@ def process_documents_background(
                         input_data=[stream],
                         collection=collection,
                         uploader=uploader,
+                        # issue #14：把源文件的 MinIO 定位信息随 chunk 落库，
+                        # 检索端（get_charts）凭它还原真实对象路径。
+                        minio_object_path=file_record.minio_object_path,
+                        file_id=file_record.id,
                     )
                     total_processed += int(one_result.get("processed_files", 0) or 0)
                 except Exception as e:

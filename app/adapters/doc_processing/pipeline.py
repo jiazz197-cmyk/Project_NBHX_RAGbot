@@ -87,6 +87,8 @@ class DocumentProcessingPipeline:
         collection: str,
         uploader: Optional[str] = None,
         upload_time: Optional[str] = None,
+        minio_object_path: Optional[str] = None,
+        file_id: Optional[int] = None,
     ) -> List[TextNode]:
         nodes = []
         for chunk in documents:
@@ -109,6 +111,14 @@ class DocumentProcessingPipeline:
                 metadata.setdefault("uploader", clean_text_for_postgres(uploader))
             if upload_time:
                 metadata.setdefault("upload_time", upload_time)
+            # issue #14：源文件的 MinIO 对象路径随 chunk 落库；检索端 get_charts
+            # 凭它精确定位源文件，不再把 metadata['source']（裸文件名）当 object key。
+            if minio_object_path:
+                metadata.setdefault(
+                    "minio_object_path", clean_text_for_postgres(minio_object_path)
+                )
+            if file_id is not None:
+                metadata.setdefault("file_id", file_id)
             
             node = TextNode(
                 text=cleaned_text,
@@ -122,10 +132,16 @@ class DocumentProcessingPipeline:
         input_data: Union[FileInput, List[FileInput]],
         collection: str,
         uploader: Optional[str] = None,
+        minio_object_path: Optional[str] = None,
+        file_id: Optional[int] = None,
     ):
         """主入口：读取、切分、向量化并写入 PGVector（data_<collection>）。
 
         uploader 为本次上传者标识，写入每个 chunk 的 metadata（同名预检依赖它）。
+        minio_object_path / file_id 为源文件在 MinIO / file_resource 表的定位信息
+        （issue #14）：随 chunk metadata 落库，供检索端（get_charts）还原真实对象
+        路径。调用方（document_task_runner）逐文件调用（单元素列表），故按标量
+        传入并作用于本批全部文件，与 uploader 的传法一致。
         """
         files = self._prepare_files(input_data)
         if not files:
@@ -149,7 +165,14 @@ class DocumentProcessingPipeline:
                 )
                 if not chunks:
                     continue
-                nodes = self._documents_to_nodes(chunks, collection, uploader, upload_time)
+                nodes = self._documents_to_nodes(
+                    chunks,
+                    collection,
+                    uploader,
+                    upload_time,
+                    minio_object_path,
+                    file_id,
+                )
                 self.vector_store_manager.upsert_chunks(nodes, collection, self.embedding_model)
                 processed += 1
             except DocumentProcessingError as exc:
