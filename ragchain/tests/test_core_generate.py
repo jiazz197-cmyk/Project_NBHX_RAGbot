@@ -141,6 +141,38 @@ async def test_generation_cancel_returns_partial_tokens():
     assert all(e.content != "不应输出" for e in events)
 
 
+async def test_stream_emits_thinking_events_from_reasoning_deltas():
+    deps = build_fake_deps()
+    deps.llm.main_scripts = [
+        [
+            FakeChunk(reasoning="先分析"),
+            FakeChunk(reasoning="问题"),
+            FakeChunk(
+                content="答案：42",
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            ),
+        ]
+    ]
+    events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    assert [e.kind for e in events] == ["thinking", "thinking", "token", "done"]
+    assert "".join(e.content for e in events if e.kind == "thinking") == "先分析问题"
+    assert events[-1].usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+
+
+async def test_thinking_streamed_across_tool_rounds():
+    deps = build_fake_deps()
+    deps.executor = FakeExecutor(results=[FakeToolResult(ok=True, output="42")])
+    deps.llm.main_scripts = [
+        [FakeChunk(reasoning="需要计算"), _tool_call_chunk(1)],
+        [FakeChunk(reasoning="拿到结果"), FakeChunk(content="最终：42")],
+    ]
+    events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    kinds = [e.kind for e in events]
+    assert kinds.count("thinking") == 2
+    assert any(e.kind == "token" and e.content == "最终：42" for e in events)
+    assert kinds[-1] == "done"
+
+
 async def test_python_tool_executes_through_executor():
     deps = build_fake_deps()
     deps.executor = FakeExecutor(results=[FakeToolResult(ok=True, output="42")])

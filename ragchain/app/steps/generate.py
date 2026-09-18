@@ -2,6 +2,10 @@
 
 不引入 langgraph/agent 框架；工具调用通过汇总 AIMessageChunk.tool_call_chunks 后
 自行交给 deps.executor.execute 执行，再以 ToolMessage 回灌。
+
+思考过程：Qwen3 主 LLM 的思考增量由 llm_client 挂在 chunk 的
+``additional_kwargs["reasoning_content"]``，这里以 ``thinking`` 事件下发；
+orchestrator 负责把它包成 ``<think>...</think>`` 随 message 帧流出（前端协议）。
 """
 from __future__ import annotations
 
@@ -31,7 +35,7 @@ class PythonExecArgs(BaseModel):
 
 @dataclass
 class GenerationEvent:
-    kind: str  # token | notice | cancelled | done
+    kind: str  # token | thinking | notice | cancelled | done
     content: str = ""
     usage: dict[str, int] | None = None
     error: BaseException | None = None
@@ -72,6 +76,15 @@ def _chunk_text(chunk: Any) -> str:
                 parts.append(str(item.get("text") or item.get("content") or ""))
         return "".join(parts)
     return ""
+
+
+def _chunk_reasoning(chunk: Any) -> str:
+    """提取思考增量（llm_client 已把网关 ``reasoning_content`` 挂到 additional_kwargs）。"""
+    kwargs = getattr(chunk, "additional_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return ""
+    value = kwargs.get("reasoning_content")
+    return value if isinstance(value, str) else ""
 
 
 def _extract_usage(chunk: Any) -> dict[str, int] | None:
@@ -250,6 +263,9 @@ async def stream_generation(
                 if _cancelled():
                     yield GenerationEvent(kind="cancelled", usage=usage, tool_failed=tool_failed)
                     return
+                reasoning = _chunk_reasoning(chunk)
+                if reasoning:
+                    yield GenerationEvent(kind="thinking", content=reasoning)
                 text = _chunk_text(chunk)
                 if text:
                     yield GenerationEvent(kind="token", content=text)
@@ -278,6 +294,9 @@ async def stream_generation(
                     if _cancelled():
                         yield GenerationEvent(kind="cancelled", usage=usage, tool_failed=tool_failed)
                         return
+                    reasoning = _chunk_reasoning(chunk)
+                    if reasoning:
+                        yield GenerationEvent(kind="thinking", content=reasoning)
                     text = _chunk_text(chunk)
                     if text:
                         yield GenerationEvent(kind="token", content=text)

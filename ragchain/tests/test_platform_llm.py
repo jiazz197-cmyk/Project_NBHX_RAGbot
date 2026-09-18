@@ -46,7 +46,7 @@ def _install_fake_model(monkeypatch, response_content: str = "{}", exc: Exceptio
             return _FakeMessage(response_content)
 
     monkeypatch.setattr(llm_module, "ChatOpenAI", FakeChatOpenAI)
-    return created, instances
+    return created, instances, FakeChatOpenAI
 
 
 def _fresh_settings():
@@ -54,7 +54,7 @@ def _fresh_settings():
 
 
 def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
-    created, _ = _install_fake_model(monkeypatch)
+    created, _, fake_cls = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main-llm/v1"
     s.MAIN_LLM_API_KEY = ""
@@ -62,7 +62,8 @@ def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
 
     model = client.main_model(streaming=True)
 
-    assert model.__class__.__name__ == "FakeChatOpenAI"
+    # main_model 基于当前模块绑定的 ChatOpenAI 构造保留思考的子类
+    assert isinstance(model, fake_cls)
     assert created["base_url"] == "http://main-llm/v1"
     assert created["api_key"] == "not-needed"
     assert created["model"] == s.MAIN_LLM_MODEL
@@ -73,7 +74,7 @@ def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
 
 
 def test_main_model_binds_tools(monkeypatch):
-    created, instances = _install_fake_model(monkeypatch)
+    created, instances, _ = _install_fake_model(monkeypatch)
     client = LLMClient(_fresh_settings())
     tools = [{"type": "function", "function": {"name": "python_exec"}}]
 
@@ -85,7 +86,7 @@ def test_main_model_binds_tools(monkeypatch):
 
 
 def test_sub_model_falls_back_to_main(monkeypatch):
-    created, _ = _install_fake_model(monkeypatch)
+    created, _, _ = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main/v1"
     s.MAIN_LLM_API_KEY = "main-key"
@@ -107,7 +108,7 @@ def test_sub_model_falls_back_to_main(monkeypatch):
 
 
 def test_sub_model_prefers_sub_values_and_can_enable_thinking(monkeypatch):
-    created, _ = _install_fake_model(monkeypatch)
+    created, _, _ = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main/v1"
     s.MAIN_LLM_MODEL = "main-model"
@@ -127,7 +128,7 @@ def test_sub_model_prefers_sub_values_and_can_enable_thinking(monkeypatch):
 
 
 async def test_structured_parses_fenced_json_and_sends_messages(monkeypatch):
-    created, instances = _install_fake_model(
+    created, instances, _ = _install_fake_model(
         monkeypatch,
         response_content='好的，结果如下：\n```json\n{"value": 12, "label": "费用"}\n```\n希望有帮助',
     )
@@ -167,6 +168,46 @@ async def test_structured_raises_on_model_error_and_empty(monkeypatch):
     _install_fake_model(monkeypatch, response_content="")
     with pytest.raises(LLMError):
         await client.structured(system="s", user="u", schema_cls=Out)
+
+
+def test_main_model_preserves_gateway_reasoning_content():
+    """langchain-openai 1.x 的 ChatOpenAI 会丢弃 delta.reasoning_content；main_model 的
+    子类必须把它挂回 AIMessageChunk.additional_kwargs（真实类离线转 chunk，不触网）。"""
+    from langchain_core.messages import AIMessageChunk
+
+    client = LLMClient(_fresh_settings())
+    model = client.main_model(streaming=True)
+
+    def _chunk(delta: dict | None) -> dict:
+        return {
+            "id": "chatcmpl-x",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "m",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+
+    # 思考增量 → additional_kwargs.reasoning_content
+    reasoning_gen = model._convert_chunk_to_generation_chunk(
+        _chunk({"role": "assistant", "reasoning_content": "思考增量"}), AIMessageChunk, None
+    )
+    assert reasoning_gen is not None
+    assert reasoning_gen.message.additional_kwargs.get("reasoning_content") == "思考增量"
+
+    # 正文增量保持原样，不注入 reasoning_content
+    content_gen = model._convert_chunk_to_generation_chunk(
+        _chunk({"role": "assistant", "content": "答案"}), AIMessageChunk, None
+    )
+    assert content_gen.message.content == "答案"
+    assert "reasoning_content" not in content_gen.message.additional_kwargs
+
+    # 无 choices 的 usage 帧不报错；delta 为 None 的帧返回 None（对齐基类行为）
+    usage_gen = model._convert_chunk_to_generation_chunk(
+        {"id": "x", "choices": []}, AIMessageChunk, None
+    )
+    assert usage_gen is not None
+    none_gen = model._convert_chunk_to_generation_chunk(_chunk(None), AIMessageChunk, None)
+    assert none_gen is None
 
 
 async def test_aclose_is_safe(monkeypatch):

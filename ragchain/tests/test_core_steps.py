@@ -304,6 +304,27 @@ def test_main_system_prompt_general_and_unavailable_notes():
     assert "[表格数据]" not in unavailable
 
 
+def test_main_system_prompt_history_strips_think_blocks():
+    """历史回灌 prompt 时剥离落库内容里的思考块（含未闭合的截断块）。"""
+    from app.prompts import build_main_system_prompt
+
+    open_tag = chr(60) + "think" + chr(62)
+    close_tag = chr(60) + "/think" + chr(62)
+    prompt = build_main_system_prompt(
+        intent="both",
+        recent_messages=[
+            {"role": "user", "content": "上轮问题"},
+            {"role": "assistant", "content": open_tag + "旧思考" + close_tag + "旧回答"},
+            {"role": "assistant", "content": open_tag + "未闭合思考"},
+        ],
+    )
+    assert "旧思考" not in prompt
+    assert "未闭合思考" not in prompt
+    assert "旧回答" in prompt
+    assert open_tag not in prompt
+    assert close_tag not in prompt
+
+
 async def test_memory_compression_triggers_with_default_threshold_and_keeps_recent_window():
     """默认阈值 20 > recent 10：必须用 threshold+1 探测总数，否则压缩永不触发。"""
     settings = FakeSettings(

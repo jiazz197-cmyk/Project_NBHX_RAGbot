@@ -275,6 +275,13 @@ class FakeChunk:
     tool_call_chunks: list | None = None
     usage_metadata: dict | None = None
     response_metadata: dict | None = None
+    reasoning: str = ""
+    additional_kwargs: dict | None = None
+
+    def __post_init__(self) -> None:
+        # 模拟 llm_client 的思考透出：reasoning 挂到 additional_kwargs
+        if self.reasoning and self.additional_kwargs is None:
+            self.additional_kwargs = {"reasoning_content": self.reasoning}
 
 
 class ScriptedModel:

@@ -2,6 +2,12 @@
 
 只创建并调用 ChatOpenAI，不引入 function calling 依赖；structured 通过
 「模型只输出 JSON」+ 容错解析实现。
+
+主 LLM（Qwen3 思考模型，经 Sophnet OpenAI 兼容网关）的思考增量走
+``delta.reasoning_content``；langchain-openai 1.x 的 ``ChatOpenAI`` 只认
+官方 OpenAI 规范，会丢弃该字段（见其模块 docstring），因此这里用子类在
+chunk 转换层把它挂回 ``AIMessageChunk.additional_kwargs["reasoning_content"]``，
+供 generate 步骤以 ``thinking`` 事件流出。
 """
 
 from __future__ import annotations
@@ -10,7 +16,7 @@ import json
 import re
 from typing import Any, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError as PydanticValidationError
 
@@ -19,6 +25,54 @@ from ..config import Settings
 
 class LLMError(RuntimeError):
     """LLM 调用或结构化输出解析失败。"""
+
+
+def _reasoning_delta(chunk: Any) -> str:
+    """从原始 chat.completion.chunk dict 里取 ``delta.reasoning_content``。"""
+    if not isinstance(chunk, dict):
+        return ""
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or not choices:
+        # beta.chat.completions.stream 的包装形态
+        wrapped = chunk.get("chunk")
+        choices = wrapped.get("choices") if isinstance(wrapped, dict) else None
+        if not isinstance(choices, list) or not choices:
+            return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    value = delta.get("reasoning_content")
+    return value if isinstance(value, str) else ""
+
+
+def _reasoning_preserving_cls(base: type) -> type:
+    """构造保留 ``reasoning_content`` 的 ``base``（ChatOpenAI）子类。
+
+    基类经参数显式传入（调用时解析模块属性），保持可测试性：单测
+    monkeypatch ``llm_client.ChatOpenAI`` 后 ``main_model`` 仍基于替换类工作。
+    """
+
+    class ReasoningPreservingChatOpenAI(base):  # type: ignore[misc,valid-type]
+        def _convert_chunk_to_generation_chunk(
+            self,
+            chunk: Any,
+            default_chunk_class: Any,
+            base_generation_info: Any,
+        ) -> Any:
+            generation_chunk = super()._convert_chunk_to_generation_chunk(
+                chunk, default_chunk_class, base_generation_info
+            )
+            if generation_chunk is None:
+                return None
+            reasoning = _reasoning_delta(chunk)
+            if reasoning and isinstance(generation_chunk.message, AIMessageChunk):
+                generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
+            return generation_chunk
+
+    return ReasoningPreservingChatOpenAI
 
 
 def _extract_content_text(response: Any) -> str:
@@ -84,9 +138,13 @@ class LLMClient:
         self._last_sub: Any = None
 
     # ------------------------------------------------------------------ models
-    def main_model(self, *, streaming: bool = True, tools: list | None = None) -> ChatOpenAI:
-        """主 LLM：OpenAI 兼容流式模型；tools 非空时绑定工具。"""
-        model = ChatOpenAI(
+    def main_model(self, *, streaming: bool = True, tools: list | None = None) -> Any:
+        """主 LLM：OpenAI 兼容流式模型；tools 非空时绑定工具。
+
+        使用保留 ``reasoning_content`` 的 ChatOpenAI 子类，思考增量经
+        ``additional_kwargs["reasoning_content"]`` 透出。
+        """
+        model = _reasoning_preserving_cls(ChatOpenAI)(
             base_url=self.settings.MAIN_LLM_API_URL,
             api_key=self.settings.MAIN_LLM_API_KEY or "not-needed",
             model=self.settings.MAIN_LLM_MODEL,

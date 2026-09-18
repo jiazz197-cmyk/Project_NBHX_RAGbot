@@ -22,7 +22,7 @@ from tests.test_core_fakes import (
     make_text_script,
     parse_frames,
 )
-from app.orchestrator import run_chat
+from app.orchestrator import THINK_CLOSE_TAG, THINK_OPEN_TAG, run_chat
 
 
 async def collect(frames_agen):
@@ -168,6 +168,117 @@ async def test_persist_failure_only_warns_and_stream_unchanged():
     assert events[-1]["event"] == "message_end"
     assert not any(e["event"] == "error" for e in events)
     assert deps.registry.latest().result == "success"
+
+
+# ---------------------------------------------------------------------------
+# 思考过程：THINK_OPEN/THINK_CLOSE 标签包裹随 message 帧流出并落库
+# ---------------------------------------------------------------------------
+def _tool_call_chunk(code: str = "print(1)") -> FakeChunk:
+    import json as _json
+
+    return FakeChunk(
+        tool_call_chunks=[
+            {
+                "index": 0,
+                "name": "python_exec",
+                "id": "call_1",
+                "args": _json.dumps({"code": code}, ensure_ascii=False),
+            }
+        ]
+    )
+
+
+async def test_thinking_wrapped_in_think_tags_and_persisted():
+    deps = _base_deps(intent="doc")
+    deps.llm.main_scripts = [
+        [
+            FakeChunk(reasoning="思考A"),
+            FakeChunk(reasoning="思考B"),
+            FakeChunk(
+                content="售后费用为 100 元。",
+                usage_metadata={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+            ),
+        ]
+    ]
+    request = FakeRequest(query="去年售后费用趋势如何？", search_mode="本地检索")
+    frames = await collect(run_chat(request, FakeAuth(), deps))
+    events = parse_frames(frames)
+
+    contents = [e["content"] for e in events if e["event"] == "message" and e["content"]]
+    # 首个思考帧带开启标签；正文首帧带闭合标签
+    assert contents[0] == THINK_OPEN_TAG + "思考A"
+    assert contents[1] == "思考B"
+    assert contents[2] == THINK_CLOSE_TAG + "售后费用为 100 元。"
+    body = "".join(contents)
+    assert body.startswith(THINK_OPEN_TAG + "思考A思考B" + THINK_CLOSE_TAG + "售后费用为 100 元。")
+
+    # 落库内容与流出内容一致（历史重载可折叠展示思考）
+    assistant = deps.backend.append_calls[0][2][1]
+    assert assistant["content"].startswith(THINK_OPEN_TAG + "思考A思考B" + THINK_CLOSE_TAG + "售后费用为 100 元。")
+    assert deps.registry.latest().result == "success"
+
+
+async def test_thinking_single_block_across_tool_rounds():
+    deps = _base_deps(intent="doc")
+    deps.executor = FakeExecutor(results=[FakeToolResult(ok=True, output="42")])
+    deps.llm.main_scripts = [
+        [FakeChunk(reasoning="第一轮思考"), _tool_call_chunk()],
+        [FakeChunk(reasoning="第二轮思考"), FakeChunk(content="结论：42")],
+    ]
+    frames = await collect(run_chat(FakeRequest(search_mode="本地检索"), FakeAuth(), deps))
+    events = parse_frames(frames)
+    body = "".join(e["content"] for e in events if e["event"] == "message")
+    # 两轮思考合并进同一个块，答案开始后不再出现第二个开启标签
+    assert body.count(THINK_OPEN_TAG) == 1
+    assert body.count(THINK_CLOSE_TAG) == 1
+    assert body.startswith(THINK_OPEN_TAG + "第一轮思考第二轮思考" + THINK_CLOSE_TAG + "结论：42")
+
+
+async def test_thinking_after_answer_started_is_dropped():
+    deps = _base_deps(intent="doc")
+    deps.executor = FakeExecutor(results=[FakeToolResult(ok=True, output="42")])
+    deps.llm.main_scripts = [
+        [FakeChunk(reasoning="先想"), FakeChunk(content="让我算一下"), _tool_call_chunk()],
+        [FakeChunk(reasoning="再想"), FakeChunk(content="答案")],
+    ]
+    frames = await collect(run_chat(FakeRequest(search_mode="本地检索"), FakeAuth(), deps))
+    events = parse_frames(frames)
+    body = "".join(e["content"] for e in events if e["event"] == "message")
+    # 答案已开始后到达的思考被丢弃，避免前端把后续思考拼进答案区
+    assert body.startswith(THINK_OPEN_TAG + "先想" + THINK_CLOSE_TAG + "让我算一下答案")
+    assert "再想" not in body
+
+
+async def test_thinking_only_generation_closes_tag():
+    deps = _base_deps(intent="doc")
+    deps.llm.main_scripts = [[FakeChunk(reasoning="只有思考没有正文")]]
+    frames = await collect(run_chat(FakeRequest(search_mode="本地检索"), FakeAuth(), deps))
+    events = parse_frames(frames)
+    body = "".join(e["content"] for e in events if e["event"] == "message")
+    assert body.startswith(THINK_OPEN_TAG + "只有思考没有正文" + THINK_CLOSE_TAG)
+    assert events[-1]["event"] == "message_end"
+    assistant = deps.backend.append_calls[0][2][1]
+    assert assistant["content"].startswith(THINK_OPEN_TAG + "只有思考没有正文" + THINK_CLOSE_TAG)
+
+
+async def test_cancelled_during_thinking_persists_closed_tag():
+    deps = _base_deps(intent="doc")
+
+    def cancel_then_chunk():
+        deps.registry.latest().cancel_event.set()
+        return FakeChunk(reasoning="不应输出")
+
+    deps.llm.main_scripts = [[FakeChunk(reasoning="思考中"), cancel_then_chunk]]
+    frames = await collect(run_chat(FakeRequest(search_mode="本地检索"), FakeAuth(), deps))
+    events = parse_frames(frames)
+    # 已流出的思考 + 补发的闭合标签；被取消的思考不出现
+    body = "".join(e["content"] for e in events if e["event"] == "message")
+    assert THINK_OPEN_TAG + "思考中" + THINK_CLOSE_TAG in body
+    assert "不应输出" not in body
+    assert events[-1]["event"] == "message_end"
+    assistant = deps.backend.append_calls[0][2][1]
+    assert assistant["content"].startswith(THINK_OPEN_TAG + "思考中" + THINK_CLOSE_TAG)
+    assert assistant["metadata"]["status"] == "cancelled"
 
 
 # ---------------------------------------------------------------------------

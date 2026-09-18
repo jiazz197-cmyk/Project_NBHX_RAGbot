@@ -31,6 +31,12 @@ SEARCH_MODE_WEB = "联网搜索"
 SEARCH_MODE_LOCAL = "本地检索"
 SEARCH_MODE_BOTH = "本地&网络"
 
+# 前端思考协议（MessageItem.splitAssistantContent）：思考内容以 <think> 开头、
+# </think> 闭合，内嵌在 message 帧的 content 里随流下发；<think> 未闭合时前端
+# 实时展示思考，闭合后自动切换到答案流并折叠思考区（仍可手动展开）。
+THINK_OPEN_TAG = "<think>"
+THINK_CLOSE_TAG = "</think>"
+
 FRIENDLY_INJECTION_MESSAGE = "抱歉，您的请求包含可能危及系统安全的内容，已被拒绝。请调整后重新提问。"
 FRIENDLY_LLM_MESSAGE = "模型服务暂不可用，请稍后重试。"
 GENERAL_NOTE = "\n\n（本回答未参考内部财务资料）"
@@ -252,6 +258,10 @@ async def run_chat(request: "ChatMessageRequest", auth: "AuthContext", deps: "Ap
     local = LocalRetrievalResult()
     web_results: list[Any] = []
     memory = MemoryContext()
+    # 思考块状态：open=思考块已开启未闭合；closed=已闭合（此后 thinking 不再下发）。
+    # 前端只支持单个思考块：多轮工具循环的思考增量合并进同一个块，首个可见回答时闭合。
+    thought_open = False
+    thought_closed = False
 
     try:
         # 1) 建会话（JWT/search_mode 已由 server 校验）
@@ -338,12 +348,25 @@ async def run_chat(request: "ChatMessageRequest", auth: "AuthContext", deps: "Ap
         async with aclosing(generation):
             async for event in generation:
                 _ensure_not_cancelled(deps, task_id)
-                if event.kind == "token":
-                    body_parts.append(event.content)
-                    yield _message_frame(deps, task_id, conversation_id, event.content)
-                elif event.kind == "notice":
-                    body_parts.append(event.content)
-                    yield _message_frame(deps, task_id, conversation_id, event.content)
+                if event.kind in ("token", "notice"):
+                    prefix = ""
+                    if thought_open:
+                        # 首个可见回答内容：闭合思考块，前端据此切到答案流并折叠思考
+                        prefix = THINK_CLOSE_TAG
+                        thought_open = False
+                        thought_closed = True
+                    payload = prefix + event.content
+                    body_parts.append(payload)
+                    yield _message_frame(deps, task_id, conversation_id, payload)
+                elif event.kind == "thinking":
+                    if thought_closed or not event.content:
+                        # 答案已开始后到达的后续思考不再下发（前端只支持单个思考块）
+                        continue
+                    prefix = "" if thought_open else THINK_OPEN_TAG
+                    thought_open = True
+                    payload = prefix + event.content
+                    body_parts.append(payload)
+                    yield _message_frame(deps, task_id, conversation_id, payload)
                 elif event.kind == "cancelled":
                     raise _CancelledFlow()
                 elif event.kind == "done":
@@ -351,6 +374,11 @@ async def run_chat(request: "ChatMessageRequest", auth: "AuthContext", deps: "Ap
                     if event.error is not None:
                         raise _LLMFlowError(event.error)
         _ensure_not_cancelled(deps, task_id)
+
+        if thought_open:
+            # 模型只产生了思考、没有任何可见回答：补闭合标签，保证流出/落库内容成对
+            body_parts.append(THINK_CLOSE_TAG)
+            yield _message_frame(deps, task_id, conversation_id, THINK_CLOSE_TAG)
 
         # 10) general 注明 + 来源页脚（独立 message 帧）
         if intent == "general":
@@ -390,6 +418,11 @@ async def run_chat(request: "ChatMessageRequest", auth: "AuthContext", deps: "Ap
         return
 
     except _CancelledFlow:
+        if thought_open:
+            # 取消时补闭合标签：既流出（前端累积内容成对）也落库
+            thought_open = False
+            body_parts.append(THINK_CLOSE_TAG)
+            yield _message_frame(deps, task_id, conversation_id, THINK_CLOSE_TAG)
         body_text = _finish_body(body_parts, intent, local, web_results)
         sources = _collect_sources(local, web_results)
         await _safe_persist(

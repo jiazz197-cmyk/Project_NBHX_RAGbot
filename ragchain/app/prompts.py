@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any, Iterable
 
@@ -124,6 +125,18 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + "…（内容过长已截断）"
 
 
+_THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """剥离思考块（落库的助手消息携带 <think>...</think>，历史回灌 prompt 时不需要旧思考）。"""
+    stripped = _THINK_BLOCK_PATTERN.sub("", text)
+    if "<think>" in stripped.lower():
+        # 未闭合的思考块（流中被截断）：只保留其之前的内容
+        stripped = re.split(r"<think>", stripped, maxsplit=1, flags=re.IGNORECASE)[0]
+    return stripped.strip()
+
+
 def _format_history(history: Iterable[dict[str, Any]] | None, max_messages: int = 8, max_chars: int = 2400) -> str:
     if not history:
         return ""
@@ -134,7 +147,7 @@ def _format_history(history: Iterable[dict[str, Any]] | None, max_messages: int 
         role = str(item.get("role") or "")
         role_name = {"user": "用户", "assistant": "助手", "system": "系统"}.get(role, role or "消息")
         content = item.get("content") or item.get("query") or item.get("answer") or ""
-        content = str(content).strip()
+        content = _strip_think_blocks(str(content))
         if not content:
             continue
         lines.append(f"{role_name}：{_truncate(content, 500)}")

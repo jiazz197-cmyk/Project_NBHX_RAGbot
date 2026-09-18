@@ -220,6 +220,36 @@ payload.data.outputs.*
 
 建议 RAG 容器统一发**增量片段**，最简单。
 
+### 2.4.1 思考过程的内容约定（已实现）
+
+主 LLM（Qwen3 思考模型）的思考过程**不走独立 SSE 事件**，而是内嵌在 `message` 帧的
+`content` 里，用 `<think>` / `</think>` 标签包裹（与前端 `MessageItem.splitAssistantContent`
+的解析协议一致）：
+
+```text
+event: message
+data: {...,"content":"<think>思考增量1"}
+
+event: message
+data: {...,"content":"思考增量2"}
+
+event: message
+data: {...,"content":"</think>答案增量1"}
+
+event: message
+data: {...,"content":"答案增量2"}
+```
+
+- `<think>` 尚未闭合时：前端实时展开展示思考内容；
+- `</think>` 到达后：前端切换到答案流，思考区自动折叠（仍可手动展开）；
+- 落库的 assistant 消息 `content` 保留这对标签，历史重载时同样折叠展示；
+- 多轮工具循环的思考增量**合并进同一个思考块**（前端只支持单个块）：答案开始
+  （首个可见回答 token）后再到达的思考增量直接丢弃，不下发；
+- ragchain 侧实现：`llm_client` 保留网关 `delta.reasoning_content`（langchain-openai
+  1.x 的 `ChatOpenAI` 会丢弃该字段）→ `generate` 以 `thinking` 事件下发 →
+  `orchestrator` 负责包裹标签；历史回灌 prompt 时 `prompts._strip_think_blocks`
+  剥离旧思考块。
+
 ### 2.5 错误响应
 
 如果请求在建立 SSE 之前失败（例如身份失败、参数错误），返回普通 JSON：
