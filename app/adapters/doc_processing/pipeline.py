@@ -152,6 +152,10 @@ class DocumentProcessingPipeline:
         upload_time = utcnow().isoformat()
 
         processed = 0
+        # issue15 兜底：单文件解析失败不再静默吞掉（原来只写日志，任务仍报
+        # “完成”，用户看不到任何原因）。逐文件登记失败原因，随返回值交给
+        # document_task_runner 汇入任务状态反馈给用户。
+        failed_files: List[Dict[str, str]] = []
         for file_path in files:
             try:
                 # [note] 传递Excel专用分割器；excel-db 集合开启多 sheet 解析
@@ -177,5 +181,15 @@ class DocumentProcessingPipeline:
                 processed += 1
             except DocumentProcessingError as exc:
                 logger.error("处理文件失败 %s: %s", file_path, exc)
-        return {"status": "success", "processed_files": processed, "total_files": len(files)}
+                if isinstance(file_path, (str, os.PathLike)):
+                    failed_name = os.path.basename(str(file_path))
+                else:
+                    failed_name = str(getattr(file_path, "name", "") or "未命名文件")
+                failed_files.append({"file_name": failed_name, "error": str(exc)})
+        return {
+            "status": "success",
+            "processed_files": processed,
+            "total_files": len(files),
+            "failed_files": failed_files,
+        }
 

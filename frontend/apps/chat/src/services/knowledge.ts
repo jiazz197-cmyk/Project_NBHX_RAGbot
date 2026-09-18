@@ -29,12 +29,25 @@ export interface KnowledgeUploadResponse {
   collection: string
 }
 
+/** 上传任务里单个文件的处理失败明细（issue15：失败原因要反馈给用户） */
+export interface KnowledgeTaskFailedFile {
+  file_name?: string
+  error?: string
+}
+
 export interface KnowledgeTaskStatus {
   task_id: string
   status: string
   progress: number
   message: string
   created_at: string
+  /** 任务结果载荷；completed 时可能带 failed_files（部分文件失败） */
+  result?: {
+    failed_files?: KnowledgeTaskFailedFile[]
+    [key: string]: unknown
+  } | null
+  /** failed 时的失败原因（fail_task 的 error 参数） */
+  error?: string | null
 }
 
 export const listKnowledgeRecords = async (): Promise<KnowledgeRecord[]> => {

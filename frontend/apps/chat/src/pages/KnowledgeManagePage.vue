@@ -250,7 +250,7 @@ interface FileGroup {
   uploaders: string
 }
 
-const { showSuccess, showError } = useToast()
+const { showSuccess, showError, showWarning } = useToast()
 
 // 角色（列表仅管理员可见，上传对所有登录用户开放）
 const userRole = ref('')
@@ -420,7 +420,16 @@ const pollTaskStatus = async (taskId: string) => {
 
     if (status === 'completed') {
       uploading.value.status = 'completed'
-      showSuccess('上传处理完成')
+      // issue15：部分文件解析失败时任务整体完成，但要把失败明细亮给用户
+      const failedFiles = result.result?.failed_files ?? []
+      if (failedFiles.length > 0) {
+        const names = failedFiles
+          .map((item) => item.file_name || '未命名文件')
+          .join('、')
+        showWarning(`部分文件处理失败：${names}，请检查文件格式后重新上传`, 6000)
+      } else {
+        showSuccess('上传处理完成')
+      }
       uploading.value = null
       if (isAdmin.value) {
         void loadRecords()
@@ -430,7 +439,12 @@ const pollTaskStatus = async (taskId: string) => {
 
     if (status === 'failed' || status === 'cancelled') {
       uploading.value.status = status
-      showError(result.message || '上传处理失败')
+      // issue15：failed 时优先展示后端带回的具体失败原因（error 字段）
+      const failureText =
+        status === 'failed'
+          ? result.error || result.message || '上传处理失败'
+          : result.message || '任务已取消'
+      showError(failureText, 6000)
       uploading.value = null
       return
     }

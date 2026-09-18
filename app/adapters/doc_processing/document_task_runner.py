@@ -56,6 +56,23 @@ def _uploader_from_task_status(task_status) -> str:
         return ""
 
 
+def _summarize_failed_files(failed_files: List[dict], max_items: int = 3) -> str:
+    """把逐文件失败原因拼成一句话摘要（issue15：失败原因要反馈给用户）。
+
+    超过 max_items 个时只列前几个 + 总数，避免任务消息过长。
+    """
+    if not failed_files:
+        return ""
+    parts = []
+    for item in failed_files[:max_items]:
+        name = str(item.get("file_name") or "未命名文件")
+        reason = str(item.get("error") or "").strip() or "未知原因"
+        parts.append(f"{name}: {reason}")
+    if len(failed_files) > max_items:
+        parts.append(f"……共 {len(failed_files)} 个文件失败")
+    return "；".join(parts)
+
+
 def process_documents_background(
     token: CancellationToken,
     task_id: str,
@@ -146,6 +163,9 @@ def process_documents_background(
         )
         downloaded_count = 0
         total_processed = 0
+        # issue15：逐文件收集解析/处理失败（文件名 + 原因），任务收尾时
+        # 反馈给用户——全部失败则任务标记失败，部分失败则随完成结果带明细。
+        failed_files: List[dict] = []
         n_files = len(file_ids)
         db = SessionLocal()
         try:
@@ -211,6 +231,7 @@ def process_documents_background(
                         file_id=file_record.id,
                     )
                     total_processed += int(one_result.get("processed_files", 0) or 0)
+                    failed_files.extend(one_result.get("failed_files") or [])
                 except Exception as e:
                     logger.error(
                         "[%s] 处理文件失败 %s: %s",
@@ -234,6 +255,23 @@ def process_documents_background(
                 )
                 return {"status": "cancelled", "message": "任务被取消"}
 
+            # issue15 兜底：一个文件都没处理成功且都有明确失败原因 → 任务标失败，
+            # 原因写进任务状态（用户可见），而不是“完成但 0 产出”。
+            if total_processed == 0 and failed_files:
+                failure_summary = _summarize_failed_files(failed_files)
+                logger.error(
+                    "[%s] 全部 %s 个文件处理失败: %s",
+                    task_id,
+                    len(failed_files),
+                    failure_summary,
+                )
+                loop.run_until_complete(
+                    thread_tm.fail_task(
+                        task_id, failure_summary, "文档处理失败：所有文件均未成功处理"
+                    )
+                )
+                return {"status": "error", "message": failure_summary}
+
             logger.info(
                 "[%s] 已处理 %s 个文件，向量化成功段数: %s",
                 task_id,
@@ -253,9 +291,22 @@ def process_documents_background(
                 "total_files": len(file_ids),
                 "status": result.get("status"),
                 "collection": collection,
+                # issue15：部分失败时把逐文件原因带给前端展示
+                "failed_files": failed_files,
             }
+            if failed_files:
+                failed_names = "、".join(
+                    str(item.get("file_name") or "未命名文件")
+                    for item in failed_files
+                )
+                complete_message = (
+                    f"文档处理完成：{total_processed}/{downloaded_count} 个文件成功，"
+                    f"失败：{failed_names}（详见任务结果）"
+                )
+            else:
+                complete_message = "文档处理完成"
             loop.run_until_complete(
-                thread_tm.complete_task(task_id, final_result, "文档处理完成")
+                thread_tm.complete_task(task_id, final_result, complete_message)
             )
             logger.info("[%s] 处理完成: %s", task_id, final_result)
             return final_result

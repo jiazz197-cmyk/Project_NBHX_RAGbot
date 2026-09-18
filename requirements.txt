@@ -161,6 +161,11 @@ pypdfium2==5.1.0
 python-docx==1.2.0
 python-pptx==1.0.2
 openpyxl==3.1.5
+# issue15：pd.read_excel 改用 calamine 引擎（Rust，不解析样式）。
+# 腾讯文档/WPS 导出的 xlsx 在 styles.xml 写自闭合空 <fill/>，openpyxl 3.1.5
+# 解析即崩（Fill() takes no arguments）；calamine 免疫且更快，另附带支持 .xls
+# （原默认引擎 xlrd 并未安装，.xls 实际一直解析不了）。
+python-calamine==0.8.2
 et_xmlfile==2.0.0
 # python-pptx 的传递依赖（此前漏锁，缺了 python-pptx 直接 import 失败）
 xlsxwriter==3.2.9

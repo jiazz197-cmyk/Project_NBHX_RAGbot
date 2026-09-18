@@ -329,6 +329,48 @@ class DocParser:
         return self.docx_parser(docx_bytes)
 
 
+def _read_excel_frames(
+    path: str,
+    sheet_name: Union[None, int, str] = 0,
+    header: Optional[int] = None,
+) -> Any:
+    """读 Excel，calamine 引擎优先、pandas 默认引擎兜底（issue15）。
+
+    根因：腾讯文档 / WPS 等工具导出的 xlsx 会在 styles.xml 里写自闭合的
+    空 ``<fill/>``，openpyxl 3.1.5 解析 stylesheet 时抛
+    ``TypeError: Fill() takes no arguments``（外层为
+    ``expected <class 'openpyxl.styles.fills.Fill'>``），导致上传任务失败、
+    无 chunk 产出（2026-09-17 实测 8 个文件中 3 个中招）。
+
+    calamine（Rust 实现）只读数据不读样式，天然免疫此类问题且更快；
+    未安装（旧镜像未重建）或解析失败时回退 pandas 默认引擎，保持旧行为。
+    双引擎都失败时抛带明确指引的 DocumentParseError，原因随任务状态
+    反馈给用户（不再仅日志可见）。
+
+    ``sheet_name=None`` 返回 ``{sheet名: DataFrame}``，int/str 返回单个
+    DataFrame（与 ``pd.read_excel`` 语义一致）。
+    """
+    try:
+        return pd.read_excel(
+            path, sheet_name=sheet_name, header=header, engine="calamine"
+        )
+    except ImportError:
+        logger.warning(
+            "python-calamine 未安装，Excel 解析回退 pandas 默认引擎；"
+            "腾讯文档/WPS 等工具导出的文件可能解析失败，请重建开发镜像"
+        )
+    except Exception as exc:
+        logger.warning("calamine 引擎解析 Excel 失败（%s），回退默认引擎重试", exc)
+    try:
+        return pd.read_excel(path, sheet_name=sheet_name, header=header)
+    except Exception as exc:
+        raise DocumentParseError(
+            f"Excel 解析失败（已尝试 calamine/openpyxl 双引擎）: {exc}；"
+            "文件可能已损坏或由特殊工具导出导致格式不兼容，"
+            "请用 Excel/WPS 重新另存为 .xlsx 后再上传"
+        ) from exc
+
+
 class ExcelParser:
     """Excel 解析为纯文本。
 
@@ -358,12 +400,12 @@ class ExcelParser:
                 path = temp_path
 
             if sheet_idx is None:
-                raw_sheets = pd.read_excel(path, sheet_name=None, header=None)
-                sheet_frames: List[Tuple[Optional[str], pd.DataFrame]] = list(
+                raw_sheets = _read_excel_frames(path, sheet_name=None)
+                sheet_frames: List[Tuple[Optional[str], pd.DataFrame]] = [
                     (str(name), frame) for name, frame in raw_sheets.items()
-                )
+                ]
             else:
-                frame = pd.read_excel(path, sheet_name=sheet_idx, header=None)
+                frame = _read_excel_frames(path, sheet_name=sheet_idx)
                 sheet_frames = [(None, frame)]
 
             texts: List[str] = []
