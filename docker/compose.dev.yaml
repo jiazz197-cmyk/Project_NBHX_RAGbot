@@ -77,6 +77,11 @@ services:
       # 网络，只能走 host-gateway；供 vite.config.ts 的聊天两接口代理分流使用。
       # 注意：vite 需要真实进程环境变量，vite.config.ts 优先读 process.env。
       VITE_CHAT_ORCHESTRATOR_TARGET: http://host.docker.internal:8010
+      # 主应用在容器内必须绑 0.0.0.0：宿主端口发布（0.0.0.0:8000→容器）与 ragchain
+      # 容器（经 host.docker.internal:8000 回调检索/记忆接口）都要能连进来；只绑
+      # 127.0.0.1 会 connection refused，前端表现为 ragchain 报“外部服务不可达”。
+      # 环境变量优先级高于 .env，所以本地 .env 写 HOST=127.0.0.1 也不影响容器运行。
+      HOST: 0.0.0.0
       # 过渡期本进程内仍会跑 PaddleOCR（issue #9 服务化）：
       # PADDLE_OCR_ENDPOINT: http://host.docker.internal:8080
     extra_hosts:

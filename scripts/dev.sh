@@ -111,6 +111,15 @@ case "${cmd}" in
       docker compose -p "${PROJ}" -f "${CF}" exec \
         -u "$(id -u):$(id -g)" -e "HOME=/workspace/.cache/home" dev "$@"
     }
+    # 同 dexec，但额外注入环境变量：宿主的 shell 变量**不会**自动穿透 exec 边界，
+    # 必须显式 -e 传进去。用法：dexec_env KEY=VAL [KEY=VAL ...] -- <cmd...>
+    dexec_env() {
+      local -a extra=()
+      while [[ $# -gt 0 && "$1" != "--" ]]; do extra+=(-e "$1"); shift; done
+      shift || true
+      docker compose -p "${PROJ}" -f "${CF}" exec \
+        -u "$(id -u):$(id -g)" -e "HOME=/workspace/.cache/home" "${extra[@]}" dev "$@"
+    }
     # ---- 镜像引用 -------------------------------------------------------------
     # 默认用 registry 里的共享镜像（需先启用 GitLab Registry，见 docs/docker-dev-env.md）。
     # ⚠️ 这个字符串与 docker/compose.dev.yaml 里的 ${NBHX_DEV_IMAGE:-...} 默认值保持一致；
@@ -224,7 +233,13 @@ EOF
       logs)      dc logs -f "$@" ;;
       ps)        dc ps "$@" ;;
       shell)     dexec bash ;;
-      backend)   dexec bash scripts/dev.sh backend ;;
+      backend)
+        # 容器内的主应用必须监听 0.0.0.0：宿主端口发布（0.0.0.0:8000→容器）和
+        # ragchain 容器（经 host.docker.internal:8000 回调）都要能连进来；本地 .env
+        # 常写 HOST=127.0.0.1，只绑回环会让两者都 connection refused（前端表现为
+        # ragchain 报“外部服务不可达”）。这里显式覆盖，compose 里另有一份兜底。
+        dexec_env HOST=0.0.0.0 -- bash scripts/dev.sh backend
+        ;;
       frontend)
         # 前端依赖装在**命名卷** frontend/node_modules 里（刻意遮蔽宿主那份），
         # 首次为空 → 里面没有 .pnpm 存储，apps/chat/node_modules 的软链会悬空，
