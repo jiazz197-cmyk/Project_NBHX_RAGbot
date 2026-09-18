@@ -478,6 +478,30 @@ class DataAnalysisService:
         result = await self.run_analysis(data_source, requirements)
         return json.dumps(result, indent=4, ensure_ascii=False)
 
+def _open_excel_file(path: str) -> pd.ExcelFile:
+    """打开 Excel：calamine 引擎优先、openpyxl 兜底（issue15 同源修复）。
+
+    腾讯文档 / WPS 导出的 xlsx 会在 styles.xml 里写自闭合空 ``<fill/>``，
+    openpyxl 3.1.5 解析 stylesheet 时抛
+    ``TypeError: expected <class 'openpyxl.styles.fills.Fill'>`` —— 与
+    ``app.adapters.doc_processing.doc_reader._read_excel_frames`` 的根因相同。
+    写入端已改用 calamine（只读数据不读样式，天然免疫），但检索端
+    ``excel_to_json`` 仍写死 openpyxl，导致 /excel 命中正确文件后整表解析失败、
+    只返回错误串（2026-09-18 实测：8 个文件 3 个中招，正是含项目/负责人数据的
+    NICE BG_Project list财务指标.xlsx 等）。这里对齐写入端的引擎策略。
+    """
+    try:
+        return pd.ExcelFile(path, engine="calamine")
+    except ImportError:
+        logger.warning(
+            "python-calamine 未安装，Excel 解析回退 openpyxl；"
+            "腾讯文档/WPS 等工具导出的文件可能解析失败，请重建开发镜像"
+        )
+    except Exception as exc:  # noqa: BLE001 - 引擎不支持/文件异常都回退重试
+        logger.warning("calamine 引擎打开 Excel 失败（%s），回退 openpyxl 重试", exc)
+    return pd.ExcelFile(path, engine="openpyxl")
+
+
 def excel_to_json(
     path: str,
     sheet_idx: int = 0,
@@ -487,7 +511,7 @@ def excel_to_json(
     """Excel -> JSON string with sheet_name, headers, rows (multi-level header flatten)."""
     skip = skiprows if skiprows is not None else [0]
 
-    xls = pd.ExcelFile(path, engine='openpyxl')
+    xls = _open_excel_file(path)
     sheet_name_actual = xls.sheet_names[sheet_idx]
 
     title_df = pd.read_excel(
@@ -508,7 +532,8 @@ def excel_to_json(
         sheet_name=sheet_name_actual,
         skiprows=skip,
         header=list(range(header_rows)),
-        engine='openpyxl'
+        # 不写死 engine：沿用 ExcelFile 已选定的引擎（calamine 优先），
+        # 否则会退回 openpyxl 并在坏样式文件上失败。
     )
 
     if isinstance(df.columns, pd.MultiIndex):

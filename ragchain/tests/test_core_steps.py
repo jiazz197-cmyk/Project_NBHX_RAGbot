@@ -111,6 +111,70 @@ async def test_intent_structured_and_fallback():
     assert normalized.intent == "both"
 
 
+async def test_intent_prompt_keeps_raw_query_and_keywords():
+    """改写会丢掉“查查表”这类显式线索，意图 prompt 必须带上原始问题与关键词。"""
+    deps = build_fake_deps()
+    deps.llm.responses["IntentResult"] = {"intent": "excel", "reason": "查表"}
+
+    result = await route_intent(
+        "查询项目 V254 (GLC) 的负责人信息",
+        deps,
+        raw_query="项目：V254 (GLC) 的负责人是谁？查查表",
+        keywords=["V254 (GLC)", "负责人"],
+    )
+
+    assert result.intent == "excel"
+    call = deps.llm.structured_calls[-1]
+    assert call["schema"] == "IntentResult"
+    assert "查询项目 V254 (GLC) 的负责人信息" in call["user"]
+    assert "项目：V254 (GLC) 的负责人是谁？查查表" in call["user"]
+    assert "V254 (GLC)" in call["user"]
+    assert "查查表" in call["user"]
+
+
+async def test_intent_general_overridden_by_explicit_table_hint():
+    """LLM 误判 general 时，原始问题里的显式查表线索必须兜底成 excel（线上根因）。"""
+    deps = build_fake_deps()
+
+    for raw, expected in [
+        ("项目：V254 (GLC) 的负责人是谁？查查表", "excel"),
+        ("这个项目的负责人是谁？查表格", "excel"),
+        ("看看费用台账里的余额", "excel"),
+        ("项目 V254 的负责人是谁", "general"),  # 无线索 → 尊重 LLM
+    ]:
+        deps.llm.responses["IntentResult"] = {"intent": "general", "reason": "闲聊"}
+        result = await route_intent("查询项目 V254 的负责人信息", deps, raw_query=raw)
+        assert result.intent == expected, raw
+
+
+async def test_intent_doc_upgraded_to_both_by_table_hint():
+    deps = build_fake_deps()
+    deps.llm.responses["IntentResult"] = {"intent": "doc", "reason": "制度"}
+
+    result = await route_intent("报销标准", deps, raw_query="按制度报销，顺便查表看去年支出")
+
+    assert result.intent == "both"
+    assert "覆盖为 both" in result.reason
+
+
+async def test_intent_excel_and_both_untouched_by_hint():
+    for intent in ("excel", "both"):
+        deps = build_fake_deps()
+        deps.llm.responses["IntentResult"] = {"intent": intent, "reason": "ok"}
+        result = await route_intent("q", deps, raw_query="查查表")
+        assert result.intent == intent
+        assert result.reason == "ok"
+
+
+async def test_intent_system_prompt_has_explicit_table_rules():
+    from app.prompts import INTENT_SYSTEM_PROMPT
+
+    assert "查表" in INTENT_SYSTEM_PROMPT
+    assert "查查表" in INTENT_SYSTEM_PROMPT
+    # 金额不再是 excel 的必要条件
+    assert "台账" in INTENT_SYSTEM_PROMPT
+
+
 # ---------------------------------------------------------------------------
 # 本地检索
 # ---------------------------------------------------------------------------
@@ -158,6 +222,60 @@ async def test_retrieval_reranker_bad_format_falls_back_to_truncate():
 
     result = await retrieve_local(intent="doc", rewritten_query="q", keywords=[], token="tok", deps=deps)
     assert [c.source for c in result.documents] == ["a.pdf"]
+
+
+async def test_retrieval_excel_uses_chunks_and_reranks():
+    """/retriever/excel 返回 chunks 时：按 chunks 组资料 + 本容器重排（不再整表 JSON）。"""
+    settings = FakeSettings(RAG_RERANK_TOP_N=2, EXCEL_CONTEXT_MAX_CHARS=8000)
+    deps = build_fake_deps(settings=settings)
+    deps.retriever = FakeRetriever(
+        excel_result=_chunks(
+            ("NICE BG_Project list财务指标.xlsx", "序：64 … V540- GLC"),
+            ("PM项目分配表_0618.xlsx", "项目名称：V254 (GLC), 项目经理：杨贵宁"),
+            ("NICE BG_内部订单号命名.xlsx", "内部订单号：999910000095"),
+        )
+    )
+    deps.reranker = FakeReranker(ranking=[(1, 0.99), (2, 0.90), (0, 0.10)])
+
+    result = await retrieve_local(intent="excel", rewritten_query="V254 负责人", keywords=["查表"], token="tok", deps=deps)
+
+    assert result.available is True
+    assert deps.retriever.excel_calls[0]["collection"] == "excel_db_chunks"
+    assert deps.retriever.excel_calls[0]["top_k"] == 10
+    assert deps.reranker.calls[0]["top_n"] == 2
+    assert result.excel_sources == ["PM项目分配表_0618.xlsx", "NICE BG_内部订单号命名.xlsx"]
+    assert "[来源1] PM项目分配表_0618.xlsx" in result.excel_answer
+    assert "杨贵宁" in result.excel_answer
+    # 未进入重排的第三个文件不出现在资料里
+    assert "999910000095" in result.excel_answer
+    assert "V540- GLC" not in result.excel_answer
+
+
+async def test_retrieval_excel_chunks_reranker_failure_falls_back():
+    settings = FakeSettings(RAG_RERANK_TOP_N=1)
+    deps = build_fake_deps(settings=settings)
+    deps.retriever = FakeRetriever(
+        excel_result=_chunks(("a.xlsx", "A"), ("b.xlsx", "B"))
+    )
+    deps.reranker = FakeReranker(error=FakeChainError("RERANKER_ERROR", "down", 502))
+
+    result = await retrieve_local(intent="excel", rewritten_query="q", keywords=[], token="tok", deps=deps)
+
+    assert result.available is True
+    assert result.excel_sources == ["a.xlsx"]
+    assert "A" in result.excel_answer
+
+
+async def test_retrieval_excel_chunks_truncated():
+    settings = FakeSettings(RAG_RERANK_TOP_N=1, EXCEL_CONTEXT_MAX_CHARS=30)
+    deps = build_fake_deps(settings=settings)
+    deps.retriever = FakeRetriever(excel_result=_chunks(("大表.xlsx", "x" * 200)))
+    deps.reranker = FakeReranker(ranking=[(0, 1.0)])
+
+    result = await retrieve_local(intent="excel", rewritten_query="q", keywords=[], token="tok", deps=deps)
+
+    assert "已截断" in result.excel_answer
+    assert len(result.excel_answer) < 200
 
 
 async def test_retrieval_excel_truncates_and_keeps_sources():

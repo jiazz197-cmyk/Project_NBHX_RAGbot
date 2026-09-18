@@ -1,6 +1,10 @@
 # ragchain 独立容器（宿主 8010 → 容器 8000）
-# 构建：docker compose -f ragchain/compose.yaml build
-# 启动：docker compose -f ragchain/compose.yaml up -d
+#
+# 依赖在镜像里、代码 bind mount（与仓库根 docker/dev.Dockerfile 同一模式）：
+#   bash scripts/dev.sh ragchain up        # 首次/换配置：构建（缺镜像时）+ 起容器
+#   bash scripts/dev.sh ragchain restart   # 日常改完代码：重启进程，代码即生效
+#   bash scripts/dev.sh ragchain build     # 只有 requirements.txt 变化才需要
+#   bash scripts/dev.sh ragchain check|logs|ps|down|shell|test
 services:
   ragchain:
     image: nbhx-ragchain:py312
@@ -13,6 +17,11 @@ services:
       sbom: false
     ports:
       - "8010:8000"
+    volumes:
+      # 代码来自宿主（镜像里只有依赖）：改完 `ragchain restart` 即生效，不用重建镜像。
+      # :ro —— 容器只读代码，防进程误改宿主文件；Dockerfile 已设
+      # PYTHONDONTWRITEBYTECODE=1，只读不会阻碍运行（.pyc 不再写盘）。
+      - ./app:/app/app:ro
     env_file:
       - .env
     extra_hosts:

@@ -21,6 +21,12 @@
 #   bash scripts/dev.sh docker build|push|pull|down|logs|ps|check
 #   每人一组端口示例：API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up
 #
+# ragchain 独立容器（依赖在镜像里、代码 bind mount；改代码不用重建镜像）：
+#   bash scripts/dev.sh ragchain up          # 首次/换配置：构建（缺镜像时）+ 起容器
+#   bash scripts/dev.sh ragchain restart     # 改完代码：重启进程即生效
+#   bash scripts/dev.sh ragchain build       # 只有 requirements.txt 变化才需要
+#   bash scripts/dev.sh ragchain check|logs|ps|down|shell|test
+#
 # 说明：`backend` / `frontend` 是前台进程，Ctrl-C 结束。
 
 set -Eeuo pipefail
@@ -32,7 +38,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT}/scripts/env.sh" -q
 
 usage() {
-  sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -89,8 +95,12 @@ case "${cmd}" in
     # 受限环境（部分容器/沙箱）里 $HOME 不可写，docker CLI 会因无法写 ~/.docker 而报错
     #（如 buildx activity/log、config.json）。用「可写性探测」而不是「目录是否存在」判断，
     #  否则残留的空目录会让探测失效。退回仓库内的 .cache/docker（已 gitignore）。
+    # ⚠️ 必须探到 buildx 真正要写的子目录：只探顶层会误判 —— 2026-09-18 实测
+    #    $HOME/.docker 顶层可写、但 buildx/activity 写入被拒，build 直接报
+    #    "failed to update builder last activity time … permission denied"。
     _dockercfg="${DOCKER_CONFIG:-${HOME}/.docker}"
-    if ! { mkdir -p "${_dockercfg}" 2>/dev/null && touch "${_dockercfg}/.writable" 2>/dev/null; }; then
+    if ! { mkdir -p "${_dockercfg}/buildx/activity" 2>/dev/null \
+           && touch "${_dockercfg}/buildx/activity/.writable" 2>/dev/null; }; then
       export DOCKER_CONFIG="${ROOT}/.cache/docker"
       mkdir -p "${DOCKER_CONFIG}"
     fi
@@ -278,6 +288,113 @@ EOF
           [[ -n "${sub}" ]] || usage 2
         fi
         dexec "$sub" "$@"
+        ;;
+    esac
+    ;;
+  ragchain)
+    # ragchain 独立容器（ragchain/compose.yaml，独立 compose project = ragchain）。
+    # 与根目录 dev 容器同一思路：**依赖在镜像里、代码 bind mount 到 /app/app**，
+    # 所以改代码 → restart（重启进程，不重建镜像）；只有 requirements.txt 变化才 build。
+    RC_CF="${ROOT}/ragchain/compose.yaml"
+    RC_IMG="nbhx-ragchain:py312"
+    # 同 docker 分支：受限环境里 $HOME/.docker 不可写 → 退回仓库内 .cache/docker。
+    # 探测必须包含 buildx 真正写文件的子目录（只探顶层会误判，见 docker 分支注释）。
+    _dockercfg="${DOCKER_CONFIG:-${HOME}/.docker}"
+    if ! { mkdir -p "${_dockercfg}/buildx/activity" 2>/dev/null \
+           && touch "${_dockercfg}/buildx/activity/.writable" 2>/dev/null; }; then
+      export DOCKER_CONFIG="${ROOT}/.cache/docker"
+      mkdir -p "${DOCKER_CONFIG}"
+    fi
+    rc() { docker compose -f "${RC_CF}" "$@"; }
+    # 镜像构建时把 requirements.txt 的 sha256 前 12 位写进 /opt/venv/.requirements-hash。
+    # 代码是挂载的，所以代码改动不会影响这个指纹 —— 指纹不一致 = 该 build 了。
+    rc_hash_local() { sha256sum "${ROOT}/ragchain/requirements.txt" | cut -c1-12; }
+    rc_hash_image() {
+      docker run --rm --entrypoint cat "${RC_IMG}" /opt/venv/.requirements-hash 2>/dev/null | tr -d '\n'
+    }
+    rc_check() { # $1 = 1 只警告 / 0 失败退出
+      local local_h img_h
+      docker image inspect "${RC_IMG}" >/dev/null 2>&1 || return 2
+      local_h="$(rc_hash_local)"
+      img_h="$(rc_hash_image)"
+      if [[ -z "${img_h}" ]]; then
+        echo "[ragchain] ⚠️  镜像 ${RC_IMG} 没有依赖哈希标记（旧镜像？），建议：bash scripts/dev.sh ragchain build" >&2
+        return 1
+      fi
+      if [[ "${local_h}" != "${img_h}" ]]; then
+        cat >&2 <<EOF
+[ragchain] ⚠️  ragchain/requirements.txt 已变更，镜像里的依赖还是旧的
+           （代码是 bind mount 的，改代码不需要重建；改依赖才需要。）
+           本地哈希 = ${local_h}
+           镜像哈希 = ${img_h}
+         重建并重启：
+           bash scripts/dev.sh ragchain build && bash scripts/dev.sh ragchain up
+EOF
+        return 1
+      fi
+      return 0
+    }
+    rc_sub="${1:-}"
+    shift || true
+    case "${rc_sub}" in
+      up)
+        if ! docker image inspect "${RC_IMG}" >/dev/null 2>&1; then
+          echo "[ragchain] 本地无 ${RC_IMG}，先构建（首次要装依赖）…"
+          rc build
+        fi
+        rc_check 1 || true
+        rc up -d "$@"
+        ;;
+      build)     rc build "$@" ;;
+      restart|reload)
+        # 改完代码走这条：重启容器内进程 → 重新 import 挂载进来的代码。
+        if [[ -z "$(rc ps -q ragchain 2>/dev/null)" ]]; then
+          echo "[ragchain] 容器不存在，先起： bash scripts/dev.sh ragchain up" >&2
+          exit 2
+        fi
+        rc restart "$@"
+        ;;
+      logs)      rc logs -f "$@" ;;
+      ps)        rc ps "$@" ;;
+      down|stop) rc "${rc_sub}" "$@" ;;
+      start)     rc start "$@" ;;
+      check)
+        # 注意：脚本开着 set -e，`rc_check 0` 不能用裸调用 + `case $?`，
+        # 否则非 0 状态会先被 set -e 吃掉、下面的提示永远不打印。放进 if 条件里。
+        if rc_check 0; then
+          echo "[ragchain] ✅ 依赖哈希一致（本地 $(rc_hash_local)）：改代码只需 ragchain restart，不用重建镜像"
+        else
+          rc_rc=$?
+          case "${rc_rc}" in
+            2) echo "[ragchain] 镜像 ${RC_IMG} 不存在，请先: bash scripts/dev.sh ragchain up" >&2; exit 2 ;;
+            *) exit 1 ;;
+          esac
+        fi
+        ;;
+      shell)     rc exec ragchain bash ;;
+      exec)
+        # 透传：bash scripts/dev.sh ragchain exec ragchain python -c '...'
+        rc exec "$@"
+        ;;
+      test)
+        # 单测不在镜像里（镜像只装运行时依赖），用本机 ragchain venv 跑；见 docs/operations.md §3.5
+        rc_venv="${ROOT}/.cache/ragchain-venv"
+        if [[ ! -x "${rc_venv}/bin/python" ]]; then
+          cat >&2 <<EOF
+[ragchain] 本机测试环境不存在：${rc_venv}/bin/python
+          首次创建（在仓库根执行）：
+            uv venv .cache/ragchain-venv --python 3.12
+            UV_CACHE_DIR=\$PWD/.cache/uv uv pip install --python .cache/ragchain-venv/bin/python \\
+              -r ragchain/requirements-dev.txt --index-url https://mirrors.aliyun.com/pypi/simple
+EOF
+          exit 1
+        fi
+        ( cd "${ROOT}/ragchain" && "${rc_venv}/bin/python" -m pytest tests "$@" )
+        ;;
+      ""|-h|--help|help) usage 0 ;;
+      *)
+        echo "[ragchain] 未知子命令: ${rc_sub}" >&2
+        usage 2
         ;;
     esac
     ;;

@@ -70,7 +70,23 @@ class RAGRetrieverAdapter(RetrieverPort):
         )
 
     def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+        """Excel 表检索。
+
+        显式传 top_k(>0)：与 :meth:`query_db` 一致，走 ``get_chunks`` 纯向量
+        结构化 chunks（不经过内部 query engine / 重排，重排由调用方负责）——
+        2026-09-18 起 /excel 默认返回 chunks；调用方（ragchain）据此自行重排。
+        未显式传 top_k：保留旧行为，走 ``get_charts`` 整表 JSON。
+        """
         retriever = self._build_retriever(q)
+        if _should_return_chunks(q):
+            result = retriever.get_chunks(q.question, q.top_k) or {}
+            chunks = result.get("chunks") or []
+            return RetrievalResult(
+                answer="\n".join(str(c.get("content", "")) for c in chunks),
+                sources=[c.get("source", "Unknown") for c in chunks],
+                metadata={"chunks": chunks},
+            )
+
         result = retriever.get_charts(q.question)
         # 新内部契约：{"data": excel_to_json 结果, "sources": [源文件名]}；
         # 失败仍是 {"error": "..."}；字符串/旧 dict 形状也保留兼容分支。

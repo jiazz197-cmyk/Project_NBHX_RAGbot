@@ -111,8 +111,10 @@ class TokenAwareTextSplitter:
             raise TextSplitError(f"统计 token 失败: {exc}") from exc
 
     def split_text(self, text: str) -> List[str]:
+        # 空白文本不产 chunk：空 chunk 会进向量库，检索端重排网关对空文档直接 400
+        # （2026-09-18 实测），且命中后没有任何可用内容。
         if not text.strip():
-            return [""]
+            return []
 
         try:
             splitter = RecursiveCharacterTextSplitter(
@@ -184,7 +186,9 @@ class ExcelHeaderPreservingSplitter:
         rows = excel_data["rows"]
         
         if not headers or not rows:
-            return [""]
+            # 空 sheet（只有表头/整表为空）不产空 chunk，否则会产生空文本向量
+            # （写入端根因，2026-09-18 实测 data_excel_db_chunks 有 2 条空 chunk）。
+            return []
         
         try:
             chunks = []
@@ -195,6 +199,9 @@ class ExcelHeaderPreservingSplitter:
             for row in rows:
                 # 构建当前行的文本（带表头）
                 row_text = self._format_row_with_headers(headers, row)
+                if not row_text.strip():
+                    # 整行全空：跳过，避免把空串堆进 chunk
+                    continue
                 row_tokens = self.count_tokens(row_text)
                 
                 # 如果单行就超过chunk_size，单独作为一个chunk
@@ -234,9 +241,10 @@ class ExcelHeaderPreservingSplitter:
             # 保存最后一个chunk
             if current_chunk_rows:
                 chunk_text = "\n".join(current_chunk_rows)
-                chunks.append(chunk_text)
+                if chunk_text.strip():
+                    chunks.append(chunk_text)
             
-            return chunks if chunks else [""]
+            return [c for c in chunks if c.strip()]
         
         except Exception as exc:
             raise TextSplitError(f"Excel数据切分失败: {exc}") from exc
@@ -296,7 +304,7 @@ class ExcelHeaderPreservingSplitter:
             分割后的文本块列表
         """
         if df.empty:
-            return [""]
+            return []
         
         # 将DataFrame转换为标准格式
         headers = df.columns.tolist()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Union
 
 
 @dataclass
@@ -18,9 +18,13 @@ class RetrievalQuery:
 
 @dataclass
 class RetrievalResult:
-    """Result from RAG retrieval."""
+    """Result from RAG retrieval.
+
+    ``sources`` 允许两种形态：旧的来源对象列表（``[{"name": ...}]``）与
+    结构化 chunks 路径的来源名列表（``["a.pdf"]``），HTTP 层原样透传。
+    """
     answer: str = ""
-    sources: List[Dict[str, Any]] = field(default_factory=list)
+    sources: List[Union[str, Dict[str, Any]]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

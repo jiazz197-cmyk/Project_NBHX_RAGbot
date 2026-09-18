@@ -2,12 +2,45 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from ..errors import BackendError
 from ._http import HTTPClientMixin
+
+logger = logging.getLogger(__name__)
+
+# 重排网关（GPUSTACK + bge-reranker-v2-m3，8192 token）的上下文限制是**按单条文档**算的，
+# 不是整批总量：2026-09-18 实测 10 条 × 8000 字符（共 8 万字符）→ 200，单条 20000 字符
+# → 400（"maximum context length is 8192 tokens ... 13351 tokens"）。空串同样整次 400
+# （"Only one multi-modal item is supported"）。所以这里只做「单条上限 + 空串占位」，
+# 不能按文档数均分（均分会把答案截掉，实测 600 字符/条会切掉 814 字符 chunk 末尾的行）。
+_RERANK_MAX_DOC_CHARS = 6000
+_EMPTY_DOC_PLACEHOLDER = "（空内容）"
+
+
+def prepare_rerank_documents(
+    documents: list[str],
+    max_doc_chars: int = _RERANK_MAX_DOC_CHARS,
+) -> list[str]:
+    """清洗重排入参：空文档替换为占位符、单条超长则截断。
+
+    返回列表长度与顺序**不变**——重排 API 返回的 index 是对入参下标，
+    丢元素会让引用错位；因此只做替换/截断，不做过滤。
+
+    6000 字符 ≈ 4000 token，对中文留足余量（实测 20000 字符 ≈ 13351 token）。
+    """
+    prepared: list[str] = []
+    for document in documents:
+        text = str(document or "").strip()
+        if not text:
+            text = _EMPTY_DOC_PLACEHOLDER
+        if max_doc_chars > 0 and len(text) > max_doc_chars:
+            text = text[:max_doc_chars]
+        prepared.append(text)
+    return prepared
 
 
 class RerankerClient(HTTPClientMixin):
@@ -41,13 +74,21 @@ class RerankerClient(HTTPClientMixin):
         if not documents:
             return []
 
+        payload_documents = prepare_rerank_documents(documents)
+        if payload_documents != list(documents):
+            logger.info(
+                "重排入参已清洗：%d 条文档（空串占位 / 单条上限 %d 字符）",
+                len(documents),
+                _RERANK_MAX_DOC_CHARS,
+            )
+
         resp = await self._request(
             "POST",
             "",
             json={
                 "model": self._model,
                 "query": query,
-                "documents": documents,
+                "documents": payload_documents,
                 "top_n": top_n,
             },
             headers=self._headers(),

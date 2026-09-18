@@ -339,6 +339,44 @@ async def test_reranker_out_of_range_index_raises():
         await client.aclose()
 
 
+def test_prepare_rerank_documents_placeholders_truncation_and_order():
+    from app.clients.reranker_client import prepare_rerank_documents
+
+    documents = ["", "   ", "命中" * 4000]
+    prepared = prepare_rerank_documents(documents)
+
+    # 下标必须与入参一一对应（重排返回的 index 是入参下标），长度/顺序不变
+    assert len(prepared) == len(documents)
+    assert all(text.strip() for text in prepared)
+    assert prepared[2] == "命中" * 3000  # 单条上限 6000 字符
+    assert len(prepared[2]) == 6000
+    assert prepare_rerank_documents([]) == []
+
+    # 单条上限是**按条**算的：10 条 5000 字符不会因为条数多被均分成 600
+    many = ["长" * 5000 for _ in range(10)]
+    assert all(text == "长" * 5000 for text in prepare_rerank_documents(many))
+
+
+async def test_reranker_payload_documents_are_sanitized():
+    """空文档 → 400（Only one multi-modal item）、超长 → 400（8192 token）都要在发请求前消掉。"""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return _json_response(request, 200, {"results": [{"index": 0, "score": 1.0}]})
+
+    client = RerankerClient(RERANK_URL, "bge", "", transport=httpx.MockTransport(handler))
+    try:
+        await client.rerank("q", ["", "x" * 5000, "正常"], top_n=1)
+    finally:
+        await client.aclose()
+
+    sent = captured["body"]["documents"]
+    assert len(sent) == 3
+    assert all(text.strip() for text in sent)
+    assert sent[2] == "正常"
+
+
 # --------------------------------------------------------------------- search
 async def test_search_form_encoding_and_result_parse():
     captured = {}

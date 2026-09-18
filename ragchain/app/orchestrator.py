@@ -308,8 +308,13 @@ async def run_chat(request: "ChatMessageRequest", auth: "AuthContext", deps: "Ap
         rewritten_query = rewrite.rewritten_query or query
         retrieval_query = build_query(rewritten_query, rewrite.keywords)
 
-        # 6) 意图识别
-        intent_result = await route_intent(retrieval_query, deps)
+        # 6) 意图识别（原始问题一并送入：改写会丢“查查表”这类显式查表线索）
+        intent_result = await route_intent(
+            retrieval_query,
+            deps,
+            raw_query=query,
+            keywords=rewrite.keywords,
+        )
         _ensure_not_cancelled(deps, task_id)
         intent = intent_result.intent
 

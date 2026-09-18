@@ -164,6 +164,30 @@ async def _retrieve_docs(
     return ranked_chunks, True, ""
 
 
+def _format_excel_chunks(chunks: list[DocumentChunk]) -> str:
+    """表格分块 → 带来源标签的纯文本（与 [文档知识] 的 [来源i] 约定一致）。"""
+    parts: list[str] = []
+    for i, chunk in enumerate(chunks, start=1):
+        parts.append(f"[来源{i}] {chunk.source}\n{chunk.content}")
+    return "\n\n".join(parts)
+
+
+def _dedupe_sources(sources: list[str]) -> list[str]:
+    names: list[str] = []
+    for name in sources:
+        text = str(name or "").strip()
+        if text and text not in names:
+            names.append(text)
+    return names
+
+
+def _truncate_excel(answer: str, limit: int) -> str:
+    if limit > 0 and len(answer) > limit:
+        logger.warning("表格数据超长（%d > %d），已截断", len(answer), limit)
+        return answer[:limit] + "\n…（表格内容过长已截断）"
+    return answer
+
+
 async def _retrieve_excel(
     *,
     token: str,
@@ -184,6 +208,28 @@ async def _retrieve_excel(
 
     if not isinstance(raw, dict):
         raw = {}
+
+    limit = int(getattr(settings, "EXCEL_CONTEXT_MAX_CHARS", 8000) or 8000)
+
+    # 主路径：/retriever/excel 显式传 top_k 时返回结构化 chunks（纯向量），
+    # 重排交给本容器，与文档检索一致（2026-09-18 起；旧版只返回整表 JSON）。
+    chunks = _extract_chunks(raw)
+    if chunks:
+        ranked_chunks = chunks[: max(1, settings.RAG_RERANK_TOP_N)]
+        try:
+            ranked = await deps.reranker.rerank(
+                query=question,
+                documents=[chunk.content for chunk in chunks],
+                top_n=settings.RAG_RERANK_TOP_N,
+            )
+            ranked_chunks = _apply_rerank(chunks, ranked, settings.RAG_RERANK_TOP_N)
+        except Exception as exc:  # noqa: BLE001 - 重排失败降级截断
+            logger.warning("表格分块重排失败，降级按原始顺序截断：%s", exc)
+        answer = _truncate_excel(_format_excel_chunks(ranked_chunks), limit)
+        sources = _dedupe_sources([chunk.source for chunk in ranked_chunks])
+        return answer, sources, True, ""
+
+    # 兼容旧版主应用：无 chunks 时回退 answer/data 整表 JSON。
     answer = raw.get("answer")
     if answer is None:
         answer = raw.get("data") or ""
@@ -203,11 +249,14 @@ async def _retrieve_excel(
         except TypeError:
             sources = []
 
-    limit = int(getattr(settings, "EXCEL_CONTEXT_MAX_CHARS", 8000) or 8000)
-    if len(answer) > limit:
-        logger.warning("表格数据超长（%d > %d），已截断", len(answer), limit)
-        answer = answer[:limit] + "\n…（表格内容过长已截断）"
-    return answer, sources, True, ""
+    # 空结果不能当“检索成功但没命中”：available=True 时提示词既不注入 [表格数据]
+    # 也不注入 RETRIEVAL_UNAVAILABLE_NOTE，用户只会看到“未命中”且没有任何线索
+    # （2026-09-18 的线上表现）。这里显式标失败，让错误进入 errors 与提示词。
+    if not str(answer or "").strip() and not sources:
+        logger.warning("表格检索未返回任何内容（chunks 与整表 JSON 均为空）")
+        return "", [], False, "表格检索未返回内容"
+
+    return _truncate_excel(answer, limit), sources, True, ""
 
 
 async def retrieve_local(

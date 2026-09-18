@@ -409,10 +409,18 @@ class OptimizedRetriever:
                 raw = retriever.query(question)
                 nodes = getattr(raw, "source_nodes", raw) or []
             chunks = []
-            for node in list(nodes)[:top_k]:
+            for node in list(nodes):
+                content = (node.text or "").strip()
+                if not content:
+                    # 历史脏数据里的空 chunk 直接丢弃：命中后无内容可用，且会让
+                    # 下游重排网关对空文档返回 400（2026-09-18 实测）。
+                    # 必须在 top_k 截断**之前**过滤，否则空 chunk 会白占召回名额。
+                    continue
+                if len(chunks) >= top_k:
+                    break
                 metadata = dict(node.metadata or {})
                 chunks.append({
-                    "content": node.text.strip(),
+                    "content": content,
                     "source": metadata.get("source", "Unknown"),
                     "score": node.score,
                     "metadata": metadata,

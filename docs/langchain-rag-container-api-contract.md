@@ -560,10 +560,10 @@ Content-Type: application/json
 
 成功响应同 `/db`，但语义为：
 
-- `answer` 是 Excel 数据/分析结果的 JSON 字符串（`{"data": <excel_to_json 结果>, "sources": [...]}` 中的 `data` 序列化结果）；
-- `sources` 是定位成功的 Excel **源文件名**列表（如 `["华翔定价表.xlsx"]`），供来源页脚展示；失败时 `answer` 为错误信息、`sources=[]`；
-- 可选 Query 参数 `top_k` 透传给底层检索；`/excel` 不做内部重排（`rerank` 参数仅为契约一致，传入不报错）；
-- 底层先检索 Excel 源文件，再从 MinIO 读取并转 JSON。
+- 显式传 `top_k`（**RAG 容器的固定调用**）时走与 `/db` 一致的结构化 chunks 路径：`{"answer": "chunk 文本按换行拼接", "sources": ["a.xlsx"], "chunks": [{"content", "source", "score", "metadata"}]}`，纯向量检索、**不做内部重排**，上限 = `top_k`，由调用方（RAG 容器）自行调 `RERANKER_API_URL`；
+- 不传 `top_k` 时保留旧行为：`answer` 是 Excel 数据/分析结果的 JSON 字符串（`{"data": <excel_to_json 结果>, "sources": [...]}` 中的 `data` 序列化结果），`sources` 是定位成功的 Excel **源文件名**列表（如 `["华翔定价表.xlsx"]`），供来源页脚展示；失败时 `answer` 为错误信息、`sources=[]`；`chunks` 恒为 `[]`；
+- 可选 Query 参数 `top_k: int | None`（`ge=1, le=50`）与 `rerank: bool = true`；`rerank` 仅在未显式传 `top_k` 的旧路径生效（该路径内部重排 top_n=3）；
+- 整表 JSON 依赖 `data_analyze.excel_to_json` 从 MinIO 取源文件再解析：引擎优先 `python-calamine`（WPS/腾讯文档导出的 `xl/styles.xml` 含自闭合空 `<fill/>` 时 openpyxl 会抛 `TypeError`），不可用时回退 openpyxl。
 
 ### 8.3 `POST /api/v1/retriever/charts`
 

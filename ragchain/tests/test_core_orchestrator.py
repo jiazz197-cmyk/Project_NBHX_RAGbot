@@ -494,3 +494,39 @@ async def test_early_generator_close_marks_task_finished():
     entry = deps.registry.latest()
     assert entry.finished is True
     assert entry.result == "failed"
+
+
+async def test_explicit_table_hint_survives_general_misclassification():
+    """线上根因回归：LLM 判 general + 原始问题含“查查表” → 表格检索必须照跑。
+
+    该用例同时钉住 orchestrator→route_intent 的 raw_query/keywords 透传
+    （只改 orchestrator 那一行会让本用例失败）。
+    """
+    deps = _base_deps(intent="general")
+    deps.retriever.excel_result = {
+        "chunks": [
+            {"content": "项目名称：V254 (GLC), 负责人：洪鑫浩", "source": "PM项目分配表_0618.xlsx", "score": 0.6}
+        ]
+    }
+    request = FakeRequest(query="项目：V254 (GLC) 的负责人是谁？查查表", search_mode="本地检索")
+
+    frames = await collect(run_chat(request, FakeAuth(), deps))
+    events = parse_frames(frames)
+
+    assert deps.retriever.excel_calls, "显式查表线索未兜底，表格检索被整体跳过"
+    assert deps.retriever.excel_calls[0]["top_k"] == deps.settings.RAG_RETRIEVE_TOP_K
+    body = "".join(e["content"] for e in events if e["event"] == "message")
+    assert "PM项目分配表_0618.xlsx" in body
+    assert deps.registry.latest().result == "success"
+
+
+async def test_explicit_table_hint_is_visible_to_intent_llm():
+    """orchestrator 必须把原始问题/关键词传给 route_intent，而不是只传改写结果。"""
+    deps = _base_deps(intent="excel")
+    request = FakeRequest(query="项目：V254 (GLC) 的负责人是谁？查查表", search_mode="本地检索")
+
+    await collect(run_chat(request, FakeAuth(), deps))
+
+    intent_calls = [c for c in deps.llm.structured_calls if c["schema"] == "IntentResult"]
+    assert intent_calls, "未调用意图识别"
+    assert "查查表" in intent_calls[-1]["user"]

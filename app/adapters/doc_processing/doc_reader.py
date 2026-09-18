@@ -729,6 +729,7 @@ class DocumentProcessor:
                     )
                 metadata = self.extract_metadata(file_input, text)
                 chunks: List[Document] = []
+                skipped_empty = 0
                 
                 # 对每个表格使用保留表头分割器
                 for table_idx, table in enumerate(tables):
@@ -737,6 +738,10 @@ class DocumentProcessor:
                         split_texts = excel_splitter.split_excel_data(table)
                         
                         for text_chunk in split_texts:
+                            if not text_chunk.strip():
+                                # 兜底：空 chunk 不进向量库（检索端重排对空文档 400）
+                                skipped_empty += 1
+                                continue
                             chunk_metadata = {
                                 **metadata,
                                 "token_count": excel_splitter.count_tokens(text_chunk),
@@ -746,7 +751,7 @@ class DocumentProcessor:
                             sheet_name = table.get("sheet_name")
                             if sheet_name:
                                 chunk_metadata["sheet_name"] = str(sheet_name)
-                            if tag_generator and text_chunk.strip():
+                            if tag_generator:
                                 chunk_metadata["tags"] = tag_generator.extract_tags(text_chunk, num_tags=num_tags)
                             chunks.append(Document(page_content=text_chunk, metadata=chunk_metadata))
                     except Exception as e:
@@ -758,6 +763,8 @@ class DocumentProcessor:
                     raise DocumentProcessingError(
                         f"Excel 切分块数 {len(chunks)} 超过上限 {MAX_EXCEL_TOTAL_CHUNKS}"
                     )
+                if skipped_empty:
+                    logger.info("Excel 分割跳过 %d 个空 chunk", skipped_empty)
                 logger.info(f"Excel文件分割完成，共生成 {len(chunks)} 个chunk")
                 return chunks
 
@@ -779,11 +786,14 @@ class DocumentProcessor:
 
             chunks: List[Document] = []
             for text_chunk in split_texts:
+                if not text_chunk.strip():
+                    # 兜底：空 chunk 不进向量库（检索端重排对空文档 400）
+                    continue
                 chunk_metadata = {
                     **doc.metadata,
                     "token_count": text_splitter.count_tokens(text_chunk),
                 }
-                if tag_generator and text_chunk.strip():
+                if tag_generator:
                     chunk_metadata["tags"] = tag_generator.extract_tags(text_chunk, num_tags=num_tags)
                 chunks.append(Document(page_content=text_chunk, metadata=chunk_metadata))
 

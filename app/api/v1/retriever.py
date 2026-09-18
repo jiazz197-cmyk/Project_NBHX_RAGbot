@@ -124,13 +124,16 @@ def excel(
         None,
         ge=1,
         le=50,
-        description="显式指定时透传给检索（/excel 不做重排）",
+        description=(
+            "显式指定时走纯向量检索并返回结构化 chunks（上限 top_k，"
+            "不经过内部重排与整表解析）；不传时保持旧路径（get_charts 整表 JSON）"
+        ),
     ),
     rerank: bool = Query(
         True,
         description=(
             "/excel 从检索到出参均不做内部重排，参数仅为与 /db 契约一致；"
-            "top_k 仅做透传"
+            "显式传 top_k 时重排由调用方负责（容器固定传 false）"
         ),
     ),
     rag_instance=Depends(get_rag_instance),
@@ -153,7 +156,11 @@ def excel(
             metadata={TOP_K_EXPLICIT_META_KEY: True, "rerank": rerank},
         )
     result = RetrieverUseCase(port).query_excel(q)
-    return {"answer": result.answer, "sources": result.sources}
+    return {
+        "answer": result.answer,
+        "sources": result.sources,
+        "chunks": result.metadata.get("chunks") or [],
+    }
 
 
 @router.post("/charts")

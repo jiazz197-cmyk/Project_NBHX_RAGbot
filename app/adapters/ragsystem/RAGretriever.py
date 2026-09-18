@@ -26,6 +26,35 @@ from llama_index.core import Settings
 
 logger = get_logger("ragsystem.RAGretriever")
 
+# 重排网关（bge-reranker-v2-m3，8192 token）的上下文限制是**按单条文档**算的，不是整批
+# 总量：2026-09-18 实测 10 条 × 8000 字符（共 8 万字符）→ 200，单条 20000 字符 → 400
+# （"maximum context length is 8192 tokens ... 13351 tokens"）；空串同样整次 400
+# （"Only one multi-modal item is supported"）。实测 data_excel_db_chunks 曾存在空文本
+# chunk（切割器产出），会让整次重排失败并静默降级为原始向量顺序。这里统一清洗入参：
+# 空内容替换为占位符、单条超长则截断（不按文档数均分，均分会把答案行截掉）。
+# 只替换/截断、不过滤，保证 index 与 nodes 下标一一对应。
+_RERANK_MAX_DOC_CHARS = 6000
+_EMPTY_DOC_PLACEHOLDER = "（空内容）"
+
+
+def prepare_rerank_documents(
+    documents: List[str],
+    max_doc_chars: int = _RERANK_MAX_DOC_CHARS,
+) -> List[str]:
+    """清洗重排入参（空文档占位 + 单条超长截断），长度与顺序保持不变。
+
+    6000 字符 ≈ 4000 token，对中文留足余量（实测 20000 字符 ≈ 13351 token）。
+    """
+    prepared: List[str] = []
+    for document in documents:
+        text = str(document or "").strip()
+        if not text:
+            text = _EMPTY_DOC_PLACEHOLDER
+        if max_doc_chars > 0 and len(text) > max_doc_chars:
+            text = text[:max_doc_chars]
+        prepared.append(text)
+    return prepared
+
 
 class HTTPReranker(BaseNodePostprocessor):
     """HTTP 重排 API，解析 results / rankings 两种返回。"""
@@ -89,7 +118,9 @@ class HTTPReranker(BaseNodePostprocessor):
         logger.debug(f"[debug] Reranker 输入: {len(nodes)} 个节点, top_n={self.top_n}")
         
         try:
-            documents = [node.node.get_content() for node in nodes]
+            documents = prepare_rerank_documents(
+                [node.node.get_content() for node in nodes]
+            )
             result = self._rerank_request_sync(query_str, documents)
             
             if "results" in result:

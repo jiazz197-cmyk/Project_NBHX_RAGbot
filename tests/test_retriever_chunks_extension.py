@@ -6,7 +6,8 @@
      缓存 key 区分带/不带重排；
   3. RAGRetrieverAdapter.query_db：显式 top_k 走 get_chunks 并带 metadata["chunks"]，
      未传 top_k 的旧调用仍走 get_response；
-  4. query_excel：适配 get_charts 新契约（data / sources 源文件名）；
+  4. query_excel：显式 top_k 走 get_chunks 结构化 chunks；未传 top_k 仍走
+     get_charts 整表 JSON（data / sources 源文件名）；
   5. API /db、/excel：新参数透传 + 默认不传参数时旧行为不变。
 
 全部 monkeypatch 掉真实模型 / MinIO / DB，可在本地快速运行。
@@ -340,7 +341,28 @@ def test_query_db_without_top_k_keeps_legacy_get_response(adapter, fake_rag_retr
 # ---------------------------------------------------------------------------
 
 
-def test_query_excel_returns_data_json_and_source_filenames(adapter, fake_rag_retriever):
+def test_query_excel_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
+    """显式 top_k：/excel 与 /db 一致，返回纯向量结构化 chunks（重排交给调用方）。"""
+    fake_rag_retriever.chunks_response = {
+        "chunks": [_chunk("杨贵宁", "PM项目分配表_0618.xlsx", 0.91)]
+    }
+
+    result = adapter.query_excel(
+        RetrievalQuery(
+            question="项目 V254 (GLC) 的负责人是谁？",
+            collection_name="excel_db_chunks",
+            top_k=10,
+            metadata={TOP_K_EXPLICIT_META_KEY: True},
+        )
+    )
+
+    assert fake_rag_retriever.calls == [("get_chunks", "项目 V254 (GLC) 的负责人是谁？", 10)]
+    assert result.answer == "杨贵宁"
+    assert result.sources == ["PM项目分配表_0618.xlsx"]
+    assert result.metadata["chunks"] == fake_rag_retriever.chunks_response["chunks"]
+
+
+def test_query_excel_without_top_k_keeps_legacy_charts_json(adapter, fake_rag_retriever):
     data_json = json.dumps({"sheet_name": "S", "headers": [], "rows": []}, ensure_ascii=False)
     fake_rag_retriever.charts_response = {
         "data": data_json,
@@ -348,15 +370,13 @@ def test_query_excel_returns_data_json_and_source_filenames(adapter, fake_rag_re
     }
 
     result = adapter.query_excel(
-        RetrievalQuery(
-            question="哪个供应商延期最多？",
-            collection_name="excel_db_chunks",
-            top_k=5,
-        )
+        RetrievalQuery(question="哪个供应商延期最多？", collection_name="excel_db_chunks")
     )
 
+    assert fake_rag_retriever.calls == [("get_charts", "哪个供应商延期最多？")]
     assert result.answer == data_json
     assert result.sources == ["华翔定价表.xlsx"]
+    assert result.metadata == {}
 
 
 def test_query_excel_error_keeps_old_answer_sources_shape(adapter, fake_rag_retriever):
@@ -492,29 +512,31 @@ def test_api_db_direct_call_omitting_new_params_uses_defaults(monkeypatch):
     assert response["chunks"] == []
 
 
-def test_api_excel_returns_source_filenames_and_forwards_top_k(monkeypatch):
+def test_api_excel_returns_chunks_and_forwards_top_k(monkeypatch):
+    chunks = [_chunk("杨贵宁", "PM项目分配表_0618.xlsx", 0.9)]
     result = RetrievalResult(
-        answer='{"sheet_name": "S", "headers": [], "rows": []}',
-        sources=["华翔定价表.xlsx"],
+        answer="杨贵宁",
+        sources=["PM项目分配表_0618.xlsx"],
+        metadata={"chunks": chunks},
     )
     captured = _install_fake_api_port(monkeypatch, result)
 
     response = api_mod.excel(
-        ChatRequest(question="哪个供应商延期最多？"),
+        ChatRequest(question="项目 V254 (GLC) 的负责人是谁？"),
         collection="excel_db_chunks",
-        top_k=5,
+        top_k=10,
         rerank=False,
         rag_instance=object(),
         current_user=_superuser(),
     )
 
-    assert captured["q"].top_k == 5
+    assert captured["q"].top_k == 10
     assert captured["q"].metadata == {TOP_K_EXPLICIT_META_KEY: True, "rerank": False}
     assert response == {
-        "answer": '{"sheet_name": "S", "headers": [], "rows": []}',
-        "sources": ["华翔定价表.xlsx"],
+        "answer": "杨贵宁",
+        "sources": ["PM项目分配表_0618.xlsx"],
+        "chunks": chunks,
     }
-    assert "chunks" not in response
 
 
 def test_http_routes_parse_top_k_and_rerank(monkeypatch):
@@ -565,6 +587,7 @@ def test_http_routes_parse_top_k_and_rerank(monkeypatch):
     assert response.status_code == 200
     assert "answer" in response.json()
     assert "sources" in response.json()
+    assert "chunks" in response.json()
     assert captured["q"].top_k == 5
 
     # 参数下界校验：top_k=0 -> 422
@@ -590,4 +613,5 @@ def test_api_excel_without_new_params_uses_legacy_default(monkeypatch):
 
     assert captured["q"].top_k == RetrievalQuery.__dataclass_fields__["top_k"].default
     assert captured["q"].metadata == {}
-    assert response == {"answer": "{}", "sources": []}
+    # /excel 响应与 /db 对齐：新增 chunks 键，旧字段保持原样
+    assert response == {"answer": "{}", "sources": [], "chunks": []}
