@@ -45,13 +45,40 @@ async def test_stream_tokens_usage_and_tool_binding():
     assert deps.llm.main_kwargs["tools"][0].name == "python_exec"
 
 
-async def test_usage_from_response_metadata():
+async def test_usage_metadata_from_final_chunk_is_normalized():
+    """usage 改走标准 usage_metadata（issue #30：main_model 已传 stream_usage=True，
+    网关在流末尾 chunk 上带该字段）；done 事件的契约键保持 prompt/completion/total。"""
     deps = build_fake_deps()
     deps.llm.main_scripts = [
-        [FakeChunk(content="答案", response_metadata={"token_usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}})]
+        [
+            FakeChunk(content="答案前半"),
+            FakeChunk(
+                content="答案后半",
+                usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            ),
+        ]
     ]
     events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    assert "".join(e.content for e in events if e.kind == "token") == "答案前半答案后半"
     assert events[-1].usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+
+async def test_response_metadata_only_usage_is_no_longer_extracted():
+    """response_metadata["token_usage"] 回退已随手写 _extract_usage 删除：
+    usage 一律来自聚合 chunk 的 usage_metadata，只有 response_metadata 时为 None。"""
+    deps = build_fake_deps()
+    deps.llm.main_scripts = [
+        [
+            FakeChunk(
+                content="答案",
+                response_metadata={
+                    "token_usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+                },
+            )
+        ]
+    ]
+    events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    assert events[-1].usage is None
 
 
 def _tool_call_chunk(index: int, code: str | None = None) -> FakeChunk:
@@ -122,6 +149,59 @@ async def test_tool_args_streamed_in_fragments_are_merged():
     events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
     assert deps.executor.codes == ["print(123)"]
     assert any("完成" in e.content for e in events if e.kind == "token")
+
+
+async def test_unparseable_tool_args_across_fragments_fail_without_execution():
+    """坏 JSON（乱序闭合，分两片流式到达）→ invalid_tool_calls 显式失败处理：
+    不执行任何工具、回灌失败 ToolMessage、置 tool_failed 并出降级提示。
+
+    （原手写 {"__raw__": ...} 分支会把坏参数当代码执行；改用 chunk 相加后由
+    langchain-core 派生 invalid_tool_calls，这里锁定显式失败语义。）"""
+    deps = build_fake_deps(settings=FakeSettings(TOOL_MAX_ITERATIONS=3))
+    deps.executor = FakeExecutor()
+    deps.llm.main_scripts = [
+        [
+            FakeChunk(
+                tool_call_chunks=[
+                    {"index": 0, "name": "python_exec", "id": "call_1", "args": '{"code": "x'}
+                ]
+            ),
+            FakeChunk(tool_call_chunks=[{"index": 0, "args": '"]'}]),
+        ],
+        make_text_script("手算：100+100=200"),
+    ]
+    events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    assert deps.executor.codes == []  # 坏参数不再被当代码跑
+    notices = [e for e in events if e.kind == "notice"]
+    assert notices and "自动计算失败" in notices[0].content
+    assert events[-1].kind == "done"
+    assert events[-1].tool_failed is True
+    # 回灌给模型的 ToolMessage 说明参数无法解析
+    tool_messages = [m for m in deps.llm.models[0].calls[1] if isinstance(m, ToolMessage)]
+    assert tool_messages and "无法解析" in tool_messages[0].content
+
+
+async def test_truncated_tool_args_repaired_to_empty_dict_hit_missing_code_branch():
+    """截断参数经 parse_partial_json 修复成空 dict → tool_calls 合法但缺 code，
+    走既有「参数缺失」失败分支（tool_failed + 降级提示），同样不执行。"""
+    deps = build_fake_deps(settings=FakeSettings(TOOL_MAX_ITERATIONS=3))
+    deps.executor = FakeExecutor()
+    deps.llm.main_scripts = [
+        [
+            FakeChunk(
+                tool_call_chunks=[
+                    {"index": 0, "name": "python_exec", "id": "call_1", "args": '{"code": print(1)'}
+                ]
+            )
+        ],
+        make_text_script("手算完成"),
+    ]
+    events = await _collect(stream_generation(deps, system_prompt="s", user_query="q"))
+    assert deps.executor.codes == []
+    assert events[-1].kind == "done"
+    assert events[-1].tool_failed is True
+    tool_messages = [m for m in deps.llm.models[0].calls[1] if isinstance(m, ToolMessage)]
+    assert tool_messages and "参数缺失" in tool_messages[0].content
 
 
 async def test_generation_cancel_returns_partial_tokens():

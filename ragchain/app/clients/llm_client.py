@@ -152,6 +152,9 @@ class LLMClient:
             max_tokens=self.settings.LANGCHAIN_MAX_OUTPUT_TOKENS,
             temperature=self.settings.MAIN_LLM_TEMPERATURE,
             streaming=streaming,
+            # 自定义 base_url 下 langchain-openai 不会自动开启 stream_usage（默认开启
+            # 只对官方端点 / LangSmith 网关生效）→ 不传则 chunk 上没有 usage_metadata。
+            stream_usage=True,
         )
         self._last_main = model
         if tools:

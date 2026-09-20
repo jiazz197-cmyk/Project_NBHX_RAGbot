@@ -71,6 +71,8 @@ def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
     assert created["max_tokens"] == s.LANGCHAIN_MAX_OUTPUT_TOKENS
     assert created["temperature"] == s.MAIN_LLM_TEMPERATURE
     assert created["streaming"] is True
+    # 自定义 base_url 下 langchain-openai 不会自动开启 stream_usage，必须显式传
+    assert created["stream_usage"] is True
 
 
 def test_main_model_binds_tools(monkeypatch):

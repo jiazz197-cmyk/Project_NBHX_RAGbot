@@ -1,7 +1,8 @@
-"""主生成步骤：main_llm 流式 + 手写有界 python_exec 工具循环；来源页脚生成。
+"""主生成步骤：main_llm 流式 + 有界 python_exec 工具循环；来源页脚生成。
 
-不引入 langgraph/agent 框架；工具调用通过汇总 AIMessageChunk.tool_call_chunks 后
-自行交给 deps.executor.execute 执行，再以 ToolMessage 回灌。
+不引入 langgraph/agent 框架；工具调用通过 ``AIMessageChunk.__add__`` 聚合流式
+tool_call_chunks（langchain-core 原生语义），再交给 deps.executor.execute 执行、
+以 ToolMessage 回灌。
 
 思考过程：Qwen3 主 LLM 的思考增量由 llm_client 挂在 chunk 的
 ``additional_kwargs["reasoning_content"]``，这里以 ``thinking`` 事件下发；
@@ -10,12 +11,17 @@ orchestrator 负责把它包成 ``<think>...</think>`` 随 message 帧流出（�
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -63,21 +69,6 @@ def build_python_exec_tool(deps) -> StructuredTool:
     )
 
 
-def _chunk_text(chunk: Any) -> str:
-    content = getattr(chunk, "content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("content") or ""))
-        return "".join(parts)
-    return ""
-
-
 def _chunk_reasoning(chunk: Any) -> str:
     """提取思考增量（llm_client 已把网关 ``reasoning_content`` 挂到 additional_kwargs）。"""
     kwargs = getattr(chunk, "additional_kwargs", None)
@@ -87,124 +78,48 @@ def _chunk_reasoning(chunk: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _extract_usage(chunk: Any) -> dict[str, int] | None:
-    usage = getattr(chunk, "usage_metadata", None)
-    if isinstance(usage, dict) and usage:
-        prompt = usage.get("input_tokens", usage.get("prompt_tokens"))
-        completion = usage.get("output_tokens", usage.get("completion_tokens"))
-        total = usage.get("total_tokens")
-        normalized: dict[str, int] = {}
-        if prompt is not None:
-            normalized["prompt_tokens"] = int(prompt)
-        if completion is not None:
-            normalized["completion_tokens"] = int(completion)
-        if total is not None:
-            normalized["total_tokens"] = int(total)
-        if normalized:
-            return normalized
-    meta = getattr(chunk, "response_metadata", None)
-    if isinstance(meta, dict):
-        raw = meta.get("token_usage") or meta.get("usage")
-        if isinstance(raw, dict) and raw:
-            normalized = {
-                key: int(raw[key])
-                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-                if raw.get(key) is not None
-            }
-            if normalized:
-                return normalized
-    return None
+def _usage_from_chunk(acc: AIMessageChunk | None) -> dict[str, int] | None:
+    """聚合 chunk 的 usage_metadata → GenerationEvent.usage 契约键（prompt/completion/total）。
 
-
-def _normalize_call(tc: Any) -> dict[str, Any]:
-    if isinstance(tc, dict):
-        return {
-            "name": str(tc.get("name") or ""),
-            "args": tc.get("args"),
-            "id": str(tc.get("id") or ""),
-        }
-    return {
-        "name": str(getattr(tc, "name", "") or ""),
-        "args": getattr(tc, "args", None),
-        "id": str(getattr(tc, "id", "") or ""),
+    stream_usage=True 后网关在流末尾 chunk 上带标准 usage_metadata；同轮多个 usage
+    chunk 经 add_usage 累加，聚合结果即该轮 usage（标准协议只有最后一个 chunk 带 usage）。
+    """
+    usage = acc.usage_metadata if acc is not None else None
+    if not isinstance(usage, dict) or not usage:
+        return None
+    mapped = {
+        "prompt_tokens": usage.get("input_tokens"),
+        "completion_tokens": usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
     }
+    return {key: int(value) for key, value in mapped.items() if value is not None} or None
 
 
-class ToolCallAccumulator:
-    """汇总流式 chunk 中的 tool_call_chunks（兼容完整 tool_calls）。"""
+def _collect_tool_calls(acc: AIMessageChunk | None) -> list[dict[str, Any]]:
+    """聚合结果 → 统一调用列表；invalid_tool_calls 显式转失败标记。
 
-    def __init__(self) -> None:
-        self._fragments: dict[int, dict[str, str]] = {}
-        self._direct: list[dict[str, Any]] = []
-        self._direct_keys: set[str] = set()
-
-    def add(self, chunk: Any) -> None:
-        raw_chunks = getattr(chunk, "tool_call_chunks", None)
-        if raw_chunks:
-            for item in raw_chunks:
-                tc = _normalize_call(item)
-                index = item.get("index", 0) if isinstance(item, dict) else getattr(item, "index", 0)
-                try:
-                    index = int(index)
-                except (TypeError, ValueError):
-                    index = 0
-                entry = self._fragments.setdefault(index, {"name": "", "args": "", "id": ""})
-                if tc["name"]:
-                    entry["name"] = tc["name"]
-                if tc["id"]:
-                    entry["id"] = tc["id"]
-                args = tc["args"]
-                if isinstance(args, str):
-                    entry["args"] += args
-                elif args is not None:
-                    try:
-                        entry["args"] = json.dumps(args, ensure_ascii=False)
-                    except (TypeError, ValueError):
-                        entry["args"] = str(args)
-            return
-
-        direct = getattr(chunk, "tool_calls", None)
-        if direct:
-            for i, item in enumerate(direct):
-                tc = _normalize_call(item)
-                key = tc["id"] or f"direct-{i}"
-                if key in self._direct_keys:
-                    continue
-                self._direct_keys.add(key)
-                self._direct.append(tc)
-
-    def finalize(self) -> list[dict[str, Any]]:
-        if self._direct:
-            return [
-                {"name": c["name"], "args": c["args"], "id": c["id"] or f"call_{i}"}
-                for i, c in enumerate(self._direct)
-            ]
-
-        calls: list[dict[str, Any]] = []
-        for index in sorted(self._fragments):
-            fragment = self._fragments[index]
-            raw_args = fragment["args"]
-            if isinstance(raw_args, str):
-                raw_args = raw_args.strip()
-                if not raw_args:
-                    args: Any = {}
-                else:
-                    try:
-                        args = json.loads(raw_args)
-                    except (TypeError, ValueError):
-                        args = {"__raw__": raw_args}
-            elif isinstance(raw_args, dict):
-                args = raw_args
-            else:
-                args = {}
+    langchain-core 按 parse_partial_json 派生：可解析（含截断修复）→ ``tool_calls``
+    （截断可能修复成空 dict）；仍非法 → ``invalid_tool_calls``。派生结果只有累积
+    完成后才可信，所以只在整轮聚合结束后调用一次。
+    """
+    if acc is None:
+        return []
+    calls: list[dict[str, Any]] = []
+    for invalid, chunks in ((False, acc.tool_calls), (True, acc.invalid_tool_calls)):
+        for tc in chunks or []:
             calls.append(
                 {
-                    "name": fragment["name"] or "python_exec",
-                    "args": args,
-                    "id": fragment["id"] or f"call_{index}",
+                    "name": tc.get("name") or "python_exec",
+                    "args": {} if invalid else (tc.get("args") or {}),
+                    "id": tc.get("id"),
+                    "invalid": invalid,
+                    "raw_args": tc.get("args") if invalid else None,
                 }
             )
-        return calls
+    for i, call in enumerate(calls):
+        if not call["id"]:
+            call["id"] = f"call_{i}"
+    return calls
 
 
 def _extract_code(args: Any) -> str:
@@ -241,6 +156,8 @@ async def stream_generation(
     usage: dict[str, int] | None = None
     tool_failed = False
     executions = 0
+    # 达到上限后的收尾轮：只透传流（token/thinking/usage），忽略其间任何工具调用
+    force_answer = False
 
     try:
         model = deps.llm.main_model(streaming=True, tools=[build_python_exec_tool(deps)])
@@ -257,7 +174,9 @@ async def stream_generation(
             yield GenerationEvent(kind="cancelled", usage=usage, tool_failed=tool_failed)
             return
 
-        accumulator = ToolCallAccumulator()
+        # 整轮聚合：AIMessageChunk.__add__ 合并 tool_call_chunks、累加 usage_metadata；
+        # 「是否有工具调用」只在整轮聚合结束后判一次（中间碎片的派生结果不可信）
+        acc: AIMessageChunk | None = None
         try:
             async for chunk in model.astream(messages):
                 if _cancelled():
@@ -266,52 +185,42 @@ async def stream_generation(
                 reasoning = _chunk_reasoning(chunk)
                 if reasoning:
                     yield GenerationEvent(kind="thinking", content=reasoning)
-                text = _chunk_text(chunk)
-                if text:
-                    yield GenerationEvent(kind="token", content=text)
-                chunk_usage = _extract_usage(chunk)
-                if chunk_usage:
-                    usage = chunk_usage
-                accumulator.add(chunk)
+                if chunk.text:
+                    yield GenerationEvent(kind="token", content=chunk.text)
+                acc = chunk if acc is None else acc + chunk
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - 主 LLM 失败
-            logger.warning("主 LLM 流式生成失败：%s", exc)
-            if tool_failed:
+        except Exception as exc:  # noqa: BLE001 - 主 LLM 失败（收尾轮不发 notice，锁原行为）
+            logger.warning("主 LLM %s生成失败：%s", "收尾" if force_answer else "流式", exc)
+            if tool_failed and not force_answer:
                 yield GenerationEvent(kind="notice", content=CALC_FALLBACK_NOTICE, tool_failed=True)
             yield GenerationEvent(kind="done", usage=usage, error=exc, tool_failed=tool_failed)
             return
 
-        calls = accumulator.finalize()
+        round_usage = _usage_from_chunk(acc)
+        if round_usage:
+            usage = round_usage
+        calls = [] if force_answer else _collect_tool_calls(acc)
         if not calls:
             break
 
         if executions >= max_iterations:
-            # 达到上限：不再执行工具，要求模型直接作答；再流一次，忽略其间任何工具调用
+            # 达到上限：不再执行工具，要求模型直接作答
             messages.append(HumanMessage(content=TOOL_LOOP_LIMIT_NOTICE))
-            try:
-                async for chunk in model.astream(messages):
-                    if _cancelled():
-                        yield GenerationEvent(kind="cancelled", usage=usage, tool_failed=tool_failed)
-                        return
-                    reasoning = _chunk_reasoning(chunk)
-                    if reasoning:
-                        yield GenerationEvent(kind="thinking", content=reasoning)
-                    text = _chunk_text(chunk)
-                    if text:
-                        yield GenerationEvent(kind="token", content=text)
-                    chunk_usage = _extract_usage(chunk)
-                    if chunk_usage:
-                        usage = chunk_usage
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("主 LLM 收尾生成失败：%s", exc)
-                yield GenerationEvent(kind="done", usage=usage, error=exc, tool_failed=tool_failed)
-                return
-            break
+            force_answer = True
+            continue
 
-        messages.append(AIMessage(content="", tool_calls=calls))
+        # 回灌 assistant tool_calls：invalid 以空参数入历史（下一条 ToolMessage 必须
+        # 能对到 assistant 里的 tool_call id），失败原因由 ToolMessage 文本说明。
+        messages.append(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": call["name"], "args": call["args"], "id": call["id"]}
+                    for call in calls
+                ],
+            )
+        )
         for call in calls:
             call_id = call["id"]
             if executions >= max_iterations:
@@ -326,6 +235,16 @@ async def stream_generation(
             if _cancelled():
                 yield GenerationEvent(kind="cancelled", usage=usage, tool_failed=tool_failed)
                 return
+            if call["invalid"]:
+                # 坏 JSON 显式失败：不执行（原手写 {"__raw__": ...} 分支的替代语义）
+                tool_failed = True
+                messages.append(
+                    ToolMessage(
+                        content=f"工具调用参数无法解析：{call['raw_args']}。{TOOL_FAIL_INSTRUCTION}",
+                        tool_call_id=call_id,
+                    )
+                )
+                continue
             code = _extract_code(call.get("args"))
             if not code:
                 tool_failed = True

@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from langchain_core.messages import AIMessageChunk
+
 from app.steps.injection_guard import GuardResult
 from app.steps.intent_router import IntentResult
 from app.steps.query_rewriter import RewriteResult
@@ -268,20 +270,38 @@ class FakeExecutor:
 # ---------------------------------------------------------------------------
 # LLM fake
 # ---------------------------------------------------------------------------
-@dataclass
-class FakeChunk:
-    content: str = ""
-    tool_calls: list | None = None
-    tool_call_chunks: list | None = None
-    usage_metadata: dict | None = None
-    response_metadata: dict | None = None
-    reasoning: str = ""
-    additional_kwargs: dict | None = None
+def FakeChunk(
+    *,
+    content: str = "",
+    tool_calls: list | None = None,
+    tool_call_chunks: list | None = None,
+    usage_metadata: dict | None = None,
+    response_metadata: dict | None = None,
+    reasoning: str = "",
+    additional_kwargs: dict | None = None,
+) -> "AIMessageChunk":
+    """构造真实 ``AIMessageChunk``。
 
-    def __post_init__(self) -> None:
-        # 模拟 llm_client 的思考透出：reasoning 挂到 additional_kwargs
-        if self.reasoning and self.additional_kwargs is None:
-            self.additional_kwargs = {"reasoning_content": self.reasoning}
+    generate 已改用 chunk 相加聚合（issue #30，手写 ToolCallAccumulator 已删），
+    脚本 chunk 必须携带 langchain-core 原生语义（``__add__`` / ``.text`` /
+    ``tool_calls`` / ``invalid_tool_calls`` / ``usage_metadata``），不能再是手写
+    dataclass。
+
+    ``reasoning`` 模拟 llm_client 的思考透出：挂到 ``additional_kwargs["reasoning_content"]``。
+    """
+    kwargs: dict[str, Any] = dict(additional_kwargs or {})
+    if reasoning:
+        kwargs["reasoning_content"] = reasoning
+    payload: dict[str, Any] = {"content": content, "additional_kwargs": kwargs}
+    if tool_calls:
+        payload["tool_calls"] = tool_calls
+    if tool_call_chunks:
+        payload["tool_call_chunks"] = tool_call_chunks
+    if usage_metadata is not None:
+        payload["usage_metadata"] = usage_metadata
+    if response_metadata is not None:
+        payload["response_metadata"] = response_metadata
+    return AIMessageChunk(**payload)
 
 
 class ScriptedModel:
