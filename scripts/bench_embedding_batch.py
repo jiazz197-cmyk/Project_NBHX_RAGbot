@@ -42,6 +42,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List
 
+import httpx
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -76,8 +78,7 @@ class _MockGateway(BaseHTTPRequestHandler):
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
             }
         ).encode()
-        with type(self).lock:
-            type(self).requests.append(len(inputs))
+        # 请求计数不在这里做：见 _install_request_counter()，那样对真网关同样有效
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -154,6 +155,28 @@ def _reset_requests() -> None:
         _MockGateway.requests = []
 
 
+def _install_request_counter() -> None:
+    """在**共享 httpx 客户端**上装 request 钩子，统计每次嵌入请求带了几条文本。
+
+    假网关模式可以靠服务端记，但 ``--api-url`` 指向真网关时没有服务端可控——
+    而新旧两版实现用的都是这两个共享客户端（同步入库链路走 sync），所以统一在这里统计。
+    """
+    from app.core.http_client import HttpClientManager, get_sync_http_client
+
+    def _hook(request: httpx.Request) -> None:
+        try:
+            body = json.loads(request.content or b"{}")
+        except Exception:  # noqa: BLE001  非 JSON 请求不统计
+            return
+        inputs = body.get("input")
+        if isinstance(inputs, list):
+            with _MockGateway.lock:
+                _MockGateway.requests.append(len(inputs))
+
+    for client in (get_sync_http_client(), HttpClientManager.get_instance()):
+        client.event_hooks["request"] = [_hook, *(client.event_hooks.get("request") or [])]
+
+
 def _stats() -> Dict[str, float]:
     with _MockGateway.lock:
         per_request = list(_MockGateway.requests)
@@ -227,13 +250,15 @@ def main() -> int:
 
     from app.adapters.doc_processing import embedding_store as new_impl
 
+    _install_request_counter()  # 真网关/假网关都靠它统计请求条数
+
     gateway = None
     api_url = args.api_url
     if api_url is None:
         gateway, api_url = _start_gateway(args.latency_ms)
         print(f"[bench] 假网关: {api_url}  每请求延迟 {args.latency_ms}ms")
     else:
-        print(f"[bench] 外部网关: {api_url}")
+        print(f"[bench] 外部网关: {api_url}（latency-ms 忽略）")
 
     impls = []
     legacy_tmp = None
@@ -258,12 +283,14 @@ def main() -> int:
             if args.mode in ("embed", "both"):
                 _reset_requests()
                 elapsed = _run_embed_bench(model, texts)
-                rows.append({"impl": name, "mode": "embed", "sec": elapsed, **_stats()})
+                rows.append({"impl": name, "mode": "embed", "chunks": len(texts),
+                             "sec": elapsed, **_stats()})
             if args.mode in ("ingest", "both"):
                 collection = collections[name]
                 _reset_requests()
                 elapsed = _run_ingest_bench(module, model, texts, collection)
-                rows.append({"impl": name, "mode": "ingest", "sec": elapsed, **_stats()})
+                rows.append({"impl": name, "mode": "ingest", "chunks": len(texts),
+                             "sec": elapsed, **_stats()})
     finally:
         for collection in collections.values():
             try:
@@ -280,8 +307,8 @@ def main() -> int:
     print("-" * len(header))
     for row in rows:
         print(
-            f"{row['impl']:8} {row['mode']:8} {row['texts']:>7} {row['http_requests']:>9} "
-            f"{row['avg_inputs_per_request']:>11.1f} {row['sec']:>10.3f} {row['texts'] / row['sec']:>9.1f}"
+            f"{row['impl']:8} {row['mode']:8} {row['chunks']:>7} {row['http_requests']:>9} "
+            f"{row['avg_inputs_per_request']:>11.1f} {row['sec']:>10.3f} {row['chunks'] / row['sec']:>9.1f}"
         )
 
     for mode in ("embed", "ingest"):
