@@ -17,14 +17,16 @@ from app.ports.outbound.retriever import (
 
 
 class RetrieverUseCase:
+    """检索用例：async 透传给 RetrieverPort（端口实现负责真正的异步检索）。"""
+
     def __init__(self, port: RetrieverPort) -> None:
         self._port = port
 
-    def query_db(self, q: RetrievalQuery) -> RetrievalResult:
-        return self._port.query_db(q)
+    async def query_db(self, q: RetrievalQuery) -> RetrievalResult:
+        return await self._port.query_db(q)
 
-    def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
-        return self._port.query_excel(q)
+    async def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+        return await self._port.query_excel(q)
 
 
 class ChartAnalysisUseCase:

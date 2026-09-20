@@ -29,12 +29,16 @@ class RetrievalResult:
 
 
 class RetrieverPort(Protocol):
-    """Abstraction for RAG document retrieval."""
+    """Abstraction for RAG document retrieval.
 
-    def query_db(self, q: RetrievalQuery) -> RetrievalResult:
+    issue #37 后续：整条检索链已切异步——异步 query engine（aquery/aretrieve）
+    才会触发 ``HTTPReranker._apostprocess_nodes``，从而不阻塞事件循环。
+    """
+
+    async def query_db(self, q: RetrievalQuery) -> RetrievalResult:
         ...
 
-    def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+    async def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
         ...
 
 

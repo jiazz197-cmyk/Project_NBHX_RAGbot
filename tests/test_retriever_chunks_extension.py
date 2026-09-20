@@ -1,14 +1,15 @@
 """主应用 retriever 增量扩展测试（子系统 A / 计划 §4.1）。
 
 覆盖：
-  1. OptimizedRetriever.get_chunks：结构化 chunks、top_k 透传与上限、异常兜底；
+  1. OptimizedRetriever.get_chunks / get_chunks_async：结构化 chunks、top_k 透传与上限、
+     异常兜底，以及 aretrieve 异步路径；
   2. ModelManager.get_query_engine：use_reranker=False 不挂 postprocessor，
      缓存 key 区分带/不带重排；
-  3. RAGRetrieverAdapter.query_db：显式 top_k 走 get_chunks 并带 metadata["chunks"]，
-     未传 top_k 的旧调用仍走 get_response；
-  4. query_excel：显式 top_k 走 get_chunks 结构化 chunks；未传 top_k 仍走
-     get_charts 整表 JSON（data / sources 源文件名）；
-  5. API /db、/excel：新参数透传 + 默认不传参数时旧行为不变。
+  3. RAGRetrieverAdapter.query_db（async）：显式 top_k 走 get_chunks_async 并带
+     metadata["chunks"]，未传 top_k 的旧调用走 get_response_async（aquery）；
+  4. query_excel（async）：显式 top_k 走 get_chunks_async 结构化 chunks；
+     未传 top_k 走 get_charts_async 整表 JSON（data / sources 源文件名）；
+  5. API /db、/excel：async 路由新参数透传 + 默认不传参数时旧行为不变。
 
 全部 monkeypatch 掉真实模型 / MinIO / DB，可在本地快速运行。
 """
@@ -64,6 +65,9 @@ class _FakeVectorRetriever:
             raise self.error
         return list(self.nodes)
 
+    async def aretrieve(self, question):
+        return self.retrieve(question)
+
 
 class _FakeModelManager:
     def __init__(self, vector_retriever):
@@ -85,7 +89,7 @@ def _make_chunks_retriever(nodes=None, error=None):
 
 
 class _FakeRagRetriever:
-    """替代 ragsystem.retriever(...) 的返回值，记录调用。"""
+    """替代 ragsystem.retriever(...) 的返回值，记录调用（issue #37 后 adapter 只走 *_async）。"""
 
     def __init__(self):
         self.calls = []
@@ -93,16 +97,16 @@ class _FakeRagRetriever:
         self.response = {"content": [], "source": []}
         self.charts_response = {"error": "未找到相关文件"}
 
-    def get_chunks(self, question, top_k):
-        self.calls.append(("get_chunks", question, top_k))
+    async def get_chunks_async(self, question, top_k):
+        self.calls.append(("get_chunks_async", question, top_k))
         return self.chunks_response
 
-    def get_response(self, question):
-        self.calls.append(("get_response", question))
+    async def get_response_async(self, question):
+        self.calls.append(("get_response_async", question))
         return self.response
 
-    def get_charts(self, question):
-        self.calls.append(("get_charts", question))
+    async def get_charts_async(self, question):
+        self.calls.append(("get_charts_async", question))
         return self.charts_response
 
 
@@ -174,6 +178,126 @@ def test_get_chunks_requires_collection(monkeypatch):
     retriever = _make_chunks_retriever()
     retriever.collection_name = None
     assert retriever.get_chunks("q", 5) == {"chunks": []}
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_async_uses_aretrieve():
+    """异步 chunks 路径走 retriever.aretrieve，而不是同步 retrieve。"""
+    nodes = [
+        _FakeNodeWithScore("命中一", {"source": "doc1.pdf"}, 0.91),
+        _FakeNodeWithScore("命中二", {"source": "doc2.pdf"}, 0.82),
+    ]
+    retriever = _make_chunks_retriever(nodes)
+
+    result = await retriever.get_chunks_async("去年售后费用趋势？", 1)
+
+    assert [c["content"] for c in result["chunks"]] == ["命中一"]
+    assert retriever.model_manager._vector_retriever.questions == ["去年售后费用趋势？"]
+
+
+@pytest.mark.asyncio
+async def test_get_response_async_uses_aquery():
+    """异步 response 路径走 query_engine.aquery（进而触发异步 reranker 钩子）。"""
+    from types import SimpleNamespace
+
+    r = object.__new__(OptimizedRetriever)
+    r.collection_name = "knowledge_chunks"
+    r.default_top_n = 3
+    r.model_manager = None
+    calls = []
+
+    class _FakeQueryEngine:
+        async def aquery(self, question):
+            calls.append(question)
+            return SimpleNamespace(
+                source_nodes=[
+                    _FakeNodeWithScore("命中", {"source": "doc.pdf"}, 0.9)
+                ]
+            )
+
+    r.query_engines = _FakeQueryEngine()
+
+    result = await r.get_response_async("q")
+
+    assert calls == ["q"]
+    assert result["content"] == ["命中"]
+    assert result["source"] == ["doc.pdf"]
+    assert result["metadata"] == [{"source": "doc.pdf"}]
+
+
+@pytest.mark.asyncio
+async def test_get_response_async_end_to_end_uses_async_reranker_http(monkeypatch):
+    """端到端：真实 RetrieverQueryEngine.aquery → HTTPReranker → 异步 HTTP。
+
+    这条用例不再只测 OptimizedRetriever 的转发，而是把真实 llama-index 引擎、
+    真实 HTTPReranker 和 MockTransport 串起来，证明 async 查询链最终走的是
+    ``_apostprocess_nodes``（异步 HTTP），而不是基类 ``asyncio.to_thread`` 同步路径。
+    """
+    import httpx
+    from llama_index.core import Settings
+    from llama_index.core.llms.mock import MockLLM
+    from llama_index.core.query_engine import RetrieverQueryEngine
+    from llama_index.core.retrievers import BaseRetriever
+    from llama_index.core.schema import NodeWithScore, TextNode
+
+    from app.adapters.ragsystem import RAGretriever as rag_module
+    from app.adapters.ragsystem.RAGretriever import HTTPReranker
+
+    class _ListRetriever(BaseRetriever):
+        def __init__(self, nodes):
+            super().__init__()
+            self._nodes = nodes
+
+        def _retrieve(self, query_bundle):
+            return self._nodes
+
+    payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"results": [{"index": 1, "relevance_score": 0.99}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def fake_get_client():
+        return client
+
+    monkeypatch.setattr(rag_module, "get_http_client", fake_get_client)
+
+    old_llm = Settings._llm  # 直接存私有字段，避免读属性时触发默认 OpenAI resolve
+    Settings.llm = MockLLM()
+    try:
+        engine = RetrieverQueryEngine.from_args(
+            retriever=_ListRetriever([
+                NodeWithScore(node=TextNode(text="低分"), score=0.1),
+                NodeWithScore(node=TextNode(text="命中"), score=0.2),
+            ]),
+            node_postprocessors=[
+                HTTPReranker(api_url="http://rerank.test/v1/rerank", top_n=1)
+            ],
+            streaming=False,
+        )
+
+        retriever = object.__new__(OptimizedRetriever)
+        retriever.collection_name = "knowledge_chunks"
+        retriever.default_top_n = 1
+        retriever.model_manager = None
+        retriever.query_engines = engine
+
+        try:
+            result = await retriever.get_response_async("q")
+        finally:
+            await client.aclose()
+    finally:
+        Settings.llm = old_llm
+
+    assert payloads and payloads[0]["documents"] == ["低分", "命中"]
+    # 重排返回 index=1/top_n=1：结果只剩被重排命中的节点
+    assert result["content"] == ["命中"]
+    assert result["source"] == ["Unknown"]
 
 
 # ---------------------------------------------------------------------------
@@ -265,12 +389,13 @@ def _chunk(content, source="doc.pdf", score=0.8):
     }
 
 
-def test_query_db_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_db_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
     fake_rag_retriever.chunks_response = {
         "chunks": [_chunk("命中一", "甲.pdf", 0.9), _chunk("命中二", "乙.pdf", 0.8)]
     }
 
-    result = adapter.query_db(
+    result = await adapter.query_db(
         RetrievalQuery(
             question="去年售后费用？",
             collection_name="knowledge_chunks",
@@ -279,18 +404,19 @@ def test_query_db_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
     )
 
     assert fake_rag_retriever.calls == [
-        ("get_chunks", "去年售后费用？", 3)
+        ("get_chunks_async", "去年售后费用？", 3)
     ]
     assert result.answer == "命中一\n命中二"
     assert result.sources == ["甲.pdf", "乙.pdf"]
     assert result.metadata["chunks"] == fake_rag_retriever.chunks_response["chunks"]
 
 
-def test_query_db_explicit_top_k_equal_default_is_still_chunks(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_db_explicit_top_k_equal_default_is_still_chunks(adapter, fake_rag_retriever):
     """显式 top_k=10 与 dataclass 默认值相同，靠 metadata 标记区分。"""
     fake_rag_retriever.chunks_response = {"chunks": [_chunk("x")]}
 
-    result = adapter.query_db(
+    result = await adapter.query_db(
         RetrievalQuery(
             question="q",
             collection_name="knowledge_chunks",
@@ -299,15 +425,16 @@ def test_query_db_explicit_top_k_equal_default_is_still_chunks(adapter, fake_rag
         )
     )
 
-    assert fake_rag_retriever.calls[0][0] == "get_chunks"
+    assert fake_rag_retriever.calls[0][0] == "get_chunks_async"
     assert result.metadata["chunks"] == [_chunk("x")]
 
 
-def test_query_db_explicit_top_k_rerank_flag_is_noop_for_chunks(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_db_explicit_top_k_rerank_flag_is_noop_for_chunks(adapter, fake_rag_retriever):
     """显式 top_k 时始终走纯向量 chunks，metadata["rerank"]=True 也不触发内部重排。"""
     fake_rag_retriever.chunks_response = {"chunks": [_chunk("x")]}
 
-    result = adapter.query_db(
+    result = await adapter.query_db(
         RetrievalQuery(
             question="q",
             collection_name="knowledge_chunks",
@@ -316,21 +443,22 @@ def test_query_db_explicit_top_k_rerank_flag_is_noop_for_chunks(adapter, fake_ra
         )
     )
 
-    assert fake_rag_retriever.calls == [("get_chunks", "q", 4)]
+    assert fake_rag_retriever.calls == [("get_chunks_async", "q", 4)]
     assert result.metadata["chunks"] == [_chunk("x")]
 
 
-def test_query_db_without_top_k_keeps_legacy_get_response(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_db_without_top_k_keeps_legacy_get_response(adapter, fake_rag_retriever):
     fake_rag_retriever.response = {
         "content": ["旧内容一", "旧内容二"],
         "source": ["old1.pdf", "old2.pdf"],
     }
 
-    result = adapter.query_db(
+    result = await adapter.query_db(
         RetrievalQuery(question="q", collection_name="knowledge_chunks")
     )
 
-    assert fake_rag_retriever.calls == [("get_response", "q")]
+    assert fake_rag_retriever.calls == [("get_response_async", "q")]
     assert result.answer == "旧内容一\n旧内容二"
     assert result.sources == ["old1.pdf", "old2.pdf"]
     assert result.metadata == {}
@@ -341,13 +469,14 @@ def test_query_db_without_top_k_keeps_legacy_get_response(adapter, fake_rag_retr
 # ---------------------------------------------------------------------------
 
 
-def test_query_excel_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_excel_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
     """显式 top_k：/excel 与 /db 一致，返回纯向量结构化 chunks（重排交给调用方）。"""
     fake_rag_retriever.chunks_response = {
         "chunks": [_chunk("杨贵宁", "PM项目分配表_0618.xlsx", 0.91)]
     }
 
-    result = adapter.query_excel(
+    result = await adapter.query_excel(
         RetrievalQuery(
             question="项目 V254 (GLC) 的负责人是谁？",
             collection_name="excel_db_chunks",
@@ -356,33 +485,35 @@ def test_query_excel_explicit_top_k_returns_chunks(adapter, fake_rag_retriever):
         )
     )
 
-    assert fake_rag_retriever.calls == [("get_chunks", "项目 V254 (GLC) 的负责人是谁？", 10)]
+    assert fake_rag_retriever.calls == [("get_chunks_async", "项目 V254 (GLC) 的负责人是谁？", 10)]
     assert result.answer == "杨贵宁"
     assert result.sources == ["PM项目分配表_0618.xlsx"]
     assert result.metadata["chunks"] == fake_rag_retriever.chunks_response["chunks"]
 
 
-def test_query_excel_without_top_k_keeps_legacy_charts_json(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_excel_without_top_k_keeps_legacy_charts_json(adapter, fake_rag_retriever):
     data_json = json.dumps({"sheet_name": "S", "headers": [], "rows": []}, ensure_ascii=False)
     fake_rag_retriever.charts_response = {
         "data": data_json,
         "sources": ["华翔定价表.xlsx"],
     }
 
-    result = adapter.query_excel(
+    result = await adapter.query_excel(
         RetrievalQuery(question="哪个供应商延期最多？", collection_name="excel_db_chunks")
     )
 
-    assert fake_rag_retriever.calls == [("get_charts", "哪个供应商延期最多？")]
+    assert fake_rag_retriever.calls == [("get_charts_async", "哪个供应商延期最多？")]
     assert result.answer == data_json
     assert result.sources == ["华翔定价表.xlsx"]
     assert result.metadata == {}
 
 
-def test_query_excel_error_keeps_old_answer_sources_shape(adapter, fake_rag_retriever):
+@pytest.mark.asyncio
+async def test_query_excel_error_keeps_old_answer_sources_shape(adapter, fake_rag_retriever):
     fake_rag_retriever.charts_response = {"error": "NoSuchKey"}
 
-    result = adapter.query_excel(
+    result = await adapter.query_excel(
         RetrievalQuery(question="q", collection_name="excel_db_chunks")
     )
 
@@ -443,11 +574,11 @@ def _install_fake_api_port(monkeypatch, result):
             captured["rag_instance"] = rag_instance
             captured["collection_name"] = collection_name
 
-        def query_db(self, q):
+        async def query_db(self, q):
             captured["q"] = q
             return result
 
-        def query_excel(self, q):
+        async def query_excel(self, q):
             captured["q"] = q
             return result
 
@@ -455,12 +586,13 @@ def _install_fake_api_port(monkeypatch, result):
     return captured
 
 
-def test_api_db_forwards_top_k_and_rerank_and_returns_chunks(monkeypatch):
+@pytest.mark.asyncio
+async def test_api_db_forwards_top_k_and_rerank_and_returns_chunks(monkeypatch):
     chunks = [_chunk("命中一", "甲.pdf", 0.9)]
     result = RetrievalResult(answer="命中一", sources=["甲.pdf"], metadata={"chunks": chunks})
     captured = _install_fake_api_port(monkeypatch, result)
 
-    response = api_mod.db(
+    response = await api_mod.db(
         ChatRequest(question="去年售后费用？"),
         collection="knowledge_chunks",
         top_k=7,
@@ -475,11 +607,12 @@ def test_api_db_forwards_top_k_and_rerank_and_returns_chunks(monkeypatch):
     assert response == {"answer": "命中一", "sources": ["甲.pdf"], "chunks": chunks}
 
 
-def test_api_db_without_new_params_keeps_legacy_query_defaults(monkeypatch):
+@pytest.mark.asyncio
+async def test_api_db_without_new_params_keeps_legacy_query_defaults(monkeypatch):
     result = RetrievalResult(answer="旧答案", sources=["旧.pdf"])
     captured = _install_fake_api_port(monkeypatch, result)
 
-    response = api_mod.db(
+    response = await api_mod.db(
         ChatRequest(question="q"),
         collection="knowledge_chunks",
         top_k=None,
@@ -495,12 +628,13 @@ def test_api_db_without_new_params_keeps_legacy_query_defaults(monkeypatch):
     assert response == {"answer": "旧答案", "sources": ["旧.pdf"], "chunks": []}
 
 
-def test_api_db_direct_call_omitting_new_params_uses_defaults(monkeypatch):
+@pytest.mark.asyncio
+async def test_api_db_direct_call_omitting_new_params_uses_defaults(monkeypatch):
     """直接调用路由函数（非 HTTP）时，未传参拿到的是 Query 默认对象，也要归一化。"""
     result = RetrievalResult(answer="旧答案", sources=["旧.pdf"])
     captured = _install_fake_api_port(monkeypatch, result)
 
-    response = api_mod.db(
+    response = await api_mod.db(
         ChatRequest(question="q"),
         collection="knowledge_chunks",
         rag_instance=object(),
@@ -512,7 +646,8 @@ def test_api_db_direct_call_omitting_new_params_uses_defaults(monkeypatch):
     assert response["chunks"] == []
 
 
-def test_api_excel_returns_chunks_and_forwards_top_k(monkeypatch):
+@pytest.mark.asyncio
+async def test_api_excel_returns_chunks_and_forwards_top_k(monkeypatch):
     chunks = [_chunk("杨贵宁", "PM项目分配表_0618.xlsx", 0.9)]
     result = RetrievalResult(
         answer="杨贵宁",
@@ -521,7 +656,7 @@ def test_api_excel_returns_chunks_and_forwards_top_k(monkeypatch):
     )
     captured = _install_fake_api_port(monkeypatch, result)
 
-    response = api_mod.excel(
+    response = await api_mod.excel(
         ChatRequest(question="项目 V254 (GLC) 的负责人是谁？"),
         collection="excel_db_chunks",
         top_k=10,
@@ -598,11 +733,12 @@ def test_http_routes_parse_top_k_and_rerank(monkeypatch):
     assert response.status_code == 422
 
 
-def test_api_excel_without_new_params_uses_legacy_default(monkeypatch):
+@pytest.mark.asyncio
+async def test_api_excel_without_new_params_uses_legacy_default(monkeypatch):
     result = RetrievalResult(answer="{}", sources=[])
     captured = _install_fake_api_port(monkeypatch, result)
 
-    response = api_mod.excel(
+    response = await api_mod.excel(
         ChatRequest(question="q"),
         collection="excel_db_chunks",
         top_k=None,

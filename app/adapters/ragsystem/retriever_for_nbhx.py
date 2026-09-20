@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import os
 import threading
@@ -310,17 +311,43 @@ class OptimizedRetriever:
                 "content": [f"检索失败: {str(e)}"],
                 "source": ["error"]
             }
-    
+
+    async def get_response_async(self, question: str, max_collections: int = 3) -> dict:
+        """异步版 get_response：await ``query_engine.aquery``（走异步 reranker 钩子）。
+
+        返回结构与异常兜底与同步版完全一致；差异只在检索调用本身。llama-index
+        的 ``RetrieverQueryEngine.aquery`` → ``aretrieve`` →
+        ``_async_apply_node_postprocessors`` → ``HTTPReranker._apostprocess_nodes``，
+        因此 async 路由下重排不再经过 ``asyncio.to_thread`` 执行同步 HTTP。
+        """
+        try:
+            if self.collection_name is None:
+                return await self._get_multi_collection_response_async(question, max_collections)
+            else:
+                return await self._get_single_collection_response_async(question)
+        except Exception as e:
+            logger.exception("检索响应失败(async): %s", e)
+            return {
+                "content": [f"检索失败: {str(e)}"],
+                "source": ["error"]
+            }
+
     def _get_single_collection_response(self, question: str) -> dict:
         raw_docs = self.query_engines.query(question)
-        source_nodes = raw_docs.source_nodes
-        
+        return self._pack_single_response(raw_docs.source_nodes)
+
+    async def _get_single_collection_response_async(self, question: str) -> dict:
+        raw_docs = await self._aquery_engine(self.query_engines, question)
+        return self._pack_single_response(raw_docs.source_nodes)
+
+    @staticmethod
+    def _pack_single_response(source_nodes) -> dict:
         logger.debug("检索到的文档块数量: %d", len(source_nodes))
-        
+
         sources = []
         contents = []
         metadatas = []
-        
+
         for i, node in enumerate(source_nodes):
             logger.debug(
                 "  节点 %d - Score: %.4f - Source: %s",
@@ -336,52 +363,112 @@ class OptimizedRetriever:
             # 供 get_charts 解析真实 MinIO 对象路径；get_response 的既有
             # 消费方只读 content / source，不受影响。
             metadatas.append(dict(node.metadata or {}))
-        
+
         return {
             "content": contents[:5],
             "source": sources[:5],
             "metadata": metadatas[:5]
         }
-    
+
     def _get_multi_collection_response(self, question: str, max_collections: int) -> dict:
         all_contents = []
         all_sources = []
         all_metadatas = []
-        
+
         collections_to_query = self.available_collections[:max_collections]
-        
+        max_results_per_collection = self.default_top_n if len(collections_to_query) == 1 else 2
+
         for collection_name in collections_to_query:
             try:
-                if collection_name not in self.query_engines:
-                    query_engine = self.model_manager.get_query_engine(collection_name, top_k=3)
-                    if query_engine is not None:
-                        self.query_engines[collection_name] = query_engine
-                    else:
-                        continue
-                
-                query_engine = self.query_engines[collection_name]
+                query_engine = self._get_or_create_query_engine(collection_name)
+                if query_engine is None:
+                    continue
                 raw_docs = query_engine.query(question)
-                source_nodes = raw_docs.source_nodes
-                
-                max_results_per_collection = self.default_top_n if len(collections_to_query) == 1 else 2
-                for node in source_nodes[:max_results_per_collection]:
-                    source = node.metadata.get('source', f'Unknown_{collection_name}')
-                    content = node.text.strip()
-                    all_sources.append(source)
-                    all_contents.append(content)
-                    # issue #14：附带 chunk 原始 metadata（含 minio_object_path）
-                    all_metadatas.append(dict(node.metadata or {}))
-                    
+                self._append_multi_response_nodes(
+                    collection_name,
+                    raw_docs.source_nodes,
+                    max_results_per_collection,
+                    all_sources,
+                    all_contents,
+                    all_metadatas,
+                )
             except Exception as e:
                 logger.error("查询collection %s 失败: %s", collection_name, e)
                 continue
-        
+
         return {
             "content": all_contents[:5],
             "source": all_sources[:5],
             "metadata": all_metadatas[:5]
         }
-    
+
+    async def _get_multi_collection_response_async(
+        self, question: str, max_collections: int
+    ) -> dict:
+        all_contents = []
+        all_sources = []
+        all_metadatas = []
+
+        collections_to_query = self.available_collections[:max_collections]
+        max_results_per_collection = self.default_top_n if len(collections_to_query) == 1 else 2
+
+        for collection_name in collections_to_query:
+            try:
+                query_engine = self._get_or_create_query_engine(collection_name)
+                if query_engine is None:
+                    continue
+                raw_docs = await self._aquery_engine(query_engine, question)
+                self._append_multi_response_nodes(
+                    collection_name,
+                    raw_docs.source_nodes,
+                    max_results_per_collection,
+                    all_sources,
+                    all_contents,
+                    all_metadatas,
+                )
+            except Exception as e:
+                logger.error("查询collection %s 失败(async): %s", collection_name, e)
+                continue
+
+        return {
+            "content": all_contents[:5],
+            "source": all_sources[:5],
+            "metadata": all_metadatas[:5]
+        }
+
+    def _get_or_create_query_engine(self, collection_name: str):
+        """多库模式：缓存命中/懒建 query engine；建不出来返回 None。"""
+        query_engine = self.query_engines.get(collection_name)
+        if query_engine is not None:
+            return query_engine
+        query_engine = self.model_manager.get_query_engine(collection_name, top_k=3)
+        if query_engine is not None:
+            self.query_engines[collection_name] = query_engine
+        return query_engine
+
+    @staticmethod
+    async def _aquery_engine(query_engine, question: str):
+        """优先 engine.aquery；轻量替身没有异步接口时放线程池，避免阻塞事件循环。"""
+        aquery = getattr(query_engine, "aquery", None)
+        if callable(aquery):
+            return await aquery(question)
+        return await asyncio.to_thread(query_engine.query, question)
+
+    @staticmethod
+    def _append_multi_response_nodes(
+        collection_name,
+        source_nodes,
+        max_results_per_collection,
+        all_sources,
+        all_contents,
+        all_metadatas,
+    ) -> None:
+        for node in source_nodes[:max_results_per_collection]:
+            # issue #14：附带 chunk 原始 metadata（含 minio_object_path）
+            all_sources.append(node.metadata.get('source', f'Unknown_{collection_name}'))
+            all_contents.append(node.text.strip())
+            all_metadatas.append(dict(node.metadata or {}))
+
     def get_chunks(self, question: str, top_k: int = 5) -> dict:
         """纯向量检索（不经过 query engine / 重排），返回结构化 chunks。
 
@@ -389,13 +476,8 @@ class OptimizedRetriever:
         日志并返回空 chunks，调用方无需再兜底。
         """
         try:
-            if not self.collection_name:
-                logger.error("get_chunks 需要明确的 collection_name")
-                return {"chunks": []}
-
-            retriever = self.model_manager.get_retriever(self.collection_name, top_k)
+            retriever = self._get_chunks_retriever(top_k)
             if retriever is None:
-                logger.error("get_chunks 无法创建检索器: %s", self.collection_name)
                 return {"chunks": []}
 
             if callable(getattr(retriever, "retrieve", None)):
@@ -404,27 +486,65 @@ class OptimizedRetriever:
                 # 兼容只提供 query() 的轻量替身；真实 llama_index retriever 走 retrieve()
                 raw = retriever.query(question)
                 nodes = getattr(raw, "source_nodes", raw) or []
-            chunks = []
-            for node in list(nodes):
-                content = (node.text or "").strip()
-                if not content:
-                    # 历史脏数据里的空 chunk 直接丢弃：命中后无内容可用，且会让
-                    # 下游重排网关对空文档返回 400（2026-09-18 实测）。
-                    # 必须在 top_k 截断**之前**过滤，否则空 chunk 会白占召回名额。
-                    continue
-                if len(chunks) >= top_k:
-                    break
-                metadata = dict(node.metadata or {})
-                chunks.append({
-                    "content": content,
-                    "source": metadata.get("source", "Unknown"),
-                    "score": node.score,
-                    "metadata": metadata,
-                })
-            return {"chunks": chunks}
+            return self._nodes_to_chunks(nodes, top_k)
         except Exception as e:
             logger.exception("纯向量检索失败: %s", e)
             return {"chunks": []}
+
+    async def get_chunks_async(self, question: str, top_k: int = 5) -> dict:
+        """异步版纯向量检索：优先 ``retriever.aretrieve``（不经过重排引擎）。
+
+        轻量替身/旧实现没有 aretrieve 时退回线程池里的同步 ``retrieve/query``，
+        契约不变且不阻塞事件循环。
+        """
+        try:
+            retriever = self._get_chunks_retriever(top_k)
+            if retriever is None:
+                return {"chunks": []}
+
+            aretrieve = getattr(retriever, "aretrieve", None)
+            if callable(aretrieve):
+                nodes = await aretrieve(question) or []
+            elif callable(getattr(retriever, "retrieve", None)):
+                nodes = await asyncio.to_thread(retriever.retrieve, question) or []
+            else:
+                raw = await asyncio.to_thread(retriever.query, question)
+                nodes = getattr(raw, "source_nodes", raw) or []
+            return self._nodes_to_chunks(nodes, top_k)
+        except Exception as e:
+            logger.exception("纯向量检索失败(async): %s", e)
+            return {"chunks": []}
+
+    def _get_chunks_retriever(self, top_k: int):
+        """get_chunks / get_chunks_async 共用的前置校验与 retriever 获取。"""
+        if not self.collection_name:
+            logger.error("get_chunks 需要明确的 collection_name")
+            return None
+        retriever = self.model_manager.get_retriever(self.collection_name, top_k)
+        if retriever is None:
+            logger.error("get_chunks 无法创建检索器: %s", self.collection_name)
+        return retriever
+
+    @staticmethod
+    def _nodes_to_chunks(nodes, top_k: int) -> dict:
+        chunks = []
+        for node in list(nodes):
+            content = (node.text or "").strip()
+            if not content:
+                # 历史脏数据里的空 chunk 直接丢弃：命中后无内容可用，且会让
+                # 下游重排网关对空文档返回 400（2026-09-18 实测）。
+                # 必须在 top_k 截断**之前**过滤，否则空 chunk 会白占召回名额。
+                continue
+            if len(chunks) >= top_k:
+                break
+            metadata = dict(node.metadata or {})
+            chunks.append({
+                "content": content,
+                "source": metadata.get("source", "Unknown"),
+                "score": node.score,
+                "metadata": metadata,
+            })
+        return {"chunks": chunks}
 
     def get_charts(self, question: str):
         """检索定位源文件 → MinIO 下载 → excel_to_json（issue #14 修复）。
@@ -438,54 +558,71 @@ class OptimizedRetriever:
         """
         try:
             response = self.get_response(question)
-            sources = response.get("source", [])
-            metadatas = response.get("metadata", [])
-            
-            if not sources or sources == ["error"]:
-                return {"error": "未找到相关文件"}
-            
-            if not isinstance(sources, list):
-                sources = [sources]
-            
-            tried_sources = set()
-            last_error = None
-            for idx, source in enumerate(sources):
-                if not source or source in ("error", "Unknown") or source in tried_sources:
-                    continue
-                tried_sources.add(source)
-                
-                metadata = (
-                    metadatas[idx]
-                    if isinstance(metadatas, list) and idx < len(metadatas)
-                    else None
-                )
-                object_name = _resolve_minio_object_name(source, metadata)
-                if not object_name:
-                    logger.warning("无法定位源文件的 MinIO 对象: source=%s", source)
-                    last_error = f"未找到源文件 {source} 的存储路径"
-                    continue
-                
-                file_path = None
-                try:
-                    file_path = save_file_from_minio(object_name)
-                    data = excel_to_json(file_path)
-                    return _ChartsResult({"data": data, "sources": [source]})
-                except Exception as exc:
-                    logger.warning(
-                        "下载/解析源文件失败 source=%s object=%s: %s",
-                        source, object_name, exc,
-                    )
-                    last_error = str(exc)
-                finally:
-                    # save_file_from_minio 的契约：路径由调用方清理
-                    if file_path is not None:
-                        file_path.unlink(missing_ok=True)
-            
-            return {"error": last_error or "未找到相关文件"}
+            return self._charts_from_response(response)
         except Exception as e:
             logger.exception("获取图表数据失败: %s", e)
             return {"error": str(e)}
-    
+
+    async def get_charts_async(self, question: str):
+        """异步版 get_charts：await 异步检索，再在线程里做 MinIO/Excel 同步 IO。
+
+        文件定位含同步 SessionLocal、MinIO SDK 与 xlsx 解析，全部放进
+        ``asyncio.to_thread``，避免在 async 路由上阻塞事件循环。
+        """
+        try:
+            response = await self.get_response_async(question)
+            return await asyncio.to_thread(self._charts_from_response, response)
+        except Exception as e:
+            logger.exception("获取图表数据失败(async): %s", e)
+            return {"error": str(e)}
+
+    @staticmethod
+    def _charts_from_response(response) -> dict:
+        sources = response.get("source", [])
+        metadatas = response.get("metadata", [])
+
+        if not sources or sources == ["error"]:
+            return {"error": "未找到相关文件"}
+
+        if not isinstance(sources, list):
+            sources = [sources]
+
+        tried_sources = set()
+        last_error = None
+        for idx, source in enumerate(sources):
+            if not source or source in ("error", "Unknown") or source in tried_sources:
+                continue
+            tried_sources.add(source)
+
+            metadata = (
+                metadatas[idx]
+                if isinstance(metadatas, list) and idx < len(metadatas)
+                else None
+            )
+            object_name = _resolve_minio_object_name(source, metadata)
+            if not object_name:
+                logger.warning("无法定位源文件的 MinIO 对象: source=%s", source)
+                last_error = f"未找到源文件 {source} 的存储路径"
+                continue
+
+            file_path = None
+            try:
+                file_path = save_file_from_minio(object_name)
+                data = excel_to_json(file_path)
+                return _ChartsResult({"data": data, "sources": [source]})
+            except Exception as exc:
+                logger.warning(
+                    "下载/解析源文件失败 source=%s object=%s: %s",
+                    source, object_name, exc,
+                )
+                last_error = str(exc)
+            finally:
+                # save_file_from_minio 的契约：路径由调用方清理
+                if file_path is not None:
+                    file_path.unlink(missing_ok=True)
+
+        return {"error": last_error or "未找到相关文件"}
+
     def cleanup(self):
         logger.info("开始清理retriever资源...")
         if hasattr(self, 'query_engines'):

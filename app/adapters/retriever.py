@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -44,18 +45,21 @@ class RAGRetrieverAdapter(RetrieverPort):
             collection_name=collection,
         )
 
-    def query_db(self, q: RetrievalQuery) -> RetrievalResult:
-        """DB 检索。
+    async def query_db(self, q: RetrievalQuery) -> RetrievalResult:
+        """DB 检索（issue #37 后续：整链异步）。
 
-        显式传 top_k(>0)：走 get_chunks 纯向量路径并返回结构化 chunks，
-        ``q.metadata["rerank"]`` 在该路径不生效，重排由调用方负责。
-        未显式传 top_k：走 get_response 旧路径（内部重排行为不变）。
+        显式传 top_k(>0)：走 ``get_chunks_async`` 纯向量路径（``aretrieve``，
+        不经过 query engine / 重排），``q.metadata["rerank"]`` 在该路径不生效，
+        重排由调用方负责。
+        未显式传 top_k：走 ``get_response_async``（``query_engine.aquery``），
+        内部重排在 async 链上走 ``HTTPReranker._apostprocess_nodes``。
         """
-        retriever = self._build_retriever(q)
+        # OptimizedRetriever 构造/首次建索引含同步动作；放线程池，避免占事件循环
+        retriever = await asyncio.to_thread(self._build_retriever, q)
         if _should_return_chunks(q):
             # 显式要 top_k 时返回纯向量 chunks（不经过内部 query engine / 重排）；
             # answer/sources 也从 chunks 派生，保证 HTTP 旧字段仍可用。
-            result = retriever.get_chunks(q.question, q.top_k) or {}
+            result = await retriever.get_chunks_async(q.question, q.top_k) or {}
             chunks = result.get("chunks") or []
             return RetrievalResult(
                 answer="\n".join(str(c.get("content", "")) for c in chunks),
@@ -63,23 +67,23 @@ class RAGRetrieverAdapter(RetrieverPort):
                 metadata={"chunks": chunks},
             )
 
-        result = retriever.get_response(q.question)
+        result = await retriever.get_response_async(q.question)
         return RetrievalResult(
             answer="\n".join(result.get("content", [])),
             sources=result.get("source", []),
         )
 
-    def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
-        """Excel 表检索。
+    async def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+        """Excel 表检索（issue #37 后续：整链异步）。
 
-        显式传 top_k(>0)：与 :meth:`query_db` 一致，走 ``get_chunks`` 纯向量
-        结构化 chunks（不经过内部 query engine / 重排，重排由调用方负责）——
-        2026-09-18 起 /excel 默认返回 chunks；调用方（ragchain）据此自行重排。
-        未显式传 top_k：保留旧行为，走 ``get_charts`` 整表 JSON。
+        显式传 top_k(>0)：与 :meth:`query_db` 一致，走 ``get_chunks_async``
+        纯向量结构化 chunks（不经过内部 query engine / 重排，重排由调用方负责）。
+        未显式传 top_k：保留旧行为，走 ``get_charts_async`` 整表 JSON——其中
+        MinIO/Excel 同步 IO 已由 ``asyncio.to_thread`` 隔离。
         """
-        retriever = self._build_retriever(q)
+        retriever = await asyncio.to_thread(self._build_retriever, q)
         if _should_return_chunks(q):
-            result = retriever.get_chunks(q.question, q.top_k) or {}
+            result = await retriever.get_chunks_async(q.question, q.top_k) or {}
             chunks = result.get("chunks") or []
             return RetrievalResult(
                 answer="\n".join(str(c.get("content", "")) for c in chunks),
@@ -87,7 +91,7 @@ class RAGRetrieverAdapter(RetrieverPort):
                 metadata={"chunks": chunks},
             )
 
-        result = retriever.get_charts(q.question)
+        result = await retriever.get_charts_async(q.question)
         # 新内部契约：{"data": excel_to_json 结果, "sources": [源文件名]}；
         # 失败仍是 {"error": "..."}；字符串/旧 dict 形状也保留兼容分支。
         if isinstance(result, str):

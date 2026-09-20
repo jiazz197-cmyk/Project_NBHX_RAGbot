@@ -62,7 +62,7 @@ def _ensure_collection_access(
 
 
 @router.post("/db")
-def db(
+async def db(
     request: ChatRequest,
     collection: str = Query(
         ...,
@@ -104,7 +104,7 @@ def db(
             top_k=top_k,
             metadata={TOP_K_EXPLICIT_META_KEY: True, "rerank": rerank},
         )
-    result = RetrieverUseCase(port).query_db(q)
+    result = await RetrieverUseCase(port).query_db(q)
     return {
         "answer": result.answer,
         "sources": result.sources,
@@ -113,7 +113,7 @@ def db(
 
 
 @router.post("/excel")
-def excel(
+async def excel(
     request: ChatRequest,
     collection: str = Query(
         ...,
@@ -155,7 +155,7 @@ def excel(
             top_k=top_k,
             metadata={TOP_K_EXPLICIT_META_KEY: True, "rerank": rerank},
         )
-    result = RetrieverUseCase(port).query_excel(q)
+    result = await RetrieverUseCase(port).query_excel(q)
     return {
         "answer": result.answer,
         "sources": result.sources,

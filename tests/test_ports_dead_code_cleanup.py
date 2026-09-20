@@ -10,15 +10,24 @@ import importlib
 
 class TestRetrieverPortNarrowed:
     def test_retriever_port_has_db_excel_no_query(self):
+        import inspect
+
         from app.ports.outbound.retriever import RetrieverPort
         assert hasattr(RetrieverPort, "query_db")
         assert hasattr(RetrieverPort, "query_excel")
+        # issue #37 后续：整链异步，异步 query engine 才会触发异步 reranker 钩子
+        assert inspect.iscoroutinefunction(RetrieverPort.query_db)
+        assert inspect.iscoroutinefunction(RetrieverPort.query_excel)
         assert not hasattr(RetrieverPort, "query"), "RetrieverPort.query must be removed"
 
     def test_rag_adapter_has_db_excel_no_query(self):
+        import inspect
+
         from app.adapters.retriever import RAGRetrieverAdapter
         assert hasattr(RAGRetrieverAdapter, "query_db")
         assert hasattr(RAGRetrieverAdapter, "query_excel")
+        assert inspect.iscoroutinefunction(RAGRetrieverAdapter.query_db)
+        assert inspect.iscoroutinefunction(RAGRetrieverAdapter.query_excel)
         assert not hasattr(RAGRetrieverAdapter, "query"), "RAGRetrieverAdapter.query must be removed"
 
     def test_chart_analysis_port_kept(self):
