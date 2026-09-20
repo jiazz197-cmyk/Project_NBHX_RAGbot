@@ -50,15 +50,18 @@ class FakeGateway:
         nan_texts: Optional[set] = None,
         empty_data: bool = False,
         reverse: bool = False,
+        vector_key: bool = False,
         status: int = 200,
     ) -> None:
         self.calls: List[List[str]] = []
         self.urls: List[str] = []
+        self.bodies: List[dict] = []
         self.reject_batch = reject_batch
         self.drop_last = drop_last
         self.nan_texts = nan_texts or set()
         self.empty_data = empty_data
         self.reverse = reverse
+        self.vector_key = vector_key
         self.status = status
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -66,6 +69,7 @@ class FakeGateway:
         inputs: List[str] = body["input"]
         self.calls.append(inputs)
         self.urls.append(str(request.url))
+        self.bodies.append(body)
         if self.status != 200:
             return httpx.Response(self.status, json={"error": {"message": "boom"}})
         if self.reject_batch and len(inputs) > 1:
@@ -73,11 +77,12 @@ class FakeGateway:
         if self.empty_data:
             data: List[dict] = []
         else:
+            key = "vector" if self.vector_key else "embedding"
             data = [
                 {
                     "object": "embedding",
                     "index": i,
-                    "embedding": [float("nan")] * _DIM if text in self.nan_texts else [float(i + 1)] * _DIM,
+                    key: [float("nan")] * _DIM if text in self.nan_texts else [float(i + 1)] * _DIM,
                 }
                 for i, text in enumerate(inputs)
             ]
@@ -275,10 +280,27 @@ async def test_probe_is_single_attempt_no_retry():
 async def test_probe_rejects_200_without_embedding_data():
     gw = FakeGateway(empty_data=True)
     async with _AsyncHarness(gw) as wrapper:
-        with pytest.raises(ValueError):
+        with pytest.raises(EmbeddingError):
             await wrapper.probe(timeout_sec=1.0)
 
     assert len(gw.calls) == 1
+
+
+def test_request_body_asks_for_float_encoding():
+    """线上请求形状：显式 encoding_format=float（SDK 默认会发 base64）。"""
+    gw = FakeGateway()
+    _wrapper(gw).embed_text("x")
+
+    assert gw.bodies == [{"input": ["x"], "model": "bge-m3", "encoding_format": "float"}]
+
+
+def test_non_openai_response_shape_raises_clear_error():
+    """旧实现嗅探 `data[].vector`；改造后只认 OpenAI 标准的 `data[].embedding`，但要报清楚。"""
+    gw = FakeGateway(vector_key=True)
+    wrapper = _wrapper(gw)
+
+    with pytest.raises(EmbeddingError, match="embedding"):
+        wrapper.embed_text("x")
 
 
 def test_public_methods_are_kept():

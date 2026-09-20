@@ -13,8 +13,9 @@ HTTP 404（端口有东西但路径错）/ 探活必须单次不重试。
 ``HttpClientManager.get_instance()``——``BGEM3EmbeddingWrapper`` 构造时从这里取
 共享 async client 交给 SDK。reranker 仍走模块级 ``get_http_client``。
 异常类型也随之换了一套：嵌入侧是 openai SDK 的 ``APIConnectionError`` /
-``NotFoundError`` / ``ValueError``（响应里没有 data），reranker 侧仍是 httpx 的
-``ConnectError`` / ``HTTPStatusError`` / ``ValueError``。
+``NotFoundError``，响应形状不符则是本项目的 ``EmbeddingError``（旧实现走
+httpx + 手写嗅探，抛的是 ``ConnectError`` / ``HTTPStatusError`` / ``ValueError``）；
+reranker 侧仍是 httpx 的 ``ConnectError`` / ``HTTPStatusError`` / ``ValueError``。
 """
 
 from __future__ import annotations
@@ -123,8 +124,8 @@ async def test_probe_services_rejects_wrong_payload_shape(fake_http):
 
     by_name = {r["name"]: r for r in results}
     assert all(r["ok"] is False for r in results)
-    # 嵌入侧：openai SDK 的响应校验（data 为空 → ValueError）；reranker：手写解析
-    assert "ValueError" in by_name["BGE-M3 嵌入服务"]["error"]
+    # 嵌入侧：EmbeddingError（响应缺 data[].embedding）；reranker：手写解析的 ValueError
+    assert "EmbeddingError" in by_name["BGE-M3 嵌入服务"]["error"]
     assert "ValueError" in by_name["Reranker 重排服务"]["error"]
 
 

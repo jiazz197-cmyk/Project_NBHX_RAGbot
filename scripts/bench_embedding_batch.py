@@ -96,20 +96,49 @@ def _start_gateway(latency_ms: int) -> tuple[ThreadingHTTPServer, str]:
     return server, f"http://127.0.0.1:{server.server_address[1]}/v1/embeddings"
 
 
+_LEGACY_FILE = "app/adapters/doc_processing/embedding_store.py"
+# 改造前手写传输路径之一的定义；只有旧实现里才有这个字符串
+_LEGACY_MARKER = "def _fetch_embeddings_batch_sync("
+
+
+def _git_show(rev: str, path: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{rev}:{path}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def _default_legacy_rev() -> str:
+    """最近一次**仍含手写传输**的提交 = 改造前的实现。
+
+    不能用「与工作区不同」判断：改造提交之后还有未提交的小修时，那样会挑到新代码。
+    """
+    revs = subprocess.run(
+        ["git", "-C", str(ROOT), "log", "--format=%H", "--", _LEGACY_FILE],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    for rev in revs:
+        if _LEGACY_MARKER in _git_show(rev, _LEGACY_FILE):
+            return rev
+    raise SystemExit(f"[bench] 找不到改造前的实现（历史里已无 `{_LEGACY_MARKER}`）")
+
+
 def _load_legacy(rev: str):
     """把 ``git rev`` 里的旧模块装进临时包 import（相对 import 需要同包 exceptions）。"""
-    def _show(path: str) -> str:
-        return subprocess.run(
-            ["git", "-C", str(ROOT), "show", f"{rev}:{path}"],
-            capture_output=True, text=True, check=True,
-        ).stdout
+    src = _git_show(rev, _LEGACY_FILE)
+    if _LEGACY_MARKER not in src:
+        print(
+            f"[bench] ⚠️ {rev} 里的 embedding_store.py 已经是收敛后的实现（无手写传输）：\n"
+            f"        legacy 会变成 new 自比。不传 --rev 时脚本会自动找改造前的那次提交",
+            file=sys.stderr,
+        )
 
     tmp = Path(tempfile.mkdtemp(prefix="legacy-embedding-"))
     pkg = tmp / "legacy_embedding_pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
-    (pkg / "exceptions.py").write_text(_show("app/adapters/doc_processing/exceptions.py"))
-    (pkg / "embedding_store.py").write_text(_show("app/adapters/doc_processing/embedding_store.py"))
+    (pkg / "exceptions.py").write_text(_git_show(rev, "app/adapters/doc_processing/exceptions.py"))
+    (pkg / "embedding_store.py").write_text(src)
     sys.path.insert(0, str(tmp))
     return importlib.import_module("legacy_embedding_pkg.embedding_store"), tmp
 
@@ -189,7 +218,9 @@ def main() -> int:
     parser.add_argument("--mode", choices=["embed", "ingest", "both"], default="both")
     parser.add_argument("--chunks", type=int, default=300)
     parser.add_argument("--latency-ms", type=int, default=50, help="假网关每请求固定延迟（模拟真实网关）")
-    parser.add_argument("--rev", default="HEAD", help="legacy 实现所在的 git revision")
+    parser.add_argument("--rev", default=None,
+                        help="legacy 实现所在的 git revision；默认自动取最近一次与工作区不同的提交"
+                             "（= 改造前）。指向已包含改造的提交时脚本会告警")
     parser.add_argument("--api-url", default=None, help="外部网关完整端点；给了就不启动假网关")
     parser.add_argument("--collection", default="issue35_bench")
     args = parser.parse_args()
@@ -209,7 +240,13 @@ def main() -> int:
     if args.impl in ("new", "both"):
         impls.append(("new", new_impl))
     if args.impl in ("legacy", "both"):
-        legacy_impl, legacy_tmp = _load_legacy(args.rev)
+        if args.rev:
+            rev = args.rev
+            print(f"[bench] legacy 实现来自 {rev}（--rev 指定）")
+        else:
+            rev = _default_legacy_rev()
+            print(f"[bench] legacy 实现来自 {rev}（自动：历史里最近一次仍含手写传输的提交）")
+        legacy_impl, legacy_tmp = _load_legacy(rev)
         impls.append(("legacy", legacy_impl))
 
     texts = _chunk_texts(args.chunks)

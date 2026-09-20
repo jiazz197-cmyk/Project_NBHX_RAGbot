@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # BGE-M3 输出维度：空文本零向量占位用，与 PGVectorStore 的 embed_dim 一致
 _EMBED_DIM = 1024
 
+# 显式要 float 编码：openai SDK 不传 encoding_format 时会发 ``"base64"``（响应侧再做
+# base64 解码）；改造前旧实现解析的是 JSON float 数组，这里保持同一种请求/响应形状。
+_ENCODING_FORMAT = "float"
+
 _EMBEDDING_INSTANCES: Dict[str, "BGEM3EmbeddingWrapper"] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
@@ -164,11 +168,19 @@ class BGEM3EmbeddingWrapper(OpenAIEmbedding):
 
     def _vectors(self, response) -> List[List[float]]:
         """按 index 归位（网关并发返回时顺序不保证），并逐条做 NaN/Inf → 零向量。"""
-        return [_zero_nan(list(item.embedding)) for item in sorted(response.data, key=lambda d: d.index)]
+        items = sorted(response.data, key=lambda d: d.index)
+        if any(not isinstance(item.embedding, list) for item in items):
+            # issue #35 删掉的就是 `data[0].embedding` 或 `.vector` 那种形状嗅探；
+            # 非 OpenAI 标准形状在这里显式报错，而不是抛出 `'NoneType' object is not iterable`
+            raise EmbeddingError("嵌入响应缺少 embedding 字段（只接受 OpenAI 标准的 data[].embedding）")
+        return [_zero_nan(list(item.embedding)) for item in items]
 
     def _post_sync(self, texts: List[str]) -> List[List[float]]:
         response = self._get_client().embeddings.create(
-            model=self.model_name, input=texts, timeout=self.timeout
+            model=self.model_name,
+            input=texts,
+            timeout=self.timeout,
+            encoding_format=_ENCODING_FORMAT,
         )
         if len(response.data) != len(texts):
             raise EmbeddingError(f"嵌入接口返回条数不符: 期望 {len(texts)}，实际 {len(response.data)}")
@@ -176,7 +188,10 @@ class BGEM3EmbeddingWrapper(OpenAIEmbedding):
 
     async def _post_async(self, texts: List[str]) -> List[List[float]]:
         response = await self._get_aclient().embeddings.create(
-            model=self.model_name, input=texts, timeout=self.timeout
+            model=self.model_name,
+            input=texts,
+            timeout=self.timeout,
+            encoding_format=_ENCODING_FORMAT,
         )
         if len(response.data) != len(texts):
             raise EmbeddingError(f"嵌入接口返回条数不符: 期望 {len(texts)}，实际 {len(response.data)}")
@@ -276,8 +291,10 @@ class BGEM3EmbeddingWrapper(OpenAIEmbedding):
         会在这里暴露，而不是推迟到首次 RAG 调用。
         """
         response = await self._get_aclient().embeddings.create(
-            model=self.model_name, input=["ping"], timeout=timeout_sec
+            model=self.model_name, input=["ping"], timeout=timeout_sec, encoding_format=_ENCODING_FORMAT
         )
+        if not response.data or not isinstance(response.data[0].embedding, list):
+            raise EmbeddingError("嵌入接口探活响应不符合 OpenAI 兼容格式（缺 data[].embedding）")
         return _zero_nan(list(response.data[0].embedding))
 
     @classmethod
