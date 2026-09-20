@@ -152,8 +152,10 @@ class LLMClient:
           与各 step 的异常降级语义一致。
         - 不用 ``json_schema``：网关只收下参数、不按 schema 强制（探针 R2：
           强 schema 时问 1+1 仍回 ``{"answer": 2}``），等于没有保障还误导。
-          （issue #31 里「默认是 json_schema」是旧版行为——本项目锁定的
-          langchain-openai 1.6.2 默认 method 已是 ``function_calling``，见下条。）
+          （注意默认值：``ChatOpenAI.with_structured_output`` 自 0.3.x 起默认
+          ``json_schema``——issue #31 的提醒是对的，所以 method 必须显式传；
+          基类 ``BaseChatOpenAI`` 的默认 ``function_calling`` 只对直接继承它的
+          子类生效，平时用不到。）
         - 不用 ``function_calling``（langchain-openai 1.x 默认值）：其
           ``PydanticToolsParser(first_tool_only=True)`` 在网关忽略
           ``tool_choice`` 时**静默返回 None**（探针确认本网关遵守

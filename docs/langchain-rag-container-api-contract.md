@@ -834,9 +834,18 @@ sub 模型 `Qwen3.6-27B`，容器内用生产同款 langchain-openai 1.6.2 / ope
    与本仓库既有「异常降级」语义一致，且额外拿到 `response_format=json_object`
    的网关硬保障。
 
-**版本备注**：issue #31 写的「`with_structured_output` 默认 `json_schema`」是旧
-版行为；ragchain 锁定的 langchain-openai **1.6.2 默认是 `function_calling`**
-（`chat_models/base.py` 签名），无论哪种都必须显式指定 method。
+**版本备注（2026-09-20 二次核对，更正本节首版说法）**：issue #31 的提醒是
+对的——``ChatOpenAI.with_structured_output`` **默认 `method="json_schema"`**。
+langchain-openai 里有两层实现：`BaseChatOpenAI`（默认 `function_calling`）与
+`ChatOpenAI` override（默认 `json_schema`，自 0.3.x 引入 override 起；0.2.0 尚无
+override）。实际实例化的 `ChatOpenAI` 用的是后者，所以**依赖默认值会发
+`response_format={"type":"json_schema"}`**——而 Sophnet 只收下参数不强制
+（见上表），必须显式传 `method`。逐版本实测（下载 wheel 验证签名）：
+
+| langchain-openai | `BaseChatOpenAI` 默认 | `ChatOpenAI` override 默认 |
+|---|---|---|
+| 0.2.0（json_schema method 引入） | `function_calling` | （无 override，继承 Base） |
+| 0.3.34 / 1.0.0 / **1.6.2（本项目锁定，镜像最新）** | `function_calling` | **`json_schema`** |
 
 **None 防御**：三个 step 调用点都显式判 `result is None` → 走原降级路径
 （防注入降正则、改写降原 query、意图降 both）——即使未来换
