@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..clients.llm_client import LLMError
 from ..prompts import INTENT_SYSTEM_PROMPT, build_intent_user_prompt
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,10 @@ async def route_intent(
             user=build_intent_user_prompt(query, raw_query=raw_query, keywords=keywords),
             schema_cls=IntentResult,
         )
+        if result is None:
+            # 结构化调用静默返回 None（如 method=function_calling 且网关忽略
+            # tool_choice）时显式转降级路径，不走 model_validate(None)。
+            raise LLMError("结构化意图识别返回 None")
         if not isinstance(result, IntentResult):
             result = IntentResult.model_validate(result)
     except Exception as exc:  # noqa: BLE001 - 单点失败降级，不阻断

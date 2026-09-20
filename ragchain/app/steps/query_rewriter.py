@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..clients.llm_client import LLMError
 from ..prompts import build_rewriter_system_prompt, build_rewriter_user_prompt
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,10 @@ async def rewrite_query(
             user=build_rewriter_user_prompt(query, history),
             schema_cls=RewriteResult,
         )
+        if result is None:
+            # 结构化调用静默返回 None（如 method=function_calling 且网关忽略
+            # tool_choice）时显式转降级路径，不走 model_validate(None)。
+            raise LLMError("结构化改写返回 None")
         if not isinstance(result, RewriteResult):
             result = RewriteResult.model_validate(result)
         if not result.rewritten_query.strip():

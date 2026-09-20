@@ -342,6 +342,7 @@ class FakeLLM:
             "IntentResult": IntentResult(intent="both", reason="混合问题"),
         }
         self.structured_error: BaseException | None = None
+        self.structured_returns_none: bool = False
         self.structured_calls: list[dict] = []
         self.main_scripts: list[Any] = []
         self.on_before_script: Callable[[int], None] | None = None
@@ -352,6 +353,10 @@ class FakeLLM:
         self.structured_calls.append({"system": system, "user": user, "schema": schema_cls.__name__})
         if self.structured_error is not None:
             raise self.structured_error
+        if self.structured_returns_none:
+            # 模拟 with_structured_output 静默返回 None（function_calling + 网关
+            # 忽略 tool_choice 的场景，issue #31 坑 #2）。
+            return None
         response = self.responses.get(schema_cls.__name__, self.defaults.get(schema_cls.__name__))
         if response is None:
             raise RuntimeError(f"FakeLLM 未提供 {schema_cls.__name__} 响应")

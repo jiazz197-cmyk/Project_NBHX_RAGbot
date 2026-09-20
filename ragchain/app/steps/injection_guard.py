@@ -6,6 +6,7 @@ import re
 
 from pydantic import BaseModel, Field
 
+from ..clients.llm_client import LLMError
 from ..prompts import GUARD_SYSTEM_PROMPT, build_guard_user_prompt
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,8 @@ async def check_injection(query: str, deps) -> GuardResult:
     """审查用户输入。
 
     - sub_llm 判定成功：直接返回其结论；
-    - sub_llm 不可达：正则兜底；非严格模式放行，RAGCHAIN_GUARD_STRICT=True 且命中则拒绝。
+    - sub_llm 不可达 / 结构化返回 None：正则兜底；非严格模式放行，
+      RAGCHAIN_GUARD_STRICT=True 且命中则拒绝。
     """
     try:
         result = await deps.llm.structured(
@@ -44,6 +46,10 @@ async def check_injection(query: str, deps) -> GuardResult:
             user=build_guard_user_prompt(query),
             schema_cls=GuardResult,
         )
+        if result is None:
+            # 结构化调用静默返回 None（如 method=function_calling 且网关忽略
+            # tool_choice）时绝不能当「审查通过」——显式转降级路径。
+            raise LLMError("结构化审查返回 None")
         if isinstance(result, GuardResult):
             return result
         return GuardResult(

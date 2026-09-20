@@ -802,6 +802,53 @@ RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 - 请求按 OpenAI 兼容协议：`POST {base_url}/chat/completions`，支持 `stream: true`。
 - LLM 失败建议映射为 SSE `error` 事件或 503，不要把模型错误当 500。
 
+### 10.1 结构化输出（sub-LLM）：method 选型与网关探针结论（issue #31，2026-09-20 回填）
+
+防注入 / query 改写 / 意图识别三个 sub-LLM 步骤统一走
+`LLMClient.structured()` → `ChatOpenAI.with_structured_output(schema, method="json_mode")`
+（`ragchain/app/clients/llm_client.py`），不再手写「剥 markdown 围栏 + 逐位置
+raw_decode」容错解析。
+
+**网关能力探针结论**（Sophnet `https://www.sophnet.com/api/open-apis/v1`，
+sub 模型 `Qwen3.6-27B`，容器内用生产同款 langchain-openai 1.6.2 / openai
+3.14.1 实测）：
+
+| 能力 | 结论 | 证据 |
+|---|---|---|
+| `response_format={"type":"json_object"}` | **支持且强制**：无关问题也返回合法 JSON | `1+1` 问题 → `{"answer": 2}`；散文问题 → 合法 JSON |
+| `response_format={"type":"json_schema"}` | **收下参数但不按 schema 强制**（等同 json_object，schema 被忽略） | 强 GuardResult schema 时问 `1+1` 仍回 `{"answer": 2}`；错误文案也把它归为 `json_object` |
+| messages 必须含 "json" 字样 | **强制校验**（DashScope 风格 400）：缺失即 400 `InvalidParameter` | 「用两三句话介绍一下宁波」+ json_object → 400；三个 step 的 prompt 都含 "JSON"，天然满足 |
+| `tool_choice` 强制指定工具 | **真实遵守**（决定 issue #31 坑 #2 当前不会发生，但这是网关行为不是契约） | 问 `1+1` + 强制 `get_weather` → `finish_reason=tool_calls`，返回工具调用 |
+| `parallel_tool_calls=False` | 接受 | wire 级 200 |
+| 三种 method 端到端 | `json_schema` / `function_calling` / `json_mode` 都能拿到解析后的 Pydantic 实例 | 探针 P5 |
+| json_mode 解析失败语义 | **响亮抛 `OutputParserException`**（非静默 None） | 诱导非 JSON 输出 → `Failed to parse GuardResult ... Input should be a valid dictionary` |
+
+**method 为什么选 `json_mode`**：
+
+1. `json_schema` 被网关降级为 json_object（不强制 schema），等于没有保障还误导；
+2. `function_calling` 的 `PydanticToolsParser(first_tool_only=True)` 在网关忽略
+   `tool_choice` 时**静默返回 `None`**（不抛异常）——本网关当前遵守，但换网关
+   /升级即踩坑，且 langchain-openai 1.x 默认 method 就是它，显式传 `json_mode`
+   才能避开默认行为；
+3. `json_mode` 失败全部走异常（`OutputParserException` → `LLMError` → step 降级），
+   与本仓库既有「异常降级」语义一致，且额外拿到 `response_format=json_object`
+   的网关硬保障。
+
+**版本备注**：issue #31 写的「`with_structured_output` 默认 `json_schema`」是旧
+版行为；ragchain 锁定的 langchain-openai **1.6.2 默认是 `function_calling`**
+（`chat_models/base.py` 签名），无论哪种都必须显式指定 method。
+
+**None 防御**：三个 step 调用点都显式判 `result is None` → 走原降级路径
+（防注入降正则、改写降原 query、意图降 both）——即使未来换
+method（如 `function_calling`）出现静默 None，也不会把「审查失败」当「通过」。
+单测：`test_core_steps.py::test_guard_structured_none_falls_back_to_regex` /
+`test_rewriter_structured_none_falls_back_to_original` /
+`test_intent_structured_none_falls_back_to_both`。
+
+**运维注意**：用裸 httpx 直 POST 网关会得到 500 `NullPointerException`（网关对
+openai SDK 特有请求头/报文敏感，原因在网关侧未深究）；所有出站请求走
+openai SDK / langchain 栈即可，不要自己拼 HTTP。
+
 ---
 
 ## 11. 前端需要的完整时序（推荐实现）

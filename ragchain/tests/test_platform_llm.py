@@ -1,10 +1,11 @@
-"""LLMClient 参数装配与 structured JSON 容错解析测试（不触网）。"""
+"""LLMClient 参数装配与 structured（with_structured_output/json_mode）测试（不触网）。"""
 
 from __future__ import annotations
 
 from typing import Any
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
@@ -23,9 +24,38 @@ class _FakeMessage:
         self.content = content
 
 
-def _install_fake_model(monkeypatch, response_content: str = "{}", exc: Exception | None = None):
+def _install_fake_model(
+    monkeypatch,
+    *,
+    structured_result: Any = None,
+    structured_exc: Exception | None = None,
+    exc: Exception | None = None,
+):
+    """替换 ChatOpenAI：with_structured_output 返回可控的 FakeRunner。
+
+    - structured_result：runner.ainvoke 的返回值（可为 None，模拟静默 None）；
+    - structured_exc：runner.ainvoke 抛的异常（模拟网络错误 /
+      PydanticOutputParser 的 OutputParserException）；
+    - exc：保留旧 ainvoke 路径的异常注入（当前 structured 不再走它）。
+    """
     created: dict[str, dict] = {}
     instances: list[Any] = []
+    structured_calls: list[dict] = []
+
+    class FakeRunner:
+        def __init__(self, model: Any, schema: Any, kwargs: dict):
+            self.model = model
+            self.schema = schema
+            self.kwargs = kwargs
+
+        async def ainvoke(self, messages):
+            self.model.messages = messages
+            structured_calls.append(
+                {"schema": self.schema, "kwargs": dict(self.kwargs), "messages": messages}
+            )
+            if structured_exc is not None:
+                raise structured_exc
+            return structured_result
 
     class FakeChatOpenAI:
         def __init__(self, **kwargs):
@@ -39,14 +69,17 @@ def _install_fake_model(monkeypatch, response_content: str = "{}", exc: Exceptio
             self.bound_tools = tools
             return self
 
+        def with_structured_output(self, schema, **kwargs):
+            return FakeRunner(self, schema, kwargs)
+
         async def ainvoke(self, messages):
             self.messages = messages
             if exc is not None:
                 raise exc
-            return _FakeMessage(response_content)
+            return _FakeMessage("{}")
 
     monkeypatch.setattr(llm_module, "ChatOpenAI", FakeChatOpenAI)
-    return created, instances, FakeChatOpenAI
+    return created, instances, FakeChatOpenAI, structured_calls
 
 
 def _fresh_settings():
@@ -54,7 +87,7 @@ def _fresh_settings():
 
 
 def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
-    created, _, fake_cls = _install_fake_model(monkeypatch)
+    created, _, fake_cls, _ = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main-llm/v1"
     s.MAIN_LLM_API_KEY = ""
@@ -76,7 +109,7 @@ def test_main_model_kwargs_and_api_key_fallback(monkeypatch):
 
 
 def test_main_model_binds_tools(monkeypatch):
-    created, instances, _ = _install_fake_model(monkeypatch)
+    created, instances, _, _ = _install_fake_model(monkeypatch)
     client = LLMClient(_fresh_settings())
     tools = [{"type": "function", "function": {"name": "python_exec"}}]
 
@@ -88,7 +121,7 @@ def test_main_model_binds_tools(monkeypatch):
 
 
 def test_sub_model_falls_back_to_main(monkeypatch):
-    created, _, _ = _install_fake_model(monkeypatch)
+    created, _, _, _ = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main/v1"
     s.MAIN_LLM_API_KEY = "main-key"
@@ -110,7 +143,7 @@ def test_sub_model_falls_back_to_main(monkeypatch):
 
 
 def test_sub_model_prefers_sub_values_and_can_enable_thinking(monkeypatch):
-    created, _, _ = _install_fake_model(monkeypatch)
+    created, _, _, _ = _install_fake_model(monkeypatch)
     s = _fresh_settings()
     s.MAIN_LLM_API_URL = "http://main/v1"
     s.MAIN_LLM_MODEL = "main-model"
@@ -129,10 +162,10 @@ def test_sub_model_prefers_sub_values_and_can_enable_thinking(monkeypatch):
     assert "extra_body" not in created
 
 
-async def test_structured_parses_fenced_json_and_sends_messages(monkeypatch):
-    created, instances, _ = _install_fake_model(
-        monkeypatch,
-        response_content='好的，结果如下：\n```json\n{"value": 12, "label": "费用"}\n```\n希望有帮助',
+async def test_structured_uses_json_mode_and_returns_model(monkeypatch):
+    """structured 走 with_structured_output(method="json_mode")（issue #31 探针结论）。"""
+    created, instances, _, structured_calls = _install_fake_model(
+        monkeypatch, structured_result=Out(value=12, label="费用")
     )
     client = LLMClient(_fresh_settings())
 
@@ -141,6 +174,9 @@ async def test_structured_parses_fenced_json_and_sends_messages(monkeypatch):
     assert isinstance(result, Out)
     assert result.value == 12
     assert result.label == "费用"
+    # method=json_mode：网关强制合法 JSON；解析/校验失败抛异常而非静默 None
+    assert structured_calls[0]["kwargs"] == {"method": "json_mode"}
+    assert structured_calls[0]["schema"] is Out
     messages = instances[0].messages
     assert any(isinstance(m, SystemMessage) for m in messages)
     assert any(isinstance(m, HumanMessage) for m in messages)
@@ -149,25 +185,27 @@ async def test_structured_parses_fenced_json_and_sends_messages(monkeypatch):
     assert "extra_body" in created  # structured 走 sub_model
 
 
-async def test_structured_plain_json_and_pydantic_validation_error(monkeypatch):
-    _install_fake_model(monkeypatch, response_content='{"value": 1, "label": "x"}')
-    client = LLMClient(_fresh_settings())
-    assert (await client.structured(system="s", user="u", schema_cls=Out)).value == 1
-
-    monkeypatch.undo()
-    _install_fake_model(monkeypatch, response_content='not json at all')
-    with pytest.raises(LLMError):
-        await client.structured(system="s", user="u", schema_cls=Out)
-
-
-async def test_structured_raises_on_model_error_and_empty(monkeypatch):
-    _install_fake_model(monkeypatch, exc=RuntimeError("gateway down"))
+async def test_structured_wraps_network_and_parser_errors(monkeypatch):
+    """网络异常与 OutputParserException（json_mode 解析/校验失败）统一转 LLMError。"""
+    _install_fake_model(monkeypatch, structured_exc=RuntimeError("gateway down"))
     client = LLMClient(_fresh_settings())
     with pytest.raises(LLMError):
         await client.structured(system="s", user="u", schema_cls=Out)
 
     monkeypatch.undo()
-    _install_fake_model(monkeypatch, response_content="")
+    _install_fake_model(
+        monkeypatch,
+        structured_exc=OutputParserException("Failed to parse Out from completion 0."),
+    )
+    client = LLMClient(_fresh_settings())
+    with pytest.raises(LLMError):
+        await client.structured(system="s", user="u", schema_cls=Out)
+
+
+async def test_structured_raises_on_none_result(monkeypatch):
+    """runner 静默返回 None → LLMError（防防注入把 None 当「通过」，issue #31 坑 #2）。"""
+    _install_fake_model(monkeypatch, structured_result=None)
+    client = LLMClient(_fresh_settings())
     with pytest.raises(LLMError):
         await client.structured(system="s", user="u", schema_cls=Out)
 

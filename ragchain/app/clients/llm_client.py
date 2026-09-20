@@ -1,7 +1,13 @@
 """LangChain 1.x LLM 客户端（.dsh/ragchain-interfaces.md §11）。
 
-只创建并调用 ChatOpenAI，不引入 function calling 依赖；structured 通过
-「模型只输出 JSON」+ 容错解析实现。
+只创建并调用 ChatOpenAI；structured 走
+``with_structured_output(schema, method="json_mode")``（issue #31）：
+``response_format={"type":"json_object"}`` 由 Sophnet 网关强制输出合法 JSON，
+解析失败由 ``PydanticOutputParser`` 抛 ``OutputParserException``（响亮失败，
+不做静默 None），调用点据此走各自降级。method 选型依据（2026-09-20 网关探针）：
+``json_schema`` 网关只收参数不按 schema 强制、``function_calling`` 依赖
+``tool_choice`` 遵守性且有静默 None 陷阱——结论详见
+docs/langchain-rag-container-api-contract.md §10。
 
 主 LLM（Qwen3 思考模型，经 Sophnet OpenAI 兼容网关）的思考增量走
 ``delta.reasoning_content``；langchain-openai 1.x 的 ``ChatOpenAI`` 只认
@@ -12,13 +18,11 @@ chunk 转换层把它挂回 ``AIMessageChunk.additional_kwargs["reasoning_conten
 
 from __future__ import annotations
 
-import json
-import re
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel
 
 from ..config import Settings
 
@@ -73,61 +77,6 @@ def _reasoning_preserving_cls(base: type) -> type:
             return generation_chunk
 
     return ReasoningPreservingChatOpenAI
-
-
-def _extract_content_text(response: Any) -> str:
-    content = getattr(response, "content", response)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-            else:
-                text = getattr(item, "text", None)
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    return str(content)
-
-
-def _strip_noise_and_parse_json(text: str) -> Any:
-    """剥离 markdown code fence / 前后解释文字，再 json.loads。"""
-    text = (text or "").strip().lstrip("\ufeff").strip()
-    if not text:
-        raise LLMError("LLM 返回为空，无法解析 JSON")
-
-    fence_match = re.search(r"```(?:[a-zA-Z0-9_+\-.]*)\s*\n?(.*?)```", text, re.DOTALL)
-    candidate = fence_match.group(1).strip() if fence_match else text
-
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = candidate[start : end + 1]
-
-    errors: list[str] = []
-    for attempt in (candidate, text):
-        try:
-            return json.loads(attempt)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(str(exc))
-
-    # 处理 JSON 前后夹带含花括号解释文字等噪声：逐位置 raw_decode。
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(candidate):
-        if char != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(candidate[index:])
-            return value
-        except Exception as exc:  # noqa: BLE001
-            errors.append(str(exc))
-    raise LLMError(f"LLM 返回不是合法 JSON: {errors[-1] if errors else 'unknown'}")
 
 
 class LLMClient:
@@ -188,29 +137,44 @@ class LLMClient:
         user: str,
         schema_cls: type[BaseModel],
     ) -> BaseModel:
-        """调用子模型并将 JSON 解析为 ``schema_cls``；失败抛 LLMError。"""
+        """调用辅模型做结构化输出；失败一律抛 LLMError（调用点据此降级）。
+
+        实现：``with_structured_output(schema_cls, method="json_mode")``（issue #31，
+        替代手写「剥 markdown 围栏 + 逐位置 raw_decode」容错解析）：
+
+        - ``json_mode`` 发 ``response_format={"type":"json_object"}``，Sophnet
+          网关强制模型输出合法 JSON（2026-09-20 探针 R1/R5，见
+          docs/langchain-rag-container-api-contract.md §10）——这是本网关唯一
+          真正生效的硬保障；三个 step 的 prompt 都含 "JSON" 字样，满足网关
+          「messages 必须含 json」校验。
+        - 解析用 ``PydanticOutputParser``（内建 markdown 围栏容错）：JSON 解析
+          或 Pydantic 校验失败抛 ``OutputParserException``——失败是「响」的，
+          与各 step 的异常降级语义一致。
+        - 不用 ``json_schema``：网关只收下参数、不按 schema 强制（探针 R2：
+          强 schema 时问 1+1 仍回 ``{"answer": 2}``），等于没有保障还误导。
+          （issue #31 里「默认是 json_schema」是旧版行为——本项目锁定的
+          langchain-openai 1.6.2 默认 method 已是 ``function_calling``，见下条。）
+        - 不用 ``function_calling``（langchain-openai 1.x 默认值）：其
+          ``PydanticToolsParser(first_tool_only=True)`` 在网关忽略
+          ``tool_choice`` 时**静默返回 None**（探针确认本网关遵守
+          ``tool_choice``，但这是网关行为不是契约；换网关/升级即踩坑 #2）。
+        """
         model = self.sub_model()
+        runner = model.with_structured_output(schema_cls, method="json_mode")
         try:
-            response = await model.ainvoke(
+            result = await runner.ainvoke(
                 [SystemMessage(content=system), HumanMessage(content=user)]
             )
         except LLMError:
             raise
-        except Exception as exc:  # noqa: BLE001 - 网络/SDK 异常统一转 LLMError
-            raise LLMError(f"调用 SUB LLM 失败: {exc}") from exc
-
-        try:
-            raw = _extract_content_text(response)
-            data = _strip_noise_and_parse_json(raw)
-            if not isinstance(data, dict):
-                raise LLMError("LLM 结构化输出不是 JSON 对象")
-            return schema_cls.model_validate(data)
-        except LLMError:
-            raise
-        except PydanticValidationError as exc:
-            raise LLMError(f"LLM 结构化输出不符合 schema: {exc}") from exc
-        except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"LLM 结构化输出解析失败: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - 网络/SDK/解析异常统一转 LLMError
+            raise LLMError(f"SUB LLM 结构化输出失败: {exc}") from exc
+        if result is None:
+            # json_mode 解析器「要么返回实例要么抛异常」，None 不应出现；显式挡
+            # 一道，防未来换 method（如 function_calling）后静默 None 漏过——
+            # 防注入若把 None 当结果会直接判「通过」。
+            raise LLMError("SUB LLM 结构化输出解析结果为 None")
+        return result
 
     async def aclose(self) -> None:
         """尽力关闭最近创建的 ChatOpenAI 底层 async client；失败不抛出。"""
