@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from ..clients.llm_client import LLMError
-from ..prompts import INTENT_SYSTEM_PROMPT, build_intent_user_prompt
+from ..prompts import render_intent_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +92,14 @@ async def route_intent(
     """调用 sub_llm 判定意图；失败或非法值降级 both。
 
     ``raw_query`` / ``keywords`` 既用于补充 prompt（改写会丢显式查表线索，
-    详见 :func:`app.prompts.build_intent_user_prompt`），也用于
+    详见 :func:`app.prompts.render_intent_prompt`），也用于
     :func:`apply_table_hint` 的确定性兜底。
     """
     try:
+        system, user = render_intent_prompt(query, raw_query=raw_query, keywords=keywords)
         result = await deps.llm.structured(
-            system=INTENT_SYSTEM_PROMPT,
-            user=build_intent_user_prompt(query, raw_query=raw_query, keywords=keywords),
+            system=system,
+            user=user,
             schema_cls=IntentResult,
         )
         if result is None:

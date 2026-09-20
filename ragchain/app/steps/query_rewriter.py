@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from ..clients.llm_client import LLMError
-from ..prompts import build_rewriter_system_prompt, build_rewriter_user_prompt
+from ..prompts import render_rewriter_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,10 @@ async def rewrite_query(
 ) -> RewriteResult:
     """输入短期历史+原始 query，输出结构化改写；任何失败降级为原 query。"""
     try:
+        system, user = render_rewriter_prompt(query, history, now=now)
         result = await deps.llm.structured(
-            system=build_rewriter_system_prompt(now),
-            user=build_rewriter_user_prompt(query, history),
+            system=system,
+            user=user,
             schema_cls=RewriteResult,
         )
         if result is None:

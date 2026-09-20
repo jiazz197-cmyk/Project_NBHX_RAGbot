@@ -7,7 +7,7 @@ import re
 from pydantic import BaseModel, Field
 
 from ..clients.llm_client import LLMError
-from ..prompts import GUARD_SYSTEM_PROMPT, build_guard_user_prompt
+from ..prompts import render_guard_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,10 @@ async def check_injection(query: str, deps) -> GuardResult:
       RAGCHAIN_GUARD_STRICT=True 且命中则拒绝。
     """
     try:
+        system, user = render_guard_prompt(query)
         result = await deps.llm.structured(
-            system=GUARD_SYSTEM_PROMPT,
-            user=build_guard_user_prompt(query),
+            system=system,
+            user=user,
             schema_cls=GuardResult,
         )
         if result is None:
