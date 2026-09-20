@@ -21,4 +21,3 @@ class analyze():
         result = await self.service.run_analysis(data_source, requirements)
         charts_info = result["visualization"]["charts"]
         return charts_info
-        print(charts_info)

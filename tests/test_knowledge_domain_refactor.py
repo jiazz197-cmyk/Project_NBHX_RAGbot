@@ -354,7 +354,11 @@ async def test_submit_document_processing_requires_files():
 def test_vector_store_manager_uses_semantic_collection_as_table_name(monkeypatch):
     pytest.importorskip("torch")
     pytest.importorskip("llama_index")
+    from app.adapters import vector_store_manager as store_module
     from app.adapters.doc_processing import embedding_store
+
+    # issue #37：类已收敛到 app.adapters.vector_store_manager，embedding_store 不再自带实现
+    assert not hasattr(embedding_store, "VectorStoreManager")
 
     captured: dict = {}
 
@@ -362,9 +366,9 @@ def test_vector_store_manager_uses_semantic_collection_as_table_name(monkeypatch
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setattr(embedding_store.PGVectorStore, "from_params", staticmethod(fake_from_params))
+    monkeypatch.setattr(store_module.PGVectorStore, "from_params", staticmethod(fake_from_params))
 
-    manager = embedding_store.VectorStoreManager(
+    manager = store_module.VectorStoreManager(
         db_config={"database": "db", "host": "h", "password": "p", "port": 5432, "user": "u"}
     )
     manager._build_vector_store("knowledge_chunks")

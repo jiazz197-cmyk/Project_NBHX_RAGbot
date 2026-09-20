@@ -9,7 +9,7 @@
 
 覆盖面：
   1. excel_to_json：calamine 优先，WPS/腾讯文档坏样式文件可解析；calamine 缺席回退 openpyxl；
-  2. prepare_rerank_documents + HTTPReranker：空文档占位、按预算截断、下标不错位；
+  2. prepare_rerank_documents + HTTPReranker：空文档占位、按预算截断、下标不错位、异步钩子（issue #37）；
   3. ExcelHeaderPreservingSplitter：空表/全空行不产空 chunk；
   4. OptimizedRetriever.get_chunks：过滤历史空 chunk。
 
@@ -188,6 +188,89 @@ def test_http_reranker_sanitizes_documents_before_request(monkeypatch):
 
     monkeypatch.setattr(HTTPReranker, "_rerank_request_sync", boom)
     assert reranker._postprocess_nodes(nodes, QueryBundle(query_str="q")) == nodes[:1]
+
+
+@pytest.mark.asyncio
+async def test_http_reranker_async_hook_uses_async_http_without_sync(monkeypatch):
+    """issue #37 方案②：async 查询链走 _apostprocess_nodes → 真异步 HTTP。
+
+    改造前 ``_rerank_request`` 从未被调用（llama-index 基类默认把同步
+    ``_postprocess_nodes`` 丢进 asyncio.to_thread）；这里把同步入口下毒，证明
+    async 钩子确实复用了 AsyncClient，而不是线程池里的同步请求。
+    """
+    pytest.importorskip("llama_index")
+    import httpx
+    from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+
+    from app.adapters.ragsystem import RAGretriever
+    from app.adapters.ragsystem.RAGretriever import HTTPReranker
+
+    payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 1, "relevance_score": 0.99},
+                    {"index": 0, "relevance_score": 0.10},
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def fake_get_client():
+        return client
+
+    monkeypatch.setattr(RAGretriever, "get_http_client", fake_get_client)
+    monkeypatch.setattr(
+        HTTPReranker,
+        "_rerank_request_sync",
+        lambda *args, **kwargs: pytest.fail("async 路径不得调用同步 _rerank_request_sync"),
+    )
+
+    try:
+        reranker = HTTPReranker(api_url="http://rerank.test/v1/rerank", top_n=1)
+        nodes = [
+            NodeWithScore(node=TextNode(text="低分"), score=0.1),
+            NodeWithScore(node=TextNode(text="命中"), score=0.2),
+        ]
+
+        result = await reranker.apostprocess_nodes(nodes, QueryBundle(query_str="q"))
+
+        assert payloads and payloads[0]["top_n"] == 1
+        assert payloads[0]["documents"] == ["低分", "命中"]
+        assert result == [nodes[1]]  # results index 映射回原 nodes，top_n 截断
+        assert nodes[1].score == 0.99
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_reranker_async_hook_falls_back_on_error(monkeypatch):
+    """异步失败语义与同步一致：httpx 错误 → 退回截断后的原 nodes，不抛异常。"""
+    pytest.importorskip("llama_index")
+    import httpx
+    from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+
+    from app.adapters.ragsystem.RAGretriever import HTTPReranker
+
+    async def boom(self, query_str, documents):
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(HTTPReranker, "_rerank_request", boom)
+
+    reranker = HTTPReranker(api_url="http://rerank.test/v1/rerank", top_n=1)
+    nodes = [
+        NodeWithScore(node=TextNode(text="a"), score=0.1),
+        NodeWithScore(node=TextNode(text="b"), score=0.2),
+    ]
+
+    result = await reranker.apostprocess_nodes(nodes, QueryBundle(query_str="q"))
+
+    assert result == nodes[:1]
 
 
 # ---------------------------------------------------------------------------

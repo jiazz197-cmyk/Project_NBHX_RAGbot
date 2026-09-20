@@ -197,7 +197,7 @@ def _run_embed_bench(model, texts: List[str]) -> float:
     return elapsed
 
 
-def _run_ingest_bench(module, model, texts: List[str], collection: str) -> float:
+def _run_ingest_bench(store_module, model, texts: List[str], collection: str) -> float:
     from llama_index.core.schema import TextNode
 
     from app.core.config import settings
@@ -210,7 +210,9 @@ def _run_ingest_bench(module, model, texts: List[str], collection: str) -> float
         "port": settings.POSTGRES_PORT,
     }
     nodes = [TextNode(text=text, metadata={"collection": collection}) for text in texts]
-    manager = module.VectorStoreManager(db_config)
+    # 新实现：VectorStoreManager 已收敛到 app.adapters.vector_store_manager（issue #37）；
+    # legacy 实现仍定义在旧版 embedding_store.py 里，所以按实现分别传入类所在模块。
+    manager = store_module.VectorStoreManager(db_config)
     start = time.perf_counter()
     manager.upsert_chunks(nodes, collection, model)
     return time.perf_counter() - start
@@ -248,6 +250,7 @@ def main() -> int:
     parser.add_argument("--collection", default="issue35_bench")
     args = parser.parse_args()
 
+    from app.adapters import vector_store_manager as new_store_impl
     from app.adapters.doc_processing import embedding_store as new_impl
 
     _install_request_counter()  # 真网关/假网关都靠它统计请求条数
@@ -260,10 +263,10 @@ def main() -> int:
     else:
         print(f"[bench] 外部网关: {api_url}（latency-ms 忽略）")
 
-    impls = []
+    impls = []  # (impl 名, 嵌入实现模块, VectorStoreManager 所在模块)
     legacy_tmp = None
     if args.impl in ("new", "both"):
-        impls.append(("new", new_impl))
+        impls.append(("new", new_impl, new_store_impl))
     if args.impl in ("legacy", "both"):
         if args.rev:
             rev = args.rev
@@ -272,13 +275,13 @@ def main() -> int:
             rev = _default_legacy_rev()
             print(f"[bench] legacy 实现来自 {rev}（自动：历史里最近一次仍含手写传输的提交）")
         legacy_impl, legacy_tmp = _load_legacy(rev)
-        impls.append(("legacy", legacy_impl))
+        impls.append(("legacy", legacy_impl, legacy_impl))
 
     texts = _chunk_texts(args.chunks)
-    collections = {name: f"{args.collection}_{name}" for name, _ in impls}
+    collections = {name: f"{args.collection}_{name}" for name, _, _ in impls}
     rows = []
     try:
-        for name, module in impls:
+        for name, module, store_module in impls:
             model = module.BGEM3EmbeddingWrapper(api_url=api_url)
             if args.mode in ("embed", "both"):
                 _reset_requests()
@@ -288,7 +291,7 @@ def main() -> int:
             if args.mode in ("ingest", "both"):
                 collection = collections[name]
                 _reset_requests()
-                elapsed = _run_ingest_bench(module, model, texts, collection)
+                elapsed = _run_ingest_bench(store_module, model, texts, collection)
                 rows.append({"impl": name, "mode": "ingest", "chunks": len(texts),
                              "sec": elapsed, **_stats()})
     finally:

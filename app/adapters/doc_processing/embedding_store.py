@@ -1,4 +1,7 @@
-"""BGE-M3 嵌入适配器与 PGVector 写入封装（issue #35，含 #28 范围）。
+"""BGE-M3 嵌入适配器（issue #35，含 #28 范围）。
+
+注（issue #37）：原先定义在本文件的 ``VectorStoreManager`` 已收敛到
+``app/adapters/vector_store_manager.py``（唯一实现，入库/检索共用）。
 
 ``BGEM3EmbeddingWrapper`` 是 ``llama_index.embeddings.openai.OpenAIEmbedding`` 的
 薄子类：推理网关（GPUStack）暴露的就是标准 OpenAI 兼容 ``POST /v1/embeddings``，
@@ -21,10 +24,7 @@ import math
 import threading
 from typing import Dict, List, Optional, Tuple
 
-from llama_index.core import Settings, StorageContext, VectorStoreIndex
-from llama_index.core.schema import TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.vector_stores.postgres import PGVectorStore
 from pydantic import Field
 from tenacity import (
     AsyncRetrying,
@@ -36,11 +36,11 @@ from tenacity import (
 
 from app.core.config import settings
 from app.core.http_client import HttpClientManager, get_sync_http_client
-from .exceptions import EmbeddingError, VectorStoreError
+from .exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
 
-# BGE-M3 输出维度：空文本零向量占位用，与 PGVectorStore 的 embed_dim 一致
+# BGE-M3 输出维度：空文本零向量占位用，与 PGVector 列宽（vector_store_manager._EMBED_DIM）一致
 _EMBED_DIM = 1024
 
 # 显式要 float 编码：openai SDK 不传 encoding_format 时会发 ``"base64"``（响应侧再做
@@ -315,51 +315,3 @@ class BGEM3EmbeddingWrapper(OpenAIEmbedding):
             "embed_batch_size": self.embed_batch_size,
             "instances_count": len(_EMBEDDING_INSTANCES),
         }
-
-
-class VectorStoreManager:
-    """封装 PGVector 存储（语义集合名）"""
-
-    def __init__(self, db_config: Dict):
-        self.db_config = db_config
-
-    def _build_vector_store(self, collection_name: str) -> PGVectorStore:
-        # PGVector 内部将物理表存为 data_<table_name>；
-        # 这里必须传逻辑表名（如 knowledge_chunks），避免 data_data_* 重复前缀。
-        try:
-            return PGVectorStore.from_params(
-                database=self.db_config["database"],
-                host=self.db_config["host"],
-                password=self.db_config["password"],
-                port=self.db_config["port"],
-                user=self.db_config["user"],
-                table_name=collection_name,
-                embed_dim=1024,
-            )
-        except Exception as exc:
-            raise VectorStoreError(f"创建 PGVectorStore 失败: {exc}") from exc
-
-    def upsert_chunks(self, chunks: List[TextNode], collection_name: str, embedding_model: BGEM3EmbeddingWrapper):
-        """
-        将文档块写入向量存储
-
-        当前实现：使用 PGVector（PostgreSQL），数据直接存储在数据库中
-        """
-        try:
-            vector_store = self._build_vector_store(collection_name)
-
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            Settings.embed_model = embedding_model
-
-            index = VectorStoreIndex.from_vector_store(
-                vector_store,
-                storage_context=storage_context,
-                embed_model=embedding_model,
-                show_progress=False,
-            )
-            index.insert_nodes(chunks)
-
-            logger.info("成功写入 PGVector: %s 条 (collection=%s)", len(chunks), collection_name)
-
-        except Exception as exc:
-            raise VectorStoreError(f"写入 PGVector 失败: {exc}") from exc

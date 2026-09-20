@@ -7,11 +7,12 @@ from typing import Dict, List, Optional, Union
 from llama_index.core.schema import TextNode
 
 from .doc_reader import DocumentProcessor
-from .embedding_store import BGEM3EmbeddingWrapper, VectorStoreManager
+from .embedding_store import BGEM3EmbeddingWrapper
 from .exceptions import DocumentProcessingError
 from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPreservingSplitter
 
 from app.adapters.knowledge.constants import EXCEL_DB_COLLECTION_NAME
+from app.adapters.vector_store_manager import VectorStoreManager
 from app.core.time_utils import utcnow
 
 logger = logging.getLogger(__name__)

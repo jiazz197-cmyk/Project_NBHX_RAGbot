@@ -106,10 +106,6 @@ def _resolve_minio_object_name(source, metadata: Optional[Dict] = None) -> Optio
     )
 
 
-def format_docs(docs):
-    return "\n\n".join(f"{doc.page_content}" for doc in docs)
-
-
 class ModelManager:
     """Singleton for RAG retrievers, query engines, and HTTP reranker."""
     _instance = None
@@ -521,16 +517,9 @@ class retriever(OptimizedRetriever):
     pass
 
 
-def cleanup_all_resources():
-    try:
-        manager = ModelManager()
-        manager.clear_cache()
-        logger.info("全局资源清理完成")
-    except Exception as e:
-        logger.error("全局资源清理失败: %s", e)
-
-
 if __name__ == '__main__':
+    # 非生产入口：仅本地手动 smoke（需要可达的 PG / BGE-M3 / Reranker 服务），
+    # 不参与应用生命周期；生产装配在 main.py 的 lifespan。
     try:
         Settings.llm = None
         
@@ -555,4 +544,4 @@ if __name__ == '__main__':
     except Exception as e:
         logger.exception("执行失败: %s", e)
     finally:
-        cleanup_all_resources()
+        ModelManager().clear_cache()
