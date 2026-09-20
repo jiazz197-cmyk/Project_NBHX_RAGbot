@@ -268,7 +268,13 @@ class _ChartsResult(dict):
 
 class OptimizedRetriever:
     """Single- or multi-collection retrieval via ModelManager."""
-    
+
+    # 检索后统一截断条数（content / source / metadata 三列同长，issue #36）。
+    # 相似度阈值过滤 / MMR 去重不在本次范围——那会把「总是返回 N 条」变成
+    # 「有时返回 0 条」，需先有 issue #18 的离线评测基线并确认容器侧对空
+    # 结果的「未命中」标注，故这里仍保留「有多少收多少、封顶 top_k」的契约。
+    _RESPONSE_TOP_K = 5
+
     def __init__(self, rag_system=None, collection_name: Optional[str] = None):
         self.collection_name = collection_name
         
@@ -365,76 +371,46 @@ class OptimizedRetriever:
             metadatas.append(dict(node.metadata or {}))
 
         return {
-            "content": contents[:5],
-            "source": sources[:5],
-            "metadata": metadatas[:5]
+            "content": contents[: OptimizedRetriever._RESPONSE_TOP_K],
+            "source": sources[: OptimizedRetriever._RESPONSE_TOP_K],
+            "metadata": metadatas[: OptimizedRetriever._RESPONSE_TOP_K],
         }
 
     def _get_multi_collection_response(self, question: str, max_collections: int) -> dict:
-        all_contents = []
-        all_sources = []
-        all_metadatas = []
+        collected: List[tuple] = []
 
         collections_to_query = self.available_collections[:max_collections]
-        max_results_per_collection = self.default_top_n if len(collections_to_query) == 1 else 2
-
         for collection_name in collections_to_query:
             try:
                 query_engine = self._get_or_create_query_engine(collection_name)
                 if query_engine is None:
                     continue
                 raw_docs = query_engine.query(question)
-                self._append_multi_response_nodes(
-                    collection_name,
-                    raw_docs.source_nodes,
-                    max_results_per_collection,
-                    all_sources,
-                    all_contents,
-                    all_metadatas,
-                )
+                collected.append((collection_name, list(raw_docs.source_nodes or [])))
             except Exception as e:
                 logger.error("查询collection %s 失败: %s", collection_name, e)
                 continue
 
-        return {
-            "content": all_contents[:5],
-            "source": all_sources[:5],
-            "metadata": all_metadatas[:5]
-        }
+        return self._pack_multi_response(collected)
 
     async def _get_multi_collection_response_async(
         self, question: str, max_collections: int
     ) -> dict:
-        all_contents = []
-        all_sources = []
-        all_metadatas = []
+        collected: List[tuple] = []
 
         collections_to_query = self.available_collections[:max_collections]
-        max_results_per_collection = self.default_top_n if len(collections_to_query) == 1 else 2
-
         for collection_name in collections_to_query:
             try:
                 query_engine = self._get_or_create_query_engine(collection_name)
                 if query_engine is None:
                     continue
                 raw_docs = await self._aquery_engine(query_engine, question)
-                self._append_multi_response_nodes(
-                    collection_name,
-                    raw_docs.source_nodes,
-                    max_results_per_collection,
-                    all_sources,
-                    all_contents,
-                    all_metadatas,
-                )
+                collected.append((collection_name, list(raw_docs.source_nodes or [])))
             except Exception as e:
                 logger.error("查询collection %s 失败(async): %s", collection_name, e)
                 continue
 
-        return {
-            "content": all_contents[:5],
-            "source": all_sources[:5],
-            "metadata": all_metadatas[:5]
-        }
+        return self._pack_multi_response(collected)
 
     def _get_or_create_query_engine(self, collection_name: str):
         """多库模式：缓存命中/懒建 query engine；建不出来返回 None。"""
@@ -454,20 +430,50 @@ class OptimizedRetriever:
             return await aquery(question)
         return await asyncio.to_thread(query_engine.query, question)
 
-    @staticmethod
-    def _append_multi_response_nodes(
-        collection_name,
-        source_nodes,
-        max_results_per_collection,
-        all_sources,
-        all_contents,
-        all_metadatas,
-    ) -> None:
-        for node in source_nodes[:max_results_per_collection]:
-            # issue #14：附带 chunk 原始 metadata（含 minio_object_path）
-            all_sources.append(node.metadata.get('source', f'Unknown_{collection_name}'))
-            all_contents.append(node.text.strip())
-            all_metadatas.append(dict(node.metadata or {}))
+    @classmethod
+    def _pack_multi_response(cls, collected_nodes) -> dict:
+        """issue #36：多集合统一收池 → 按分数排序 → 截断 top_k。
+
+        旧实现是「每集合固定 2 条」的硬编码配额（``len==1 else 2``）+ 按插入
+        序盲截断：命中质量最好的集合同样被砍到 2 条，低分 chunk 与高分 chunk
+        一视同仁，而 prompt 里 ``[来源i]`` 的顺序会被模型当作可信度信号。
+        现改为各集合召回全部入池、按检索分数全局排序后截断；同一集合允许
+        贡献多于 2 条（引擎侧召回上限由各集合的 top_k / 重排 top_n 决定，
+        本方法不再做二次配额）。
+
+        单集合查询失败不影响其余集合：异常在收集阶段（``_get_multi_collection_
+        response[_async]`` 的逐集合 try/except）已被吞掉，这里只收成功结果。
+
+        排序语义：``score=None`` 的节点排最后（轻量替身/异常兜底可能无分）；
+        分数并列的节点保持「集合查询顺序 → 集合内原始顺序」（sort 稳定），
+        因此行为可复现。三列列表按同一顺序构建，长度严格对齐。
+        """
+        pool = [
+            (collection_name, node)
+            for collection_name, source_nodes in collected_nodes
+            for node in source_nodes
+        ]
+        pool.sort(
+            key=lambda pair: (
+                pair[1].score if pair[1].score is not None else float("-inf")
+            ),
+            reverse=True,
+        )
+
+        sources: List[str] = []
+        contents: List[str] = []
+        metadatas: List[Dict] = []
+        for collection_name, node in pool[: cls._RESPONSE_TOP_K]:
+            contents.append((node.text or "").strip())
+            metadata = dict(node.metadata or {})
+            sources.append(metadata.get('source', f'Unknown_{collection_name}'))
+            metadatas.append(metadata)
+
+        return {
+            "content": contents,
+            "source": sources,
+            "metadata": metadatas,
+        }
 
     def get_chunks(self, question: str, top_k: int = 5) -> dict:
         """纯向量检索（不经过 query engine / 重排），返回结构化 chunks。

@@ -751,3 +751,268 @@ async def test_api_excel_without_new_params_uses_legacy_default(monkeypatch):
     assert captured["q"].metadata == {}
     # /excel 响应与 /db 对齐：新增 chunks 键，旧字段保持原样
     assert response == {"answer": "{}", "sources": [], "chunks": []}
+
+
+# ---------------------------------------------------------------------------
+# 6. 多集合检索后处理（issue #36：移除「每集合固定 2 条」硬编码配额）
+# ---------------------------------------------------------------------------
+
+
+class _FakeMultiQueryEngine:
+    """多库模式替身：query/aquery 返回预设节点；error 非空时抛异常（模拟单集合故障）。"""
+
+    def __init__(self, nodes=None, error=None):
+        self._nodes = list(nodes or [])
+        self._error = error
+        self.questions = []
+
+    def query(self, question):
+        self.questions.append(question)
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(source_nodes=list(self._nodes))
+
+    async def aquery(self, question):
+        return self.query(question)
+
+
+class _FakeMultiModelManager:
+    """_get_or_create_query_engine 依赖的最小 ModelManager 替身。
+
+    只按集合名返回预置引擎；未预置的名字返回 None（模拟引擎建不出来）。
+    """
+
+    def __init__(self, engines=None):
+        self._engines = dict(engines or {})
+
+    def get_query_engine(self, collection_name, top_k=5, use_reranker=True):
+        return self._engines.get(collection_name)
+
+
+def _make_multi_retriever(engines, available=None):
+    """多库模式替身：object.__new__ 绕过 __init__（不加载模型 / DB）。
+
+    engines: {collection_name: _FakeMultiQueryEngine}；available 缺省取
+    engines 的键序，可传更多名字模拟「引擎建不出来」的集合。
+    """
+    r = object.__new__(OptimizedRetriever)
+    r.collection_name = None
+    r.available_collections = (
+        list(available) if available is not None else list(engines)
+    )
+    r.query_engines = {}
+    r.default_top_n = 3
+    r.model_manager = _FakeMultiModelManager(engines)
+    return r
+
+
+def test_multi_collection_pools_all_and_sorts_by_score():
+    """核心回归：各集合召回统一收池 → 全局按分数排序 → 截断 top_k。
+
+    三个集合各召回 3 条（分数见下），旧实现每集合固定取 2 条再按插入序
+    盲截 5 条，只能拿到 [a1, a2, b1, b2, c1]；新实现允许质量最好的集合
+    贡献 3 条，拿到真正的全局分数序 top5。
+    """
+    engines = {
+        "kb_a": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("a1", {"source": "a1.pdf"}, 0.92),
+            _FakeNodeWithScore("a2", {"source": "a2.pdf"}, 0.90),
+            _FakeNodeWithScore("a3", {"source": "a3.pdf"}, 0.89),
+        ]),
+        "kb_b": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("b1", {"source": "b1.pdf"}, 0.88),
+            _FakeNodeWithScore("b2", {"source": "b2.pdf"}, 0.55),
+            _FakeNodeWithScore("b3", {"source": "b3.pdf"}, 0.05),
+        ]),
+        "kb_c": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("c1", {"source": "c1.pdf"}, 0.80),
+            _FakeNodeWithScore("c2", {"source": "c2.pdf"}, 0.50),
+            _FakeNodeWithScore("c3", {"source": "c3.pdf"}, 0.01),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = retriever.get_response("q")
+
+    # 全局分数序 top5：.92 > .90 > .89 > .88 > .80（kb_a 占 3 条，不再被砍到 2）
+    assert result["content"] == ["a1", "a2", "a3", "b1", "c1"]
+    assert result["source"] == ["a1.pdf", "a2.pdf", "a3.pdf", "b1.pdf", "c1.pdf"]
+    # 9 条入池，封顶 top_k=5
+    assert len(result["content"]) == 5
+
+
+def test_multi_collection_response_three_columns_aligned():
+    """验收项：content / source / metadata 三列长度严格对齐，metadata 不短于 content。"""
+    engines = {
+        "kb_a": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("a1", {"source": "a1.pdf", "minio_object_path": "documents/a1.pdf"}, 0.9),
+            _FakeNodeWithScore("a2", {"source": "a2.pdf"}, 0.6),
+        ]),
+        "kb_b": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("b1", {"source": "b1.pdf"}, 0.7),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = retriever.get_response("q")
+
+    assert len(result["content"]) == len(result["source"]) == len(result["metadata"])
+    for source, metadata in zip(result["source"], result["metadata"]):
+        assert metadata["source"] == source
+    # metadata 携带 chunk 原始字段（get_charts 解析 MinIO 路径依赖）
+    assert result["metadata"][0]["minio_object_path"] == "documents/a1.pdf"
+
+
+def test_multi_collection_partial_failure_only_drops_that_collection():
+    """验收项（回归）：单集合查询失败只影响该集合，其余集合照常收池。
+
+    旧/新实现都要求逐集合 try/except 降级——失败集合不产生「检索失败」
+    占位内容，也不能让 get_response 走外层整体兜底。
+    """
+    engines = {
+        "kb_ok": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("ok-1", {"source": "ok1.pdf"}, 0.9),
+            _FakeNodeWithScore("ok-2", {"source": "ok2.pdf"}, 0.8),
+        ]),
+        "kb_boom": _FakeMultiQueryEngine(
+            [_FakeNodeWithScore("never", {"source": "boom.pdf"}, 0.99)],
+            error=RuntimeError("pg vector down"),
+        ),
+        "kb_ok2": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("ok-3", {"source": "ok3.pdf"}, 0.7),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = retriever.get_response("q")
+
+    assert result["content"] == ["ok-1", "ok-2", "ok-3"]
+    assert result["source"] == ["ok1.pdf", "ok2.pdf", "ok3.pdf"]
+    assert all(not c.startswith("检索失败") for c in result["content"])
+
+
+def test_multi_collection_engine_creation_failure_is_skipped():
+    """引擎建不出来（None）的集合被跳过，不影响其余集合。"""
+    engines = {
+        "kb_ok": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("ok-1", {"source": "ok1.pdf"}, 0.9),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines, available=["kb_ghost", "kb_ok"])
+
+    result = retriever.get_response("q")
+
+    assert result["content"] == ["ok-1"]
+    assert result["source"] == ["ok1.pdf"]
+
+
+def test_multi_collection_all_collections_failed_returns_empty_not_error():
+    """全部集合失败：返回空列表（阈值未引入，空结果语义与旧实现一致，等 #18）。"""
+    engines = {"kb_boom": _FakeMultiQueryEngine(error=RuntimeError("down"))}
+    # kb_ghost 不预置引擎 -> get_query_engine 返回 None（建不出来）
+    retriever = _make_multi_retriever(engines, available=["kb_boom", "kb_ghost"])
+
+    result = retriever.get_response("q")
+
+    assert result["content"] == []
+    assert result["source"] == []
+    assert result["metadata"] == []
+
+
+def test_multi_collection_respects_max_collections_cap():
+    """max_collections 仍限制参与查询的集合数（本 issue 不动这个行为）。"""
+    engines = {
+        "kb_a": _FakeMultiQueryEngine([_FakeNodeWithScore("a", {"source": "a.pdf"}, 0.9)]),
+        "kb_b": _FakeMultiQueryEngine([_FakeNodeWithScore("b", {"source": "b.pdf"}, 0.8)]),
+        "kb_c": _FakeMultiQueryEngine([_FakeNodeWithScore("c", {"source": "c.pdf"}, 0.7)]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = retriever.get_response("q", max_collections=2)
+
+    assert result["content"] == ["a", "b"]
+    assert engines["kb_c"].questions == []
+
+
+def test_multi_collection_none_scores_sort_last_and_ties_keep_order():
+    """score=None 的节点排最后；分数并列的节点保持收集顺序（sort 稳定）。"""
+    engines = {
+        "kb_a": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("a-tie", {"source": "a1.pdf"}, 0.5),
+            _FakeNodeWithScore("a-noscore", {"source": "a2.pdf"}, None),
+        ]),
+        "kb_b": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("b-tie", {"source": "b1.pdf"}, 0.5),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = retriever.get_response("q")
+
+    assert result["content"] == ["a-tie", "b-tie", "a-noscore"]
+
+
+@pytest.mark.asyncio
+async def test_multi_collection_async_pools_all_and_sorts_by_score():
+    """异步链路与同步一致：统一收池 → 全局分数序 → 截断 top_k。"""
+    engines = {
+        "kb_a": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("a1", {"source": "a1.pdf"}, 0.92),
+            _FakeNodeWithScore("a2", {"source": "a2.pdf"}, 0.90),
+            _FakeNodeWithScore("a3", {"source": "a3.pdf"}, 0.89),
+        ]),
+        "kb_b": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("b1", {"source": "b1.pdf"}, 0.88),
+            _FakeNodeWithScore("b2", {"source": "b2.pdf"}, 0.55),
+        ]),
+        "kb_c": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("c1", {"source": "c1.pdf"}, 0.80),
+            _FakeNodeWithScore("c2", {"source": "c2.pdf"}, 0.50),
+        ]),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = await retriever.get_response_async("q")
+
+    assert result["content"] == ["a1", "a2", "a3", "b1", "c1"]
+    assert len(result["source"]) == len(result["metadata"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_multi_collection_async_partial_failure_only_drops_that_collection():
+    """异步链路同样的逐集合降级：失败集合不影响其余集合。"""
+    engines = {
+        "kb_ok": _FakeMultiQueryEngine([
+            _FakeNodeWithScore("ok-1", {"source": "ok1.pdf"}, 0.9),
+        ]),
+        "kb_boom": _FakeMultiQueryEngine(error=RuntimeError("reranker 502")),
+    }
+    retriever = _make_multi_retriever(engines)
+
+    result = await retriever.get_response_async("q")
+
+    assert result["content"] == ["ok-1"]
+    assert all(not c.startswith("检索失败") for c in result["content"])
+
+
+@pytest.mark.asyncio
+async def test_multi_collection_async_without_aquery_falls_back_to_thread():
+    """引擎没有 aquery 时走线程池兜底（_aquery_engine 既有语义不被本 issue 破坏）。"""
+
+    class _SyncOnlyEngine:
+        def __init__(self):
+            self.questions = []
+
+        def query(self, question):
+            self.questions.append(question)
+            return SimpleNamespace(
+                source_nodes=[_FakeNodeWithScore("sync-hit", {"source": "s.pdf"}, 0.9)]
+            )
+
+    engine = _SyncOnlyEngine()
+    retriever = _make_multi_retriever({"kb_sync": engine})
+
+    result = await retriever.get_response_async("q")
+
+    assert engine.questions == ["q"]
+    assert result["content"] == ["sync-hit"]
