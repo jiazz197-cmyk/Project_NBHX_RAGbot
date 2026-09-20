@@ -125,7 +125,7 @@ class ModelManager:
             return
         
         self._rag_system = None
-        self._reranker = None
+        self._rerankers: Dict[int, HTTPReranker] = {}  # 按 top_n 分实例缓存
         self._retrievers_cache = {}
         self._query_engines_cache = {}
         self._cache_lock = threading.Lock()
@@ -141,24 +141,33 @@ class ModelManager:
         else:
             logger.info("RAG系统已存在，跳过重复设置")
     
-    def get_reranker(self):
-        """Lazy-init HTTPReranker（线程安全）。"""
-        if self._reranker is not None:
-            return self._reranker
+    def get_reranker(self, top_n: int = 3):
+        """Lazy-init HTTPReranker（线程安全，按 top_n 分实例缓存）。
+
+        单库模式沿用默认 top_n=3；多库 fan-out 用更大的 top_n（见
+        ``OptimizedRetriever._MULTI_RERANK_TOP_N``）给统一收池多留候选。
+        同一 top_n 复用同一实例，不同 top_n 互不覆盖；创建失败返回 None，
+        不写入缓存（下次调用重试）。
+        """
+        cached = self._rerankers.get(top_n)
+        if cached is not None:
+            return cached
         with self._cache_lock:
-            if self._reranker is not None:
-                return self._reranker
+            if top_n in self._rerankers:
+                return self._rerankers[top_n]
             try:
-                self._reranker = HTTPReranker(
+                reranker = HTTPReranker(
                     api_url=self._reranker_api_url,
-                    top_n=3,
+                    top_n=top_n,
                     timeout=30
                 )
-                logger.info("重排序器创建完成，API: %s", self._reranker_api_url)
+                self._rerankers[top_n] = reranker
+                logger.info(
+                    "重排序器创建完成，API: %s, top_n=%s", self._reranker_api_url, top_n
+                )
             except Exception as e:
-                logger.error("创建重排序器失败: %s", e)
-                self._reranker = None
-            return self._reranker
+                logger.error("创建重排序器失败(top_n=%s): %s", top_n, e)
+            return self._rerankers.get(top_n)
     
     def get_retriever(self, collection_name: str, top_k: int = 5):
         """Cached retriever per (collection, top_k)（线程安全）。"""
@@ -185,23 +194,26 @@ class ModelManager:
         collection_name: str,
         top_k: int = 5,
         use_reranker: bool = True,
+        rerank_top_n: int = 3,
     ):
         """RetrieverQueryEngine with optional reranker; cached（线程安全）。
 
         ``use_reranker=False`` 时 node_postprocessors=[]，供容器侧自行重排的
-        纯检索路径使用；缓存 key 带该标志，避免两种引擎互相覆盖。
+        纯检索路径使用；缓存 key 带该标志与 ``rerank_top_n``（仅在挂重排时
+        参与），避免不同重排配置的引擎互相覆盖。
         """
-        cache_key = f"{collection_name}_{top_k}_rerank_{int(bool(use_reranker))}"
-        
+        rerank_part = f"1_{rerank_top_n}" if use_reranker else "0"
+        cache_key = f"{collection_name}_{top_k}_rerank_{rerank_part}"
+
         existing = self._query_engines_cache.get(cache_key)
         if existing is not None:
             return existing
-        
+
         retriever = self.get_retriever(collection_name, top_k)
         if retriever is None:
             return None
-        
-        reranker = self.get_reranker() if use_reranker else None
+
+        reranker = self.get_reranker(rerank_top_n) if use_reranker else None
         query_engine = RetrieverQueryEngine.from_args(
             retriever=retriever,
             node_postprocessors=[reranker] if reranker else [],
@@ -244,6 +256,7 @@ class ModelManager:
             "mode": "HTTP API",
             "retrievers_cached": len(self._retrievers_cache),
             "query_engines_cached": len(self._query_engines_cache),
+            "rerankers_cached": len(self._rerankers),
             "reranker_api_url": self._reranker_api_url,
         }
         
@@ -274,6 +287,13 @@ class OptimizedRetriever:
     # 「有时返回 0 条」，需先有 issue #18 的离线评测基线并确认容器侧对空
     # 结果的「未命中」标注，故这里仍保留「有多少收多少、封顶 top_k」的契约。
     _RESPONSE_TOP_K = 5
+
+    # 多库 fan-out 的每集合参数（issue #36 后续调整）：召回 10 → 重排保留 4。
+    # 旧值 3/3 的问题：重排把每集合压到 3 条、旧配额再砍到 2 条，统一收池后
+    # 根本没料可选；召回提到 10 让重排网关看到更大候选集，top_n=4 让每个集合
+    # 多贡献 1 条入池，最终仍按分数全局排序截断到 _RESPONSE_TOP_K=5。
+    _MULTI_RECALL_TOP_K = 10
+    _MULTI_RERANK_TOP_N = 4
 
     def __init__(self, rag_system=None, collection_name: Optional[str] = None):
         self.collection_name = collection_name
@@ -413,11 +433,19 @@ class OptimizedRetriever:
         return self._pack_multi_response(collected)
 
     def _get_or_create_query_engine(self, collection_name: str):
-        """多库模式：缓存命中/懒建 query engine；建不出来返回 None。"""
+        """多库模式：缓存命中/懒建 query engine；建不出来返回 None。
+
+        引擎参数用类常量（召回 ``_MULTI_RECALL_TOP_K`` / 重排保留
+        ``_MULTI_RERANK_TOP_N``），与单库模式的 5/3 区分开。
+        """
         query_engine = self.query_engines.get(collection_name)
         if query_engine is not None:
             return query_engine
-        query_engine = self.model_manager.get_query_engine(collection_name, top_k=3)
+        query_engine = self.model_manager.get_query_engine(
+            collection_name,
+            top_k=self._MULTI_RECALL_TOP_K,
+            rerank_top_n=self._MULTI_RERANK_TOP_N,
+        )
         if query_engine is not None:
             self.query_engines[collection_name] = query_engine
         return query_engine

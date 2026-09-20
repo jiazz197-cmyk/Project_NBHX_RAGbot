@@ -9,7 +9,10 @@
      metadata["chunks"]，未传 top_k 的旧调用走 get_response_async（aquery）；
   4. query_excel（async）：显式 top_k 走 get_chunks_async 结构化 chunks；
      未传 top_k 走 get_charts_async 整表 JSON（data / sources 源文件名）；
-  5. API /db、/excel：async 路由新参数透传 + 默认不传参数时旧行为不变。
+  5. API /db、/excel：async 路由新参数透传 + 默认不传参数时旧行为不变；
+  6. 多集合检索后处理（issue #36）：统一收池按分排序截断、部分失败降级、
+     多库 fan-out 引擎参数（召回 _MULTI_RECALL_TOP_K / 重排 _MULTI_RERANK_TOP_N）、
+     ModelManager 的 rerank_top_n 分实例缓存与缓存 key 隔离。
 
 全部 monkeypatch 掉真实模型 / MinIO / DB，可在本地快速运行。
 """
@@ -308,7 +311,7 @@ async def test_get_response_async_end_to_end_uses_async_reranker_http(monkeypatc
 def _make_model_manager():
     manager = object.__new__(ModelManager)
     manager._rag_system = None
-    manager._reranker = None
+    manager._rerankers = {}
     manager._retrievers_cache = {}
     manager._query_engines_cache = {}
     manager._cache_lock = threading.Lock()
@@ -351,7 +354,7 @@ def test_get_query_engine_use_reranker_false_has_no_postprocessors(monkeypatch):
 def test_get_query_engine_use_reranker_true_keeps_postprocessor_and_cache_key(monkeypatch):
     manager = _make_model_manager()
     manager.get_retriever = lambda collection_name, top_k: "retriever"
-    manager.get_reranker = lambda: "reranker"
+    manager.get_reranker = lambda top_n=3: "reranker"
     captured = _patch_query_engine_builder(monkeypatch)
 
     manager.get_query_engine("knowledge_chunks", 5, use_reranker=False)
@@ -367,12 +370,44 @@ def test_get_query_engine_use_reranker_true_keeps_postprocessor_and_cache_key(mo
 def test_get_query_engine_legacy_call_keeps_reranker(monkeypatch):
     manager = _make_model_manager()
     manager.get_retriever = lambda collection_name, top_k: "retriever"
-    manager.get_reranker = lambda: "reranker"
+    manager.get_reranker = lambda top_n=3: "reranker"
     captured = _patch_query_engine_builder(monkeypatch)
 
     manager.get_query_engine("knowledge_chunks", top_k=5)  # 旧签名调用
 
     assert captured[0]["node_postprocessors"] == ["reranker"]
+
+
+def test_get_query_engine_rerank_top_n_isolated_per_value(monkeypatch):
+    """rerank_top_n 参与缓存 key 与重排器选择（issue #36 后续：多库用 4，单库默认 3）。
+
+    不同 top_n 各建一个 HTTPReranker 实例、各占一条引擎缓存，互不覆盖；
+    同一 top_n 二次调用命中缓存，不重复创建。
+    """
+    manager = _make_model_manager()
+    manager.get_retriever = lambda collection_name, top_k: "retriever"
+    captured = _patch_query_engine_builder(monkeypatch)
+
+    created = []
+
+    def _fake_http_reranker(api_url=None, top_n=5, timeout=30):
+        reranker = SimpleNamespace(top_n=top_n)
+        created.append(reranker)
+        return reranker
+
+    monkeypatch.setattr(retriever_for_nbhx, "HTTPReranker", _fake_http_reranker)
+
+    engine_n4 = manager.get_query_engine("kb", 10, rerank_top_n=4)
+    engine_n4_again = manager.get_query_engine("kb", 10, rerank_top_n=4)  # 命中缓存
+    engine_n3 = manager.get_query_engine("kb", 5)  # 默认 rerank_top_n=3（单库路径）
+
+    # 只创建两个重排器实例：top_n=4 与 top_n=3 各一个
+    assert [r.top_n for r in created] == [4, 3]
+    assert engine_n4_again is engine_n4
+    assert engine_n3 is not engine_n4
+    assert captured[0]["node_postprocessors"] == [created[0]]
+    assert captured[1]["node_postprocessors"] == [created[1]]
+    assert len(captured) == 2  # top_n=4 的二次调用没有重建引擎
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +820,7 @@ class _FakeMultiModelManager:
     def __init__(self, engines=None):
         self._engines = dict(engines or {})
 
-    def get_query_engine(self, collection_name, top_k=5, use_reranker=True):
+    def get_query_engine(self, collection_name, top_k=5, use_reranker=True, rerank_top_n=None):
         return self._engines.get(collection_name)
 
 
@@ -1016,3 +1051,31 @@ async def test_multi_collection_async_without_aquery_falls_back_to_thread():
 
     assert engine.questions == ["q"]
     assert result["content"] == ["sync-hit"]
+
+
+def test_multi_collection_engine_created_with_recall10_rerank4():
+    """多库 fan-out 引擎参数：每集合召回 10、重排保留 4（issue #36 后续调整）。
+
+    旧值 top_k=3 / 重排 top_n=3 会让统一收池没料可选（旧配额还再砍到 2）。
+    """
+    captured = {}
+
+    class _RecordingManager:
+        def get_query_engine(self, collection_name, top_k=5, use_reranker=True, rerank_top_n=3):
+            captured["args"] = (collection_name, top_k, rerank_top_n)
+            return object()
+
+    r = object.__new__(OptimizedRetriever)
+    r.collection_name = None
+    r.available_collections = ["kb_a"]
+    r.query_engines = {}
+    r.default_top_n = 3
+    r.model_manager = _RecordingManager()
+
+    engine = r._get_or_create_query_engine("kb_a")
+
+    assert captured["args"] == ("kb_a", 10, 4)
+    assert r.query_engines["kb_a"] is engine  # 建好后进缓存，下次直接命中
+    # 二次调用不再请求 model_manager
+    r._get_or_create_query_engine("kb_a")
+    assert captured["args"] == ("kb_a", 10, 4)  # 记录未被覆盖，说明走了缓存
