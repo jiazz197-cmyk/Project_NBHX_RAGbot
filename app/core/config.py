@@ -353,6 +353,9 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     BGE_M3_TIMEOUT_SEC: int = Field(30, ge=1, le=600, env="BGE_M3_TIMEOUT_SEC")
     BGE_M3_MAX_RETRIES: int = Field(3, ge=1, le=10, env="BGE_M3_MAX_RETRIES")
     BGE_M3_RETRY_DELAY_SEC: int = Field(3, ge=0, le=120, env="BGE_M3_RETRY_DELAY_SEC")
+    # 单次批量嵌入的文本条数（llama-index embed_batch_size）：入库链路按该值分片，
+    # 一次 HTTP 带走一批（issue #28/#35）；上限 2048 是 OpenAI 兼容接口的硬约束。
+    BGE_M3_BATCH_SIZE: int = Field(64, ge=1, le=2048, env="BGE_M3_BATCH_SIZE")
 
     RERANKER_API_URL: str = Field("http://172.28.16.50:8096/v1/rerank", env="RERANKER_API_URL")
     RERANKER_MODEL_NAME: str = Field("bge-reranker-v2-m3", env="RERANKER_MODEL_NAME")

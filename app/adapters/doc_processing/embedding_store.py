@@ -1,35 +1,61 @@
+"""BGE-M3 嵌入适配器与 PGVector 写入封装（issue #35，含 #28 范围）。
+
+``BGEM3EmbeddingWrapper`` 是 ``llama_index.embeddings.openai.OpenAIEmbedding`` 的
+薄子类：推理网关（GPUStack）暴露的就是标准 OpenAI 兼容 ``POST /v1/embeddings``，
+传输层（连接复用、超时、批量分片、按 index 解析）交给 openai SDK，本模块只保留
+BGE-M3 侧的承重语义：
+
+1. 空文本 → 零向量（空串会让 rerank 网关直接 400，pgvector 也不接受空向量）；
+2. NaN / Inf → 零向量（否则污染 pgvector）；
+3. 批量整批失败 → 逐条回退（整批 400 时不能整批丢）；
+4. 每次重试的日志行（``_embedding_retry_before_sleep``，排障依据）；
+5. ``probe(timeout_sec)`` 启动探活 + ``embed_text`` / ``embed_texts`` 公开方法。
+
+``_get_text_embeddings`` 覆写走真实批量接口，入库链路（``embed_nodes →
+get_text_embedding_batch``）一次 HTTP 带 ``embed_batch_size`` 条，不再逐 chunk
+串行（即 #28）。
+"""
+
 import logging
 import math
-from typing import Dict, List, Optional
 import threading
+from typing import Dict, List, Optional, Tuple
 
-import torch
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
-from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.schema import TextNode
+from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.postgres import PGVectorStore
 from pydantic import Field
 from tenacity import (
-    retry,
+    AsyncRetrying,
+    Retrying,
     retry_if_exception_type,
     stop_after_attempt,
     wait_fixed,
 )
 
 from app.core.config import settings
-from app.core.http_client import get_http_client, get_sync_http_client
+from app.core.http_client import HttpClientManager, get_sync_http_client
 from .exceptions import EmbeddingError, VectorStoreError
 
 logger = logging.getLogger(__name__)
 
+# BGE-M3 输出维度：空文本零向量占位用，与 PGVectorStore 的 embed_dim 一致
+_EMBED_DIM = 1024
 
 _EMBEDDING_INSTANCES: Dict[str, "BGEM3EmbeddingWrapper"] = {}
 _EMBEDDING_LOCK = threading.Lock()
 
 # 调用参数从配置读取（.env）：BGE_M3_MAX_RETRIES / BGE_M3_RETRY_DELAY_SEC；
-# 装饰器在函数定义期求值，模块导入时固化（settings 为导入期单例，与全局常量语义一致）
+# 模块导入时固化（settings 为导入期单例，与全局常量语义一致）
 _EMBEDDING_MAX_RETRIES = settings.BGE_M3_MAX_RETRIES
 _EMBEDDING_RETRY_DELAY_SEC = settings.BGE_M3_RETRY_DELAY_SEC
+_RETRY_KWARGS = dict(
+    stop=stop_after_attempt(_EMBEDDING_MAX_RETRIES),
+    wait=wait_fixed(_EMBEDDING_RETRY_DELAY_SEC),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
 
 
 def _embedding_retry_before_sleep(label: str):
@@ -50,192 +76,189 @@ def _embedding_retry_before_sleep(label: str):
     return _log
 
 
-class BGEM3EmbeddingWrapper(BaseEmbedding):
-    """BGE-M3 嵌入封装（通过 Docker HTTP 接口调用远程模型）"""
+def _retry_call(call, label: str):
+    """同步：带重试日志地执行一次请求（重试 N 次后原样抛出）。"""
+    for attempt in Retrying(before_sleep=_embedding_retry_before_sleep(label), **_RETRY_KWARGS):
+        with attempt:
+            return call()
 
-    model: object = Field(description="BGE-M3 远程 API 占位")
-    api_url: str = Field(default="", description="BGE-M3 嵌入服务地址")
-    model_name: str = Field(default="", description="BGE-M3 模型名称")
+
+async def _aretry_call(call, label: str):
+    """异步版本，重试参数与日志格式和同步完全一致。"""
+    async for attempt in AsyncRetrying(before_sleep=_embedding_retry_before_sleep(label), **_RETRY_KWARGS):
+        with attempt:
+            return await call()
+
+
+def _to_api_base(api_url: str) -> str:
+    """``.../v1/embeddings`` → ``.../v1``。
+
+    配置项 ``BGE_M3_API_URL`` 存的是**完整端点**（历史手写 httpx 直接 POST 它，
+    ``probe_services`` 也把它当展示地址），而 openai SDK 的 ``base_url`` 会自动
+    补 ``/embeddings``，所以这里只剥掉尾部的 ``/embeddings``。
+    """
+    base = (api_url or "").rstrip("/")
+    return base[: -len("/embeddings")] if base.endswith("/embeddings") else base
+
+
+def _zero_nan(vec: List[float]) -> List[float]:
+    """NaN / Inf 向量回退零向量（pgvector 不接受 NaN，会污染整列）。"""
+    if any(math.isnan(x) or math.isinf(x) for x in vec):
+        logger.warning("检测到 NaN/Inf 嵌入，返回零向量")
+        return [0.0] * len(vec)
+    return vec
+
+
+def _split_empty(texts: List[str]) -> Tuple[List[Optional[List[float]]], List[Tuple[int, str]]]:
+    """空文本直接占位零向量，其余待请求；返回（按输入顺序的槽位, [(下标, 文本)]）。"""
+    slots: List[Optional[List[float]]] = [None if t and t.strip() else [0.0] * _EMBED_DIM for t in texts]
+    return slots, [(i, t) for i, t in enumerate(texts) if slots[i] is None]
+
+
+class BGEM3EmbeddingWrapper(OpenAIEmbedding):
+    """BGE-M3 嵌入封装（通过 OpenAI 兼容 HTTP 接口调用远程模型）。"""
+
+    api_url: str = Field(default="", description="BGE-M3 嵌入服务完整端点（/v1/embeddings）")
 
     def __init__(
         self,
         api_url: Optional[str] = None,
         model_name: Optional[str] = None,
+        http_client=None,
+        async_http_client=None,
     ):
         try:
-            if api_url is None:
-                api_url = settings.BGE_M3_API_URL
-            if model_name is None:
-                # 需与服务启动时的 --served-model-name 保持一致
-                model_name = settings.BGE_M3_MODEL_NAME
-
-            # 不再本地加载模型，model 只是占位；api_url / model_name 作为字段传入
-            super().__init__(model=None, api_url=api_url, model_name=model_name)
-
-            cache_key = f"{self.api_url}:{self.model_name}"
+            api_url = api_url or settings.BGE_M3_API_URL
+            # 需与服务启动时的 --served-model-name 保持一致
+            model_name = model_name or settings.BGE_M3_MODEL_NAME
+            super().__init__(
+                # 从 kwargs 传入 model_name：绕开 OpenAIEmbedding 对官方模型枚举的校验
+                model_name=model_name,
+                api_base=_to_api_base(api_url),
+                # 网关 Bearer Key；为空时 openai SDK 不发 Authorization 头
+                api_key=(settings.AI_INFERENCE_API_KEY or "").strip(),
+                timeout=float(settings.BGE_M3_TIMEOUT_SEC),
+                # 重试由本模块 tenacity 统一负责（保留 BGE-M3 日志行），SDK 侧关掉
+                max_retries=0,
+                embed_batch_size=settings.BGE_M3_BATCH_SIZE,
+                # 复用全局 httpx 连接池（与改造前 get_http_client/get_sync_http_client 一致）；
+                # 这两个参数同时是测试注入口（传 MockTransport 客户端）
+                http_client=http_client if http_client is not None else get_sync_http_client(),
+                async_http_client=(
+                    async_http_client if async_http_client is not None else HttpClientManager.get_instance()
+                ),
+                api_url=api_url,
+            )
             with _EMBEDDING_LOCK:
-                _EMBEDDING_INSTANCES[cache_key] = self
-
+                _EMBEDDING_INSTANCES[f"{api_url}:{model_name}"] = self
             logger.info(
-                "BGE-M3 远程接口配置完成（仅登记地址，不校验连通性）: %s (model=%s)",
-                self.api_url,
-                self.model_name,
+                "BGE-M3 远程接口配置完成（仅登记地址，不校验连通性）: %s (model=%s, batch=%s)",
+                api_url,
+                model_name,
+                self.embed_batch_size,
             )
         except Exception as exc:
             raise EmbeddingError(f"初始化 BGE-M3 远程接口失败: {exc}") from exc
 
-    def _auth_headers(self) -> Dict[str, str]:
-        """网关鉴权头；AI_INFERENCE_API_KEY 为空时返回空 dict（兼容无鉴权端点）。"""
-        key = (settings.AI_INFERENCE_API_KEY or "").strip()
-        return {"Authorization": f"Bearer {key}"} if key else {}
+    # ---- 传输层：同步 / 异步各一份，其余全部收敛到这两个 ----
 
-    def _parse_embedding(self, data: dict) -> List[float]:
-        embedding = None
-        if isinstance(data, dict):
-            if "data" in data and data["data"]:
-                first_item = data["data"][0]
-                embedding = first_item.get("embedding") or first_item.get("vector")
-            else:
-                embedding = data.get("embedding") or data.get("vector")
+    def _vectors(self, response) -> List[List[float]]:
+        """按 index 归位（网关并发返回时顺序不保证），并逐条做 NaN/Inf → 零向量。"""
+        return [_zero_nan(list(item.embedding)) for item in sorted(response.data, key=lambda d: d.index)]
 
-        if not isinstance(embedding, list):
-            raise ValueError(f"远程接口返回格式不符合预期: {data}")
-
-        if any(math.isnan(x) or math.isinf(x) for x in embedding):
-            logger.warning("检测到 NaN/Inf 嵌入，返回零向量")
-            return [0.0] * len(embedding)
-
-        return embedding
-
-    def _parse_embeddings_batch(self, data: dict) -> List[List[float]]:
-        """解析批量嵌入响应，按 index 排序返回，NaN/Inf 项回退零向量。"""
-        items = []
-        if isinstance(data, dict) and isinstance(data.get("data"), list):
-            items = list(data["data"])
-        else:
-            raise ValueError(f"远程接口批量返回格式不符合预期: {data}")
-
-        ordered = sorted(items, key=lambda it: it.get("index", 0))
-        embeddings: List[List[float]] = []
-        for item in ordered:
-            vec = item.get("embedding") or item.get("vector")
-            if not isinstance(vec, list):
-                raise ValueError(f"远程接口批量返回项格式不符合预期: {item}")
-            if any(math.isnan(x) or math.isinf(x) for x in vec):
-                logger.warning("批量嵌入检测到 NaN/Inf，该项回退零向量")
-                vec = [0.0] * len(vec)
-            embeddings.append(vec)
-        return embeddings
-
-    async def _fetch_embedding(self, text: str) -> List[float]:
-        if not text or not text.strip():
-            return [0.0] * 1024
-
-        @retry(
-            stop=stop_after_attempt(_EMBEDDING_MAX_RETRIES),
-            wait=wait_fixed(_EMBEDDING_RETRY_DELAY_SEC),
-            retry=retry_if_exception_type(Exception),
-            reraise=True,
-            before_sleep=_embedding_retry_before_sleep("异步嵌入"),
+    def _post_sync(self, texts: List[str]) -> List[List[float]]:
+        response = self._get_client().embeddings.create(
+            model=self.model_name, input=texts, timeout=self.timeout
         )
-        async def _single_async_embedding() -> List[float]:
-            payload = {"model": self.model_name, "input": [text]}
-            client = await get_http_client()
-            response = await client.post(
-                self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
-            )
-            response.raise_for_status()
-            return self._parse_embedding(response.json())
+        if len(response.data) != len(texts):
+            raise EmbeddingError(f"嵌入接口返回条数不符: 期望 {len(texts)}，实际 {len(response.data)}")
+        return self._vectors(response)
 
-        try:
-            return await _single_async_embedding()
-        except Exception as last_exc:
-            raise EmbeddingError(
-                f"异步调用远程 BGE-M3 接口失败（重试 {_EMBEDDING_MAX_RETRIES} 次）: {last_exc}"
-            ) from last_exc
-
-    def _fetch_embedding_sync(self, text: str) -> List[float]:
-        if not text or not text.strip():
-            return [0.0] * 1024
-
-        @retry(
-            stop=stop_after_attempt(_EMBEDDING_MAX_RETRIES),
-            wait=wait_fixed(_EMBEDDING_RETRY_DELAY_SEC),
-            retry=retry_if_exception_type(Exception),
-            reraise=True,
-            before_sleep=_embedding_retry_before_sleep("同步嵌入"),
+    async def _post_async(self, texts: List[str]) -> List[List[float]]:
+        response = await self._get_aclient().embeddings.create(
+            model=self.model_name, input=texts, timeout=self.timeout
         )
-        def _single_sync_embedding() -> List[float]:
-            payload = {"model": self.model_name, "input": [text]}
-            client = get_sync_http_client()
-            response = client.post(
-                self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
-            )
-            response.raise_for_status()
-            return self._parse_embedding(response.json())
+        if len(response.data) != len(texts):
+            raise EmbeddingError(f"嵌入接口返回条数不符: 期望 {len(texts)}，实际 {len(response.data)}")
+        return self._vectors(response)
 
-        try:
-            return _single_sync_embedding()
-        except Exception as last_exc:
-            raise EmbeddingError(
-                f"同步调用远程 BGE-M3 接口失败（重试 {_EMBEDDING_MAX_RETRIES} 次）: {last_exc}"
-            ) from last_exc
+    # ---- 承重语义：空文本占位、批量失败逐条回退、错误包成 EmbeddingError ----
 
-    def _fetch_embeddings_batch_sync(self, texts: List[str]) -> List[List[float]]:
-        """单次批量请求；空文本回退零向量，保持输入顺序。"""
-        results: List[Optional[List[float]]] = []
-        non_empty_idx: List[int] = []
-        non_empty_texts: List[str] = []
-        for i, t in enumerate(texts):
-            if not t or not t.strip():
-                results.append([0.0] * 1024)
-            else:
-                results.append(None)
-                non_empty_idx.append(i)
-                non_empty_texts.append(t)
-
-        if non_empty_texts:
-            @retry(
-                stop=stop_after_attempt(_EMBEDDING_MAX_RETRIES),
-                wait=wait_fixed(_EMBEDDING_RETRY_DELAY_SEC),
-                retry=retry_if_exception_type(Exception),
-                reraise=True,
-                before_sleep=_embedding_retry_before_sleep("批量嵌入"),
-            )
-            def _single_batch_sync() -> List[List[float]]:
-                payload = {"model": self.model_name, "input": non_empty_texts}
-                client = get_sync_http_client()
-                response = client.post(
-                    self.api_url, json=payload, timeout=settings.BGE_M3_TIMEOUT_SEC, headers=self._auth_headers()
-                )
-                response.raise_for_status()
-                return self._parse_embeddings_batch(response.json())
-
+    def _embed_texts_sync(self, texts: List[str]) -> List[List[float]]:
+        """空文本零向量占位 + 单次批量请求 + 整批失败逐条回退 + 按输入顺序还原。"""
+        slots, pending = _split_empty(texts)
+        if pending:
+            payload = [text for _, text in pending]
             try:
-                embeddings = _single_batch_sync()
-            except Exception as last_exc:
-                raise EmbeddingError(
-                    f"批量调用远程 BGE-M3 接口失败（重试 {_EMBEDDING_MAX_RETRIES} 次）: {last_exc}"
-                ) from last_exc
-            for slot, vec in zip(non_empty_idx, embeddings):
-                results[slot] = vec
-        return [r for r in results if r is not None]
+                vectors = _retry_call(lambda: self._post_sync(payload), "批量嵌入")
+            except Exception as batch_exc:
+                logger.warning("批量嵌入失败，回退逐条请求: %s", batch_exc)
+                vectors = [self._embed_one_sync(text) for text in payload]
+            for (slot, _), vec in zip(pending, vectors):
+                slots[slot] = vec
+        return [vec for vec in slots if vec is not None]
 
-    def _get_text_embedding(self, text: str) -> List[float]:
+    async def _embed_texts_async(self, texts: List[str]) -> List[List[float]]:
+        slots, pending = _split_empty(texts)
+        if pending:
+            payload = [text for _, text in pending]
+            try:
+                vectors = await _aretry_call(lambda: self._post_async(payload), "异步批量嵌入")
+            except Exception as batch_exc:
+                logger.warning("异步批量嵌入失败，回退逐条请求: %s", batch_exc)
+                vectors = [await self._embed_one_async(text) for text in payload]
+            for (slot, _), vec in zip(pending, vectors):
+                slots[slot] = vec
+        return [vec for vec in slots if vec is not None]
+
+    def _embed_one_sync(self, text: str) -> List[float]:
+        """单条路径（查询嵌入走这条）：空文本不发请求，失败只走**一个**重试周期。
+
+        等价于改造前的 ``_fetch_embedding_sync``；不经 ``_split_empty``，所以空文本
+        判断要在这里自己兜（批量路径则由 ``_split_empty`` 过滤）。
+        """
+        if not text or not text.strip():
+            return [0.0] * _EMBED_DIM
         try:
-            return self._fetch_embedding_sync(text)
+            return _retry_call(lambda: self._post_sync([text]), "同步嵌入")[0]
         except Exception as exc:
             logger.exception("调用远程 BGE-M3 接口生成嵌入失败")
-            raise EmbeddingError(f"调用远程 BGE-M3 接口失败: {exc}") from exc
+            raise EmbeddingError(
+                f"调用远程 BGE-M3 接口失败（重试 {_EMBEDDING_MAX_RETRIES} 次）: {exc}"
+            ) from exc
+
+    async def _embed_one_async(self, text: str) -> List[float]:
+        if not text or not text.strip():
+            return [0.0] * _EMBED_DIM
+        try:
+            return (await _aretry_call(lambda: self._post_async([text]), "异步嵌入"))[0]
+        except Exception as exc:
+            raise EmbeddingError(
+                f"异步调用远程 BGE-M3 接口失败（重试 {_EMBEDDING_MAX_RETRIES} 次）: {exc}"
+            ) from exc
+
+    # ---- llama-index BaseEmbedding 接口（单条走 _embed_one_*，批量走 _embed_texts_*） ----
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        return self._embed_one_sync(text)
 
     def _get_query_embedding(self, query: str) -> List[float]:
         return self._get_text_embedding(query)
 
-    async def _aget_query_embedding(self, query: str) -> List[float]:
-        return await self._fetch_embedding(query)
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """批量入库主链路（#28）：一次 HTTP 带 embed_batch_size 条。"""
+        return self._embed_texts_sync(texts)
 
     async def _aget_text_embedding(self, text: str) -> List[float]:
-        return await self._fetch_embedding(text)
+        return await self._embed_one_async(text)
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        return await self._aget_text_embedding(query)
+
+    async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        return await self._embed_texts_async(texts)
+
+    # ---- 对外公开方法（外部调用点沿用） ----
 
     def embed_text(self, text: str) -> List[float]:
         """对外暴露的文本向量化接口"""
@@ -243,57 +266,38 @@ class BGEM3EmbeddingWrapper(BaseEmbedding):
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """批量向量化文本（单次批量请求，批量失败时回退逐条）"""
-        if not texts:
-            return []
-        try:
-            return self._fetch_embeddings_batch_sync(texts)
-        except Exception as batch_exc:
-            logger.warning("批量嵌入失败，回退逐条请求: %s", batch_exc)
-            return [self._get_text_embedding(text) for text in texts]
+        return self._embed_texts_sync(texts)
 
     async def probe(self, timeout_sec: float = 5.0) -> List[float]:
         """单次最小请求探活远程接口；不重试、短超时，失败抛异常。
 
         供启动阶段连通性检查使用：用一个极小 payload 真实走一遍
-        「发请求 → raise_for_status → 解析嵌入」链路，地址错误/服务未起
+        「发请求 → 状态码 → 解析嵌入」链路，地址错误/服务未起
         会在这里暴露，而不是推迟到首次 RAG 调用。
         """
-        payload = {"model": self.model_name, "input": ["ping"]}
-        client = await get_http_client()
-        response = await client.post(
-            self.api_url, json=payload, timeout=timeout_sec, headers=self._auth_headers()
+        response = await self._get_aclient().embeddings.create(
+            model=self.model_name, input=["ping"], timeout=timeout_sec
         )
-        response.raise_for_status()
-        return self._parse_embedding(response.json())
+        return _zero_nan(list(response.data[0].embedding))
 
     @classmethod
     def cleanup_all_instances(cls):
-        """清理缓存的模型实例（远程模式下主要清理缓存字典）"""
+        """清理缓存的实例（远程模式下即清缓存字典，不涉及本地显存）"""
         with _EMBEDDING_LOCK:
             for key in list(_EMBEDDING_INSTANCES.keys()):
                 logger.info("清理 BGE-M3 远程实例: %s", key)
                 _EMBEDDING_INSTANCES.pop(key, None)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("GPU 缓存已清理")
-
     def get_memory_info(self) -> Dict:
-        """查看当前使用信息（远程模式主要展示接口信息）"""
-        info = {
+        """查看当前使用信息（远程模式只展示接口信息）"""
+        return {
             "mode": "remote",
-            "api_url": getattr(self, "api_url", ""),
-            "model_name": getattr(self, "model_name", ""),
+            "api_url": self.api_url,
+            "api_base": self.api_base,
+            "model_name": self.model_name,
+            "embed_batch_size": self.embed_batch_size,
             "instances_count": len(_EMBEDDING_INSTANCES),
         }
-        if torch.cuda.is_available():
-            info.update(
-                {
-                    "gpu_allocated_mb": torch.cuda.memory_allocated() / 1024 / 1024,
-                    "gpu_reserved_mb": torch.cuda.memory_reserved() / 1024 / 1024,
-                }
-            )
-        return info
 
 
 class VectorStoreManager:

@@ -7,14 +7,21 @@
 probe_services() 用单次最小请求真实探活；本文件用 httpx.MockTransport
 覆盖：全部可达 / 嵌入服务不可达（不影响 reranker）/ 200 但结构不符 /
 HTTP 404（端口有东西但路径错）/ 探活必须单次不重试。
+
+注（issue #35）：嵌入客户端已收敛到 llama-index OpenAIEmbedding（openai SDK），
+注入点不再是模块里的 ``embedding_store.get_http_client``，而是
+``HttpClientManager.get_instance()``——``BGEM3EmbeddingWrapper`` 构造时从这里取
+共享 async client 交给 SDK。reranker 仍走模块级 ``get_http_client``。
+异常类型也随之换了一套：嵌入侧是 openai SDK 的 ``APIConnectionError`` /
+``NotFoundError`` / ``ValueError``（响应里没有 data），reranker 侧仍是 httpx 的
+``ConnectError`` / ``HTTPStatusError`` / ``ValueError``。
 """
 
 from __future__ import annotations
 
 import pytest
 
-# 重依赖（torch / llama_index）缺失时跳过，CI 最小依赖集下其余测试仍可跑
-pytest.importorskip("torch")
+# 重依赖（llama_index）缺失时跳过，CI 最小依赖集下其余测试仍可跑
 pytest.importorskip("llama_index")
 
 import httpx
@@ -42,7 +49,7 @@ def _make_rag_system() -> RAGretriever.RAGRetrieverSystem:
 
 @pytest_asyncio.fixture
 async def fake_http(monkeypatch):
-    """把两个适配器模块里的 get_http_client 换成 MockTransport 客户端。"""
+    """把两个适配器的 HTTP 出口换成 MockTransport 客户端。"""
     clients: list[httpx.AsyncClient] = []
 
     def _install(handler) -> None:
@@ -52,7 +59,11 @@ async def fake_http(monkeypatch):
         async def _get_client() -> httpx.AsyncClient:
             return client
 
-        monkeypatch.setattr(embedding_store, "get_http_client", _get_client)
+        # 嵌入侧：openai SDK 用的就是 wrapper 构造时注入的共享 async client
+        monkeypatch.setattr(
+            embedding_store.HttpClientManager, "get_instance", classmethod(lambda cls: client)
+        )
+        # reranker 侧：仍是模块级 get_http_client
         monkeypatch.setattr(RAGretriever, "get_http_client", _get_client)
 
     yield _install
@@ -96,7 +107,8 @@ async def test_probe_services_embedding_down_does_not_affect_reranker(fake_http)
 
     by_name = {r["name"]: r for r in results}
     assert by_name["BGE-M3 嵌入服务"]["ok"] is False
-    assert "ConnectError" in by_name["BGE-M3 嵌入服务"]["error"]
+    # 嵌入侧是 openai SDK 的异常（不再手写 httpx 传输）
+    assert "APIConnectionError" in by_name["BGE-M3 嵌入服务"]["error"]
     # 一个服务挂了不能拖垮另一个的探活结果
     assert by_name["Reranker 重排服务"]["ok"] is True
 
@@ -109,8 +121,11 @@ async def test_probe_services_rejects_wrong_payload_shape(fake_http):
 
     results = await rag.probe_services()
 
+    by_name = {r["name"]: r for r in results}
     assert all(r["ok"] is False for r in results)
-    assert all("ValueError" in r["error"] for r in results)
+    # 嵌入侧：openai SDK 的响应校验（data 为空 → ValueError）；reranker：手写解析
+    assert "ValueError" in by_name["BGE-M3 嵌入服务"]["error"]
+    assert "ValueError" in by_name["Reranker 重排服务"]["error"]
 
 
 @pytest.mark.asyncio
@@ -121,8 +136,13 @@ async def test_probe_services_reports_http_error_status(fake_http):
 
     results = await rag.probe_services()
 
+    by_name = {r["name"]: r for r in results}
     assert all(r["ok"] is False for r in results)
-    assert all("HTTPStatusError" in r["error"] for r in results)
+    # 嵌入侧：openai SDK 按状态码映射异常类型（NotFoundError = 404），
+    # 非 JSON 错误体的 message 就是 body 文本，URL 由 probe_services 的日志另外带上
+    assert "NotFoundError" in by_name["BGE-M3 嵌入服务"]["error"]
+    assert "HTTPStatusError" in by_name["Reranker 重排服务"]["error"]
+    assert "404" in by_name["Reranker 重排服务"]["error"]
 
 
 @pytest.mark.asyncio

@@ -33,12 +33,27 @@ def _client_kwargs() -> dict:
 
 class HttpClientManager:
     _instance: httpx.AsyncClient | None = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls) -> httpx.AsyncClient:
+        """同步取（必要时惰性创建）共享 async client。
+
+        适配器可能在协程外构造（如 OpenAIEmbedding 子类在 ``__init__`` 里把 client
+        注入 openai SDK），那里没法 ``await``；建连本身与事件循环无关，真正的连接池
+        在首个请求时才建立，因此与 :meth:`get` 共用同一单例。加锁的原因同理：
+        ``__init__`` 可能来自多个 worker 线程，并发首访不能各建一个客户端
+        （那样会分裂成两个连接池）。
+        """
+        if cls._instance is None or cls._instance.is_closed:
+            with cls._lock:
+                if cls._instance is None or cls._instance.is_closed:
+                    cls._instance = httpx.AsyncClient(**_client_kwargs())
+        return cls._instance
 
     @classmethod
     async def get(cls) -> httpx.AsyncClient:
-        if cls._instance is None or cls._instance.is_closed:
-            cls._instance = httpx.AsyncClient(**_client_kwargs())
-        return cls._instance
+        return cls.get_instance()
 
     @classmethod
     async def close(cls) -> None:
