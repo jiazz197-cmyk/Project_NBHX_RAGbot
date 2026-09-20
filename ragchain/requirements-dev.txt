@@ -74,8 +74,10 @@ langgraph-checkpoint==4.2.0
     # via
     #   langgraph
     #   langgraph-prebuilt
-langgraph-prebuilt==1.0.13
-    # via langgraph
+langgraph-prebuilt==1.0.8
+    # via
+    #   -r requirements.in
+    #   langgraph
 langgraph-sdk==0.3.15
     # via langgraph
 langsmith==0.12.6

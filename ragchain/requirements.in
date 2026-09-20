@@ -2,6 +2,12 @@
 # 版本基线对齐主应用 requirements.txt / docs/langchain-rag-container-api-contract.md §10
 langchain==1.1.3
 langchain-openai
+# 与 langgraph==1.0.10 的兼容 pin：langgraph-prebuilt>=1.0.9 的 tool_node.py 模块级
+# `from langgraph.runtime import ExecutionInfo`，而 langgraph 1.0.10 的 runtime 没有该名字，
+# 会连带打死 langgraph.prebuilt / langchain.agents / langchain.agents.middleware 三处 import。
+# langchain==1.1.3 要求 langgraph<1.1.0，不能整体升级，只能把 prebuilt 钉在 1.0.8
+# （恰为 langgraph 1.0.10 自身要求的 >=1.0.8,<1.1.0 区间下沿）。升 langgraph 时同步解除本 pin。
+langgraph-prebuilt==1.0.8
 pandas==2.2.3
 fastapi==0.116.1
 uvicorn==0.35.0

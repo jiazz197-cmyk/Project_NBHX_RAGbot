@@ -167,6 +167,14 @@ UV_CACHE_DIR=$PWD/../.cache/uv uv pip compile requirements-dev.in \
   --index-url https://mirrors.aliyun.com/pypi/simple --python-version 3.12 \
   -o requirements-dev.txt
 
+# ⚠️ 锁定后必须跑 agent 栈 import 冒烟（tests/test_import_smoke.py，issue #29 教训）：
+#    依赖解析器从不校验跨包兼容性——langgraph-prebuilt 1.0.13 与 langgraph 1.0.10
+#    不兼容，compile 全绿但 langchain.agents 整包 import 不了，线上却在跑。
+#    app/ 不 import agent 栈，回归不会自然暴露。同步本地测试 venv 后跑：
+#      uv pip install --python ../.cache/ragchain-venv/bin/python \
+#        -r requirements-dev.txt --index-url https://mirrors.aliyun.com/pypi/simple
+#      ../.cache/ragchain-venv/bin/python -m pytest tests/test_import_smoke.py -q
+
 # 重建镜像（requirements.txt 变化会使 uv 安装层失效）
 cd /data/jiazhenyu/RAG/project-nbhx
 bash scripts/dev.sh ragchain build
