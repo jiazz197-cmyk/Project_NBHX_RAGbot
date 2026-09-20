@@ -1,7 +1,7 @@
 # ragchain 运维手册
 
 > 适用对象：`ragchain/` 独立容器（LangChain RAG 核心链）。
-> 镜像 `nbhx-ragchain:py312`（仅本地构建）；宿主端口 `8010` → 容器 `8000`。
+> 镜像 `nbhx-ragchain:py312`（本地 tag；registry 见 §3.3.1）；宿主端口 `8010` → 容器 `8000`。
 > 本文所有命令的起始目录默认为仓库根 `/data/jiazhenyu/RAG/project-nbhx`。
 > **日常最短路径**：改代码 → `bash scripts/dev.sh ragchain restart`；改依赖 → `bash scripts/dev.sh ragchain build`。
 
@@ -13,7 +13,7 @@
 | 构建文件 | `ragchain/Dockerfile`、`ragchain/requirements.txt`、`ragchain/compose.yaml` |
 | 代码挂载 | `ragchain/app` → 容器 `/app/app:ro`（**镜像里不含代码**，改代码只需重启进程） |
 | 运行时配置 | `ragchain/.env`（从 `.env.example` 复制，gitignored） |
-| 镜像 | `nbhx-ragchain:py312`（不推 registry；只有 `requirements.txt` 变化才需重建） |
+| 镜像 | `nbhx-ragchain:py312`（改依赖后重建并推 registry，见 §3.3.1） |
 | 容器端口 | 宿主 `8010` → 容器 `8000` |
 | 健康检查 | `GET http://127.0.0.1:8010/healthz` → `{"status":"ok"}` |
 | 统一入口 | `bash scripts/dev.sh ragchain up\|restart\|build\|check\|logs\|ps\|down\|shell\|test` |
@@ -180,6 +180,32 @@ cd /data/jiazhenyu/RAG/project-nbhx
 bash scripts/dev.sh ragchain build
 bash scripts/dev.sh ragchain up
 bash scripts/dev.sh ragchain check      # 应打印 ✅ 依赖哈希一致
+```
+
+### 3.3.1 推送镜像到 GitLab Registry（改依赖后，管理员做）
+
+镜像 tag 双份：`py312`（移动）+ `py312-<指纹>`（可复现，指纹 = `requirements.txt` sha256 前 12 位，
+与镜像内 `/opt/venv/.requirements-hash`、`ragchain check` 判据一致）。
+
+```bash
+cd /data/jiazhenyu/RAG/project-nbhx
+
+# 前置（每台要推拉的机器各一次）：http registry 放行 + 登录
+sudo bash scripts/enable_insecure_registry.sh
+docker login 10.80.153.12:5050          # 用户名=GitLab 用户名，密码=PAT（含 write_registry 或 api）
+
+export DOCKER_CONFIG=$PWD/.cache/docker # 本机 ~/.docker 不可写时需要
+
+HASH=$(sha256sum ragchain/requirements.txt | cut -c1-12)
+docker tag nbhx-ragchain:py312 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312
+docker tag nbhx-ragchain:py312 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312-$HASH
+docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312
+docker push 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312-$HASH
+
+# 同事侧拉取（retag 回本地名，compose 才认）：
+# docker pull 10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312
+# docker tag  10.80.153.12:5050/carl_jia/ragchatbot/nbhx-ragchain:py312 nbhx-ragchain:py312
+# 然后照常 bash scripts/dev.sh ragchain up
 ```
 
 ### 3.4 镜像里到底有什么

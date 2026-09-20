@@ -866,7 +866,7 @@ RAG 容器内部用 LangChain 调 OpenAI 兼容 LLM：
 
 ## 14. ragchain 容器配置（环境变量）
 
-ragchain 独立包位于 `ragchain/`，配置以 `ragchain/.env.example` 为唯一示例源，加载到 `app.config.Settings`；构建上下文 = `ragchain/` 自身（`ragchain/Dockerfile`），镜像 `nbhx-ragchain:py312` 仅本地构建。
+ragchain 独立包位于 `ragchain/`，配置以 `ragchain/.env.example` 为唯一示例源，加载到 `app.config.Settings`；构建上下文 = `ragchain/` 自身（`ragchain/Dockerfile`），镜像 `nbhx-ragchain:py312`，改依赖后重建并推 GitLab Registry（见 `ragchain/docs/operations.md` §3.3.1）。
 
 | 键 | 默认值 | 说明 |
 |---|---|---|
