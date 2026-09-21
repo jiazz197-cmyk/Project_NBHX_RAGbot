@@ -7,7 +7,6 @@
 #   uv pip install -r requirements-rag.txt \
 #     --index-url https://pypi.org/simple \
 #     --extra-index-url https://download.pytorch.org/whl/cu130 \
-#     --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
 #     --index-strategy unsafe-best-match
 #
 # 说明：

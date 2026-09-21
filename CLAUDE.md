@@ -65,7 +65,7 @@ requirements*.txt        主应用锁 / RAG 栈（requirements-rag.txt）/ 测�
 |---|---|---|
 | `.venv/` | 后端唯一解释器（含 pip），`VENV_DIR` 默认即此 | GB 级（含 CUDA wheel） |
 | `.cache/uv`、`.cache/pip` | Python 下载缓存 | — |
-| `.cache/{huggingface,torch,paddlex,paddle-extension,modelscope}` | 模型 / 推理运行时缓存（PaddleX 走 `PADDLE_PDX_CACHE_HOME`） | — |
+| `.cache/{huggingface,torch,modelscope}` | 模型 / 推理运行时缓存（paddle 系缓存已随 OCR 服务化移除） | — |
 | `.cache/{npm,node-gyp,corepack,turbo}` | Node 侧缓存 | — |
 | `frontend/node_modules/` | 前端依赖（pnpm workspace 默认位置） | ~220M |
 | `frontend/.pnpm-store`、`frontend/.pnpm-cache` | pnpm 内容寻址存储 / 元数据缓存 | — |
@@ -103,7 +103,7 @@ source scripts/env.sh          # 关键：uv 认 VIRTUAL_ENV，source 后所有 
 
 # 看状态
 uv pip list / freeze / tree    # 已装包 / 锁格式输出 / 依赖树
-uv pip check                   # 依赖一致性（预期留 1 条 paddle 的 nccl 提示，见上）
+uv pip check                   # 依赖一致性（应无 incompatibility；paddle 已移出主清单）
 
 # 装依赖：**只增不减**，不会卸载清单外的包
 uv pip install -r requirements.txt --overrides requirements-overrides.txt   # ⚠️ overrides 不能省
@@ -118,7 +118,6 @@ uv pip sync requirements.txt requirements-rag.txt requirements-dev.txt
 # 只验证能否整体求解（不安装，改依赖后必跑）
 uv pip compile requirements.txt --index-url https://pypi.org/simple \
   --extra-index-url https://download.pytorch.org/whl/cu130 \
-  --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
   --index-strategy unsafe-best-match
 
 # 重建 / 另建一个干净环境（例如验证「RAG 拆分后的主镜像」而不动现有 .venv）
@@ -129,28 +128,27 @@ uv venv --python 3.12 .cache/lean-venv
 uv cache dir / size / prune
 ```
 
-**四个 requirements 文件的分工**（实测锁定条数：主 179 / RAG 96 / dev 5 / overrides 1）：
+**四个 requirements 文件的分工**（实测锁定条数：主 155 / RAG 96 / dev 5 / overrides 1；OCR 服务化摘除 paddle 三件套 + 23 个 paddle 系孤儿依赖）：
 
 | 文件 | 条数 | 角色 | 什么时候用 |
 |---|---|---|---|
-| `requirements.txt` | 179 | 主应用运行时唯一清单（含 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` 两个**非 PyPI** 包） | 本地后端环境、主应用镜像；**必须配 `--overrides`** |
+| `requirements.txt` | 155 | 主应用运行时唯一清单（唯一的**非 PyPI** 包只剩 `torch==2.9.1+cu130`；paddle 三件套已移除） | 本地后端环境、主应用镜像；**必须配 `--overrides`** |
 | `requirements-rag.txt` | 96（其中 **48 个是 RAG 独有**） | LangChain/LlamaIndex 全套，随「RAG 独立容器」部署 | RAG 容器镜像；过渡期本地 `--with-rag` |
 | `requirements-dev.txt` | 5 | `pytest` / `pytest-asyncio` / `iniconfig` / `pluggy` / `watchfiles`；**部署环境不要装** | 本地开发 + CI |
 | `requirements-overrides.txt` | 1 条 | **不是清单**，是传给 `--overrides` 的冲突排除文件 | 凡装主清单就必须一起带 |
 
 已核对过、不用重新推导的三条事实：
 - **两文件共享的 48 个包（pydantic / sqlalchemy / numpy / httpx / asyncpg / psycopg2-binary …）版本锁定完全一致（逐条比对 0 处差异）** → 「先主清单后 RAG」顺序无关、可重复执行，不会互相翻版本。
-- **`requirements-rag.txt` 里没有 `fastapi` / `uvicorn` / `starlette`，也没有 `torch` / `paddlepaddle-gpu`** → ①RAG 容器要对外暴露 HTTP 得自补 `fastapi`+`uvicorn`；②RAG 镜像不含 GPU wheel，比主镜像小得多（推理走外部服务，不在容器内跑模型）。
+- **`requirements-rag.txt` 里没有 `fastapi` / `uvicorn` / `starlette`，也没有 `torch`（paddle 全家已不在任何清单）** → ①RAG 容器要对外暴露 HTTP 得自补 `fastapi`+`uvicorn`；②RAG 镜像不含 GPU wheel，比主镜像小得多（推理走外部服务，不在容器内跑模型）。
 - `requirements-dev.txt` 显式列 `iniconfig` / `pluggy`，是为了 `uv pip sync`（不展开依赖）时不误删；`packaging` / `Pygments` 已在主清单里。
 
 ⚠️ **`install` 与 `sync` 的差别是这里最大的坑**：`uv pip install -r requirements.txt` **不会**卸载「已装但不在清单里」的包——所以把 RAG 移出 `requirements.txt` 后，现有 `.venv` 里的 RAG 包**依然在**（应用照常能启动）；只有 `uv pip sync` 或重建 venv 才会得到精简环境，那时 RAG 代码未搬走的应用会起不来。
 
-- **额外索引源**：`requirements.txt` 里 `torch==2.9.1+cu130`、`paddlepaddle-gpu==3.2.0` **不在 PyPI**，必须带 torch/paddle 官方索引。另外这两个索引里也有 `fastapi` 等同名包（paddle 索引尤其杂），所以必须加 `--index-strategy unsafe-best-match`，否则 uv 的「命中即锁定首个索引」会把 `fastapi==0.116.1` 判成无解。`scripts/env.sh` 已定义 `TORCH_INDEX` / `PADDLE_INDEX` 并导出 `PIP_EXTRA_INDEX_URL`。
+- **额外索引源**：`requirements.txt` 里唯一不在 PyPI 的包是 `torch==2.9.1+cu130`，必须带 torch 官方索引（paddle 索引已随 OCR 服务化移除）。torch 索引里也有 `fastapi` 等同名包，所以必须加 `--index-strategy unsafe-best-match`，否则 uv 的「命中即锁定首个索引」会把 `fastapi==0.116.1` 判成无解。`scripts/env.sh` 已定义 `TORCH_INDEX` 并导出 `PIP_EXTRA_INDEX_URL`。
 - **`requirements.txt` 是可整体求解的完整锁（2026-09 修好）**：直接 `uv pip install -r requirements.txt` 即可，**不要再用 `--no-deps` 掩盖冲突**。改完务必验证：
   ```bash
   uv pip compile requirements.txt --index-url https://pypi.org/simple \
     --extra-index-url https://download.pytorch.org/whl/cu130 \
-    --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
     --index-strategy unsafe-best-match        # 必须能通过，且不额外多出未锁定的包
   ```
   本次修掉的 3 处矛盾锁定：
@@ -162,8 +160,8 @@ uv cache dir / size / prune
   | `langchain-openai==0.3.12` | 它要求 `openai<2`，与锁定的 `openai==2.8.1` 冲突 | `langchain-openai==0.3.34`（允许 `openai<3`，且兼容 `langchain-core==0.3.77`） |
 
   同时补锁了漏掉的传递依赖：`aiohttp-retry`、`nltk`、`aiosqlite`、`banks`、`xlsxwriter`、`requests-toolbelt`(langsmith 运行时就要)、`email-validator`+`dnspython`（pydantic `EmailStr` 用，**`uv pip check` 查不出来，只有 `import main` 时才会炸**）。
-- **⚠️ 绝不能装 `nvidia-nccl-cu12`**：`paddlepaddle-gpu` 的元数据要求它，但它与 torch 需要的 `nvidia-nccl-cu13` **装的是同一个文件** `nvidia/nccl/lib/libnccl.so.2`——cu12 覆盖 cu13 后 `import torch` 直接崩：`libtorch_cuda.so: undefined symbol: ncclCommWindowDeregister`。已用 [`requirements-overrides.txt`](requirements-overrides.txt) 将其排除（`setup_local_env.sh` 带 `--overrides`）。代价：`uv pip check` 会留 1 条 paddle 的 incompatibility，属**预期**。paddle 只在多卡分布式才用 NCCL，单卡 OCR 推理不受影响。
-- **RAG 栈已整体拆出主清单（2026-09）**：`langchain*`、`llama-index*`、`llama-cloud*`、`llama-parse`、`langsmith`、`openai`、`tiktoken`、`pgvector`、`nltk`、`banks`、`aiosqlite`、`requests-toolbelt` 等 **48 个包**移到 [`requirements-rag.txt`](requirements-rag.txt)（该栈的**完整独立闭包，96 个包**，可单独 `uv pip compile` 通过），随「RAG 独立容器」部署、对外只暴露 HTTP 接口；主清单从 228 → **179 包**（实测 `grep -cE '^[A-Za-z0-9._-]+==' requirements.txt`；早前写的 180 是估算，差 1）。
+- **⚠️ 绝不能装 `nvidia-nccl-cu12`**（历史坑，防御性保留）：它与 torch 需要的 `nvidia-nccl-cu13` **装的是同一个文件** `nvidia/nccl/lib/libnccl.so.2`——cu12 覆盖 cu13 后 `import torch` 直接崩：`libtorch_cuda.so: undefined symbol: ncclCommWindowDeregister`。[`requirements-overrides.txt`](requirements-overrides.txt) 的排除规则**防御性保留**（当前闭包本就解析不出 cu12，防未来有人把 paddle 加回清单时静默复发）。paddle 系 CUDA 库（14 个 nvidia-*-cu12）与 paddle 传递依赖已随 OCR 服务化一并移出主清单。
+- **RAG 栈已整体拆出主清单（2026-09）**：`langchain*`、`llama-index*`、`llama-cloud*`、`llama-parse`、`langsmith`、`openai`、`tiktoken`、`pgvector`、`nltk`、`banks`、`aiosqlite`、`requests-toolbelt` 等 **48 个包**移到 [`requirements-rag.txt`](requirements-rag.txt)（该栈的**完整独立闭包，96 个包**，可单独 `uv pip compile` 通过），随「RAG 独立容器」部署、对外只暴露 HTTP 接口；主清单从 228 → 179 → **155 包**（OCR 服务化再摘 26 条 = paddle 三件套 + 23 个孤儿；实测 `grep -cE '^[A-Za-z0-9._-]+==' requirements.txt`）。
   - ⚠️ **仓库里的 RAG 代码还没搬走**：`main.py`（第 33 行）与 `app/api/v1/registry.py` 仍会 `import langchain/llama_index`，所以在纯主清单环境下应用起不来。
   - 过渡期本地开发：`bash scripts/setup_local_env.sh --with-rag`（默认不装 RAG 栈）。等 RAG 调用改成 HTTP 客户端后即可去掉该开关。
   - 已用「导入拦截器」模拟验证过：**非 RAG 模块在无 RAG 栈时全部可正常 import**（`app.core.*`、`app.models.orm`、`ocr`、`knowledge`、`auth`、`monitoring`）。
@@ -174,7 +172,7 @@ uv cache dir / size / prune
 
 **本地 `.env`（development，已生成，gitignored）**：`ENVIRONMENT=development`、`DEBUG=True`；Postgres/Redis/MinIO 指向本机共享 infra（`/data/infra`），`SECRET_KEY`/`INTERNAL_API_KEY` 为随机值，种子超管 `superuser` / `<seed-superuser-password>`（邮箱 `superuser@nbhx.com`；由 `BOOTSTRAP_SUPERUSER_*` 在启动时写入，**已存在同名用户则跳过**——改账号要先删库里的旧行再重启）。
 - **PostgreSQL 走专用 pgvector 容器**（不是那个 `postgres:16-alpine`）：`/data/infra` 里的 `pgvector-rag` 服务 = `pgvector/pgvector:pg16`，**宿主端口 5433**，用户 `root`，库 `nbhx_dev`（已建 + 已 `CREATE EXTENSION vector`，扩展版本 0.8.6，向量运算实测可用）。`.env` 里 `POSTGRES_PORT=5433` / `POSTGRES_USER=root`。改动库/扩展后确认：`select extname from pg_extension where extname='vector'`。
-- **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / 主 LLM `qwen3.8-27b` + 辅 LLM `Qwen3.6-27B`（Sophnet OpenAI 兼容网关，配置字段 `MAIN_LLM_*` / `SUB_LLM_*`，同地址同 key；辅 LLM 供 memory 压缩、用户画像生成，经 `SUB_LLM_ENABLE_THINKING=False` 默认关思考）：本机不跑这些模型，走 HTTP API。本机**只**跑 `PaddleOCR`（仍待服务化，issue #9）。**`TagGenerator` 已服务化并接入完成**（issue #10 主应用侧）：独立容器 `tagenerator:latest` 暴露 `POST /v1/tags`（宿主 8004），主应用经 `TAGGER_ENDPOINT` 调用——`app/ports/outbound/tag_generator.py`（Port）+ `app/adapters/doc_processing/tagger_client.py`（HTTP 适配器，含探活/重试/熔断），`text_splitter.TagGenerator` 只是薄壳，失败降级为本地 `_simple_tags`；进程内**不再** import torch/keybert，也无本地模型池。宿主跑后端用 `localhost:8004`，dev 容器里由 `docker/compose.dev.yaml` 覆盖为 `host.docker.internal:8004`（两个容器不在同一 docker 网络）。**BGE-M3 嵌入客户端已收敛到 `llama_index.embeddings.openai.OpenAIEmbedding`**（issue #35，含 #28）：`embedding_store.BGEM3EmbeddingWrapper` 是薄子类，传输/批量/响应解析走 openai SDK，入库按 `BGE_M3_BATCH_SIZE`（默认 64）一次 HTTP 带一批；空文本与 NaN→零向量、整批失败逐条回退、重试日志、`probe(timeout_sec)` 四条语义是承重的，别顺手删。⚠️ 依赖瘦身（从 `requirements.txt` 摘掉 torch/sentence-transformers/keybert）**尚未做**，但**进程内已无强制 torch 依赖**：issue #10 清掉 `text_splitter`、issue #35 清掉 `embedding_store` 的顶层 `import torch`，`main.py` 只在 try/except 里可选 import（打印 CUDA 状态）。实测拦截 torch 后 `import main` 正常；剩下的 `paddlepaddle-gpu` 要等 issue #9 的 OCR 服务化。
+- **AI 推理服务全部在外部**（BGE-M3 嵌入 / BGE-reranker-v2-m3 / 主 LLM `qwen3.8-27b` + 辅 LLM `Qwen3.6-27B`（Sophnet OpenAI 兼容网关，配置字段 `MAIN_LLM_*` / `SUB_LLM_*`，同地址同 key；辅 LLM 供 memory 压缩、用户画像生成，经 `SUB_LLM_ENABLE_THINKING=False` 默认关思考）：本机不跑这些模型，走 HTTP API。**OCR 已服务化并接入完成**（issue #9 主应用侧）：独立容器 `paddlex`（`paddlex-with-serving:gpu-cuda12.9`）暴露 `POST /ocr`（宿主 9002），主应用经 `PADDLE_OCR_ENDPOINT` 调用——`app/adapters/doc_processing/ocr_service_client.py`（HTTP 适配器），`doc_reader.PdfParser` 逐页调用（`fileType=1` + `visualize:false`，实测 300DPI A4 页 ~1.3s、响应 4.9KB）。**承重语义别顺手删**：pdfplumber 文本层短路（有文本层的 PDF 零 OCR 调用）、失败逐页降级（WARNING + 该页空文本，任务继续）、endpoint 未配置 = OCR 整体禁用。**不要整本 PDF 直传**（`fileType=0` 实测 12 页丢 2 页，且有文本层的 PDF 会被白吃整本 OCR）。宿主跑后端用 `localhost:9002`，dev 容器里由 `docker/compose.dev.yaml` 覆盖为 `host.docker.internal:9002`。**`TagGenerator` 已服务化并接入完成**（issue #10 主应用侧）：独立容器 `tagenerator:latest` 暴露 `POST /v1/tags`（宿主 8004），主应用经 `TAGGER_ENDPOINT` 调用——`app/ports/outbound/tag_generator.py`（Port）+ `app/adapters/doc_processing/tagger_client.py`（HTTP 适配器，含探活/重试/熔断），`text_splitter.TagGenerator` 只是薄壳，失败降级为本地 `_simple_tags`；进程内**不再** import torch/keybert，也无本地模型池。宿主跑后端用 `localhost:8004`，dev 容器里由 `docker/compose.dev.yaml` 覆盖为 `host.docker.internal:8004`（两个容器不在同一 docker 网络）。**BGE-M3 嵌入客户端已收敛到 `llama_index.embeddings.openai.OpenAIEmbedding`**（issue #35，含 #28）：`embedding_store.BGEM3EmbeddingWrapper` 是薄子类，传输/批量/响应解析走 openai SDK，入库按 `BGE_M3_BATCH_SIZE`（默认 64）一次 HTTP 带一批；空文本与 NaN→零向量、整批失败逐条回退、重试日志、`probe(timeout_sec)` 四条语义是承重的，别顺手删。⚠️ 依赖瘦身（从 `requirements.txt` 摘掉 torch/sentence-transformers/keybert）**尚未做**，但**进程内已无强制 torch 依赖**：issue #10 清掉 `text_splitter`、issue #35 清掉 `embedding_store` 的顶层 `import torch`，`main.py` 只在 try/except 里可选 import（打印 CUDA 状态）。实测拦截 torch 后 `import main` 正常。**paddle 已全部移出主应用**（issue #9，2026-09 完成）：`requirements.txt` 无 paddle 三件套与 23 个 paddle 系孤儿依赖（14 个 nvidia-*-cu12 + opencv-contrib/shapely/pyclipper/imagesize 等 9 个 Python 包），拦截 paddle 后 `import main` 同样正常；dev 镜像已无 paddle 层。
 
 **MinIO 对账只扫保留功能的 `temp/`、`images/` 前缀**：历史功能曾用过的前缀不再纳入对账，也不再输出相关登记告警；已删历史对象不会被主动删除。
 
@@ -202,10 +200,10 @@ API_PORT=8001 WEB_PORT=8889 bash scripts/dev.sh docker up   # 每人一组端口
 
 - **必须经 `dev.sh`**：它带 `-p nbhx-${USER}`，让容器名与三个数据卷按人隔离（共享服务器上多人同用一台 docker daemon，直接 `docker compose` 会互相顶掉）。
 - **代码不进镜像**：`.dockerignore` 是**白名单**，build 上下文 13 GB → 几 KB。`venv` 在 `/opt/venv`（bind mount 之外，不会被宿主 `.venv` 遮蔽），而 `scripts/env.sh` 认 `VENV_DIR` → **脚本零改动**。
-- **缓存是命名卷**，挂在仓库内 `/workspace/.cache`：`env.sh` 那十几个缓存变量（`UV_CACHE_DIR`/`HF_HOME`/`PADDLE_PDX_CACHE_HOME`/`COREPACK_HOME`…）硬编码指向 `${PROJECT_ROOT}/.cache`，挂这里就**全部自动落到 NVMe**（`/var/lib/docker` 在 NVMe，而宿主 `/data` 是 5400rpm HDD，实测顺序读 71 MB/s vs 9.2 GB/s）。
+- **缓存是命名卷**，挂在仓库内 `/workspace/.cache`：`env.sh` 那十几个缓存变量（`UV_CACHE_DIR`/`HF_HOME`/`COREPACK_HOME`…）硬编码指向 `${PROJECT_ROOT}/.cache`，挂这里就**全部自动落到 NVMe**（`/var/lib/docker` 在 NVMe，而宿主 `/data` 是 5400rpm HDD，实测顺序读 71 MB/s vs 9.2 GB/s）。
 - **entrypoint 先 chown 缓存卷、再 `setpriv` 降权**到宿主 uid —— 命名卷默认 root 属主（实测挂在 bind mount 内部时 `root:root 0755`，非 root 直接 Permission denied），不降权则容器写进仓库的文件属主会变 root。
 - **PyPI 必须走镜像**：本机 `pypi.org` 实测**超时不可达**；默认 `mirrors.aliyun.com`（`--build-arg PYPI_INDEX=` 可覆盖）。Docker Hub 也不通，但 daemon 已配 `registry-mirrors`。
-- **dev 容器不需要 GPU**：等 `PaddleOCR`/`TagGenerator` 服务化（issue #9 / #10）后镜像可再瘦 ~8.5 GB（实测当前：磁盘 **19 GB**／按层汇总≈推拉传输量 **12.3 GB**；拆掉 paddle+torch 后估算 **~4 GB 量级**），删掉 Dockerfile 里对应两层即可。
+- **dev 容器不需要 GPU**：OCR（issue #9）与 TagGenerator（issue #10）均已服务化，镜像已无 paddle 层（2026-09）；torch 尚未瘦身，瘦完估算还能再降。
 - 容器跑通后宿主 `.venv` + `.cache` 可删，但**必须两个一起删**（硬链接关系，见 docker-dev-env.md §8），每人约回收 12–13 GB。
 - **配置改哪里**：应用配置（DB/密钥/限流…）改仓库根 **`.env`**；容器编排（端口/挂载/容器内覆盖的地址）改 **`docker/compose.dev.yaml`**；只跟你有关的运行时参数（宿主端口、registry 镜像名）写 **`.env.dev`**（gitignored，示例 `.env.dev.example`）。优先级与实测见 [docs/docker-dev-env.md](docs/docker-dev-env.md) §5.5。
 - **依赖变更后必须重建镜像**：`git pull` 只更新代码，**不会**更新环境（venv 在镜像里）。`bash scripts/dev.sh docker check` 自检指纹（镜像内 `/opt/venv/.requirements-hash`），`dev.sh docker up` 也会自动警告；修法是 `docker build && docker up`。
@@ -268,7 +266,7 @@ corepack pnpm --filter chat type-check  # 仅类型检查
 - **PostgreSQL + pgvector**：主库 + 向量检索（RAG 集合）
 - **Redis**：缓存 + 限流 + 任务状态
 - **MinIO**：对象存储（知识库文件、文档/OCR 产物、任务临时文件）
-- **AI 推理**：BGE-M3 嵌入、Reranker、OCR（PaddleOCR/DOC），本地 LLM 走 GPU（`LOCAL_MODEL_GPU_DEVICE`）
+- **AI 推理**：BGE-M3 嵌入、Reranker、OCR（paddlex 容器 `PADDLE_OCR_ENDPOINT`）、TagGenerator（`TAGGER_ENDPOINT`）——全部 HTTP 外部服务
 
 `main.py` 的 `lifespan` 负责启动初始化（DB 表、executor、任务观察者、MinIO reconcile 调度、MinIO bucket、RAG 系统）与有序关闭。改启动/关闭顺序在这里。
 

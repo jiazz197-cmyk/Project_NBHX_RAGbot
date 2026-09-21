@@ -38,12 +38,12 @@ export UV_CACHE_DIR="${PROJECT_ROOT}/.cache/uv"
 export UV_PYTHON_INSTALL_DIR="${PROJECT_ROOT}/.cache/uv/python"
 export PIP_CACHE_DIR="${PROJECT_ROOT}/.cache/pip"
 
-# 包索引：torch==*+cu130 与 paddlepaddle-gpu 不在 PyPI 上，需额外索引源。
+# 包索引：torch==*+cu130 不在 PyPI 上，需额外索引源。
 # 统一在这里定义，setup_local_env.sh 与手写 pip/uv 命令共用。
+# （OCR 已服务化，主清单无 paddle 包，PADDLE_INDEX 已移除；见 docs/issues。）
 export PYPI_INDEX="${PYPI_INDEX:-https://pypi.org/simple}"
 export TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu130}"
-export PADDLE_INDEX="${PADDLE_INDEX:-https://www.paddlepaddle.org.cn/packages/stable/cu126/}"
-export PIP_EXTRA_INDEX_URL="${TORCH_INDEX} ${PADDLE_INDEX}"
+export PIP_EXTRA_INDEX_URL="${TORCH_INDEX}"
 
 # Node / pnpm
 # 注意：pnpm 的 store / cache 由 frontend/.npmrc（pnpm ≤10）与
@@ -65,14 +65,8 @@ export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
 export SENTENCE_TRANSFORMERS_HOME="${HF_HOME}/sentence-transformers"
 export TORCH_HOME="${PROJECT_ROOT}/.cache/torch"
 export MODELSCOPE_CACHE="${PROJECT_ROOT}/.cache/modelscope"
-# PaddleX / PaddleOCR 3.x 的模型缓存（真正生效的是这个变量，默认 ~/.paddlex）
-export PADDLE_PDX_CACHE_HOME="${PROJECT_ROOT}/.cache/paddlex"
-# Paddle 编译扩展目录
-export PADDLE_EXTENSION_DIR="${PROJECT_ROOT}/.cache/paddle-extension"
-# 注意：paddle/dataset/common.py 在 import paddle 时无条件创建 ~/.cache/paddle/dataset，
-# 路径只跟 HOME 走，没有环境变量能改到仓库内（好在只是个空目录，不含实际下载物）。
-export PADDLE_HOME="${PROJECT_ROOT}/.cache/paddle"
-export PADDLEOCR_HOME="${PROJECT_ROOT}/.cache/paddleocr"
+# （PADDLE_PDX_CACHE_HOME / PADDLE_EXTENSION_DIR / PADDLE_HOME 等已随 OCR 服务化移除：
+#  主应用进程内不再 import paddle，模型缓存在 paddlex 容器内部管理。）
 
 # ---------------------------------------------------------------- 报告
 if [[ "${1:-}" != "-q" ]]; then

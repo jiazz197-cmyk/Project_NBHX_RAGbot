@@ -82,8 +82,10 @@ services:
       # 127.0.0.1 会 connection refused，前端表现为 ragchain 报“外部服务不可达”。
       # 环境变量优先级高于 .env，所以本地 .env 写 HOST=127.0.0.1 也不影响容器运行。
       HOST: 0.0.0.0
-      # 过渡期本进程内仍会跑 PaddleOCR（issue #9 服务化）：
-      # PADDLE_OCR_ENDPOINT: http://host.docker.internal:8080
+      # OCR 服务（独立 paddlex 容器，宿主 9002 暴露；dev 容器与其不在同一
+      # docker 网络，只能走 host-gateway——同 TAGGER_ENDPOINT 的处理）。
+      # issue #1 服务化完成后，主应用进程内已无 paddle 依赖。
+      PADDLE_OCR_ENDPOINT: http://host.docker.internal:9002/ocr
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # 容器内端口固定（后端 8000 / vite 8888，与 .env 一致），宿主端口按人分配

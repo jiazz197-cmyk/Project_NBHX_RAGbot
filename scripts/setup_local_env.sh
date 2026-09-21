@@ -19,7 +19,6 @@
 # 可用环境变量覆盖：
 #   PYTHON_BIN   构建 venv 的解释器（默认 3.12，交给 uv 解析）
 #   TORCH_INDEX  torch/torchvision 的 wheel 源（默认 cu130）
-#   PADDLE_INDEX paddlepaddle-gpu 的 wheel 源（默认 cu126）
 #
 # 幂等：重复执行只会补齐缺失依赖。
 
@@ -73,11 +72,10 @@ setup_backend() {
   fi
 
   local -a uv_args=(pip install --python "${VENV_DIR}/bin/python" -r "${PROJECT_ROOT}/requirements.txt")
-  # torch==*.+cu130 / paddlepaddle-gpu 不在 PyPI 上，需额外索引
+  # torch==*+cu130 不在 PyPI 上，需额外索引
   uv_args+=(--index-url "${PYPI_INDEX}")
   uv_args+=(--extra-index-url "${TORCH_INDEX}")
-  uv_args+=(--extra-index-url "${PADDLE_INDEX}")
-  # 这两个额外索引里也有 fastapi 等同名包（paddle 索引尤其杂），必须允许跨索引择优；
+  # torch 索引里也有 fastapi 等同名包，必须允许跨索引择优；
   # 否则 uv 默认的「命中即锁定首个索引」会把 fastapi==0.116.1 判成无解。
   uv_args+=(--index-strategy unsafe-best-match)
   # 排除 nvidia-nccl-cu12（会把 torch 的 cu13 NCCL 覆盖掉导致 import torch 崩，详见该文件）

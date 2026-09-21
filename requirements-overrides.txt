@@ -3,13 +3,12 @@
 # 用法（scripts/setup_local_env.sh 已内置）：
 #   uv pip install -r requirements.txt --overrides requirements-overrides.txt
 #
-# 目前只有一条：
-#   paddlepaddle-gpu 的元数据要求 nvidia-nccl-cu12==2.25.1（linux/x86_64），
-#   但 torch==2.9.1+cu130 需要 nvidia-nccl-cu13==2.27.7，而这两个包安装的是
-#   同一个文件：nvidia/nccl/lib/libnccl.so.2。cu12 会覆盖 cu13，随后
-#   `import torch` 直接崩：
+# 目前只有一条（2026-09 起**防御性保留**）：
+#   OCR 已服务化，主清单不再含 paddlepaddle-gpu，当前闭包本就不会解析出
+#   nvidia-nccl-cu12。保留排除是为了防止未来有人把 paddle 加回清单时
+#   静默复发下述事故——paddlepaddle-gpu 的元数据要求 nvidia-nccl-cu12==2.25.1，
+#   而 torch==2.9.1+cu130 需要 nvidia-nccl-cu13==2.27.7，两个包装的是同一个
+#   文件 nvidia/nccl/lib/libnccl.so.2，cu12 覆盖 cu13 后 `import torch` 直接崩：
 #     ImportError: libtorch_cuda.so: undefined symbol: ncclCommWindowDeregister
-#   所以这里用「永不成立的平台标记」把 nvidia-nccl-cu12 排除掉（cu13 生效）。
-#   paddle 只在多卡分布式训练时才真正加载 NCCL，本项目的 OCR 单卡推理不受影响；
-#   代价是 `uv pip check` 会报一条 paddlepaddle-gpu 的 incompatibility，属预期。
+#   重新引入 paddle 时必须记得 OCR 走的是独立容器（issue #1），别加回主清单。
 nvidia-nccl-cu12==2.25.1 ; sys_platform == "never"

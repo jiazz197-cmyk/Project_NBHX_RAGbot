@@ -6,11 +6,11 @@
 #   1. **不含代码**：代码运行时 bind mount 到 /workspace，改代码不需要重建镜像。
 #      → 镜像只在 requirements*.txt 变化时重建。
 #   2. **依赖分三层**（主清单 / RAG / 测试工具）：改业务代码或改测试工具都不会
-#      重装 torch、paddle（那是几 GB 的下载）。
+#      重装 torch（那是几 GB 的下载）。OCR 已服务化（issue #1），镜像不含 paddle。
 #   3. **venv 放 /opt/venv**（在 bind mount 之外，不会被宿主仓库的 .venv 遮蔽）。
 #      scripts/env.sh 认 `VENV_DIR` 环境变量，所以容器内无需改任何脚本。
-#   4. **不需要 GPU**：OCR / TagGenerator 将拆成独立容器（issue #9 / #10）。
-#      过渡期这两个依赖仍在镜像里，等代码改完删掉对应层即可（见下方标注）。
+#   4. **不需要 GPU**：OCR（paddlex 容器）与 TagGenerator（tagenerator 容器）
+#      均已拆成独立容器（issue #1 / #10），镜像不含 GPU 推理栈。
 #
 # 构建（一般不用手敲，用 `bash scripts/dev.sh docker build`）：
 #   docker compose -f docker/compose.dev.yaml build
@@ -25,7 +25,6 @@ FROM python:3.12-slim
 
 ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu130
-ARG PADDLE_INDEX=https://www.paddlepaddle.org.cn/packages/stable/cu126/
 ARG UV_VERSION=0.12.11
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -65,8 +64,8 @@ RUN python -m pip install --no-cache-dir --index-url "${PYPI_INDEX}" "uv==${UV_V
 # ---- Python 依赖（三层，别合并）---------------------------------------------
 RUN uv venv /opt/venv --python 3.12 --seed
 
-# 层 1：主应用清单。⚠️ --overrides 不能省：否则 paddle 会拉进 nvidia-nccl-cu12，
-# 覆盖 torch 需要的 nvidia-nccl-cu13 的同一个文件 libnccl.so.2 → import torch 崩。
+# 层 1：主应用清单。--overrides 防御性保留（防未来误把 paddle 加回清单，
+# 其元数据要求 nvidia-nccl-cu12 会覆盖 torch cu130 的 libnccl.so.2）。
 COPY requirements.txt requirements-overrides.txt /tmp/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python \
@@ -74,7 +73,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --overrides /tmp/requirements-overrides.txt \
       --index-url "${PYPI_INDEX}" \
       --extra-index-url "${TORCH_INDEX}" \
-      --extra-index-url "${PADDLE_INDEX}" \
       --index-strategy unsafe-best-match
 
 # 层 2：RAG 栈。⚠️ 过渡期需要（仓库里 RAG 代码还没搬走：main.py / api registry 仍
@@ -84,7 +82,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python -r /tmp/requirements-rag.txt \
       --index-url "${PYPI_INDEX}" \
       --extra-index-url "${TORCH_INDEX}" \
-      --extra-index-url "${PADDLE_INDEX}" \
       --index-strategy unsafe-best-match
 
 # 层 3：测试工具（watchfiles 是 uvicorn --reload 的 inotify 后端，缺了会单核空转）

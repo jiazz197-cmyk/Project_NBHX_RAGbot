@@ -191,18 +191,6 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
         env="KNOWLEDGE_MAX_EXCEL_FILE_SIZE_MB",
     )
 
-    # 文档处理重模型有界池上限。PaddleOCR 一个全局池，checkout 互斥（一实例
-    # 一线程）既绕开 PaddleOCR 线程安全问题，又把 GPU 显存占用从“随任务数线性
-    # 增长”封顶为常数上限（5×0.8 ≈ 4GB）。
-    # PaddleOCR 池实例数上限；0 = 禁用 OCR（PDF 仅走 pdfplumber 文本提取）。
-    PADDLEOCR_POOL_MAX_SIZE: int = Field(
-        5, ge=0, le=32, env="PADDLEOCR_POOL_MAX_SIZE"
-    )
-    # 从 PaddleOCR 池借一个实例的最长等待秒数；超时该页跳过 OCR（降级路径，不致命）。
-    PADDLEOCR_ACQUIRE_TIMEOUT_SEC: int = Field(
-        30, ge=1, le=300, env="PADDLEOCR_ACQUIRE_TIMEOUT_SEC"
-    )
-
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         """根据单项设置拼接数据库连接串（用户名/密码做 URL 编码，避免含 @ : / 等字符时解析错位）。"""
@@ -270,11 +258,14 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     MINIO_RECONCILE_INTERVAL_SEC: int = Field(259200, ge=300, le=604800, env="MINIO_RECONCILE_INTERVAL_SEC")
     MINIO_RECONCILE_GRACE_SEC: int = Field(259200, ge=60, le=604800, env="MINIO_RECONCILE_GRACE_SEC")
 
+    # PaddleX Serving OCR 容器地址（如 http://localhost:9002/ocr）。
+    # 进程内 PaddleOCR 已剥离（issue #1 服务化）：主应用不再装 paddle，
+    # 无文本层的 PDF 页渲染成 PNG 后 base64 调该端点。None/空 = OCR 禁用
+    # （PDF 仅走 pdfplumber 文本提取，等价旧 PADDLEOCR_POOL_MAX_SIZE=0）。
+    PADDLE_OCR_ENDPOINT: Optional[str] = Field(default=None, env="PADDLE_OCR_ENDPOINT")
+    # 单页 OCR 的 HTTP 超时：实测 300DPI A4 扫描页 ~1.3s，读超时留足余量。
     OCR_HTTP_CONNECT_TIMEOUT: float = Field(10.0, ge=1.0, le=300.0, env="OCR_HTTP_CONNECT_TIMEOUT")
     OCR_HTTP_READ_TIMEOUT: float = Field(300.0, ge=5.0, le=3600.0, env="OCR_HTTP_READ_TIMEOUT")
-
-    OCR_PDFTEXT_ENABLED: bool = Field(True, env="OCR_PDFTEXT_ENABLED")
-    OCR_PDFTEXT_TIMEOUT: int = Field(30, ge=5, le=120, env="OCR_PDFTEXT_TIMEOUT")
 
     HTTP_CLIENT_TIMEOUT: float = Field(30.0, env="HTTP_CLIENT_TIMEOUT")
     HTTP_CLIENT_MAX_CONNECTIONS: int = Field(100, env="HTTP_CLIENT_MAX_CONNECTIONS")

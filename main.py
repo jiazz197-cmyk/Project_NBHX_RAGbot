@@ -95,14 +95,6 @@ async def shutdown_all_pools() -> None:
     except Exception as e:
         print(f"[warning] 关闭 Redis 时出错: {e}")
 
-    # 3. 文档处理模型池（PaddleOCR；TagGenerator 已迁到独立 tagger 容器，无本地池）
-    try:
-        from app.adapters.doc_processing.doc_reader import _paddleocr_pool
-        _paddleocr_pool.close()
-        print("[success] 文档处理模型池已关闭")
-    except Exception as e:
-        print(f"[warning] 关闭文档处理模型池时出错: {e}")
-
     # 5. MinIO
     try:
         from app.core.async_storage import AsyncMinioClientPool
