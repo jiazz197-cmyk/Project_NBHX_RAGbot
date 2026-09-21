@@ -539,6 +539,48 @@ Content-Type: application/json
 
 - RAG 容器的固定调用：`POST /api/v1/retriever/db?collection=knowledge_chunks&top_k=<RAG_RETRIEVE_TOP_K>&rerank=false`，随后用返回的 `chunks[*].content` 调容器侧 reranker。
 
+**增量扩展（2026-09-21 落地，向后兼容；issue #16 混合检索）：**
+
+- 请求体新增可选字段 `keywords: string[]`：
+
+```http
+POST /api/v1/retriever/db?collection=knowledge_chunks&top_k=10&rerank=false
+Authorization: Bearer <JWT>
+Content-Type: application/json
+
+{"question": "项目 V254 的负责人是谁", "keywords": ["V254", "杨贵宁"]}
+```
+
+- `keywords` **缺省或空数组 = 纯向量检索**，响应与改造前逐字段一致；只有非空时才额外走
+  字面（pg_trgm `ILIKE`）召回并与向量路做 RRF 融合（融合仅发生在显式传 `top_k` 的 chunks 路径，
+  未传 `top_k` 的旧路径不融合）。
+- 融合由**主应用**完成，候选池仍封顶 `top_k`，所以容器侧 reranker 的输入条数与成本不变；
+  最终顺序仍由容器侧 reranker 决定。
+- 是否启用融合由主应用配置 `RETRIEVAL_HYBRID_ENABLED` 决定（**默认 false**）；关闭时
+  传了 `keywords` 也只是纯向量，契约不变。详见 [retrieval-hybrid-fulltext.md](retrieval-hybrid-fulltext.md)。
+- 响应 `chunks[]` 新增字段：
+
+```json
+{
+  "chunks": [
+    {
+      "content": "chunk 文本",
+      "source": "a.pdf",
+      "score": 0.83,
+      "metadata": {"minio_object_path": "documents/x.pdf"},
+      "node_id": "06cbabfe-ad3c-4a58-b1d4-a969e2c2ea6a",
+      "retrieval": {"paths": ["dense", "lexical"], "rrf": 0.03278689, "lexical_hits": 2}
+    }
+  ]
+}
+```
+
+| 新字段 | 说明 |
+|---|---|
+| `node_id` | chunk 身份（PGVector 的 `node_id` 列），**所有** chunks 路径都返回，供去重/溯源 |
+| `retrieval` | 仅融合路径返回：`paths` ∈ `dense`/`lexical` 的子集；`rrf` 融合分；`lexical_hits` 命中的关键词个数 |
+| `score` | 语义不变；**只有字面路命中**的 chunk 为 `null`（无向量分，顺序由 RRF 决定，容器侧重排后以重排分为准） |
+
 约束：
 
 - JWT 必填；RAG 容器应透传用户 JWT。
@@ -560,7 +602,7 @@ Content-Type: application/json
 
 成功响应同 `/db`，但语义为：
 
-- 显式传 `top_k`（**RAG 容器的固定调用**）时走与 `/db` 一致的结构化 chunks 路径：`{"answer": "chunk 文本按换行拼接", "sources": ["a.xlsx"], "chunks": [{"content", "source", "score", "metadata"}]}`，纯向量检索、**不做内部重排**，上限 = `top_k`，由调用方（RAG 容器）自行调 `RERANKER_API_URL`；
+- 显式传 `top_k`（**RAG 容器的固定调用**）时走与 `/db` 一致的结构化 chunks 路径：`{"answer": "chunk 文本按换行拼接", "sources": ["a.xlsx"], "chunks": [{"content", "source", "score", "metadata", "node_id", "retrieval"}]}`，纯向量检索、**不做内部重排**，上限 = `top_k`，由调用方（RAG 容器）自行调 `RERANKER_API_URL`；请求体同样接受可选 `keywords`（issue #16，语义与 `/db` 完全一致：缺省/空 = 纯向量；`node_id`/`retrieval` 字段说明见 §8.1 的增量扩展）；
 - 不传 `top_k` 时保留旧行为：`answer` 是 Excel 数据/分析结果的 JSON 字符串（`{"data": <excel_to_json 结果>, "sources": [...]}` 中的 `data` 序列化结果），`sources` 是定位成功的 Excel **源文件名**列表（如 `["华翔定价表.xlsx"]`），供来源页脚展示；失败时 `answer` 为错误信息、`sources=[]`；`chunks` 恒为 `[]`；
 - 可选 Query 参数 `top_k: int | None`（`ge=1, le=50`）与 `rerank: bool = true`；`rerank` 仅在未显式传 `top_k` 的旧路径生效（该路径内部重排 top_n=3）；
 - 整表 JSON 依赖 `data_analyze.excel_to_json` 从 MinIO 取源文件再解析：引擎优先 `python-calamine`（WPS/腾讯文档导出的 `xl/styles.xml` 含自闭合空 `<fill/>` 时 openpyxl 会抛 `TypeError`），不可用时回退 openpyxl。

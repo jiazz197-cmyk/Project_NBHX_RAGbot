@@ -133,6 +133,7 @@ async def _retrieve_docs(
     question: str,
     deps,
     settings,
+    keywords: list[str] | None = None,
 ) -> tuple[list[DocumentChunk], bool, str]:
     try:
         raw = await deps.retriever.query_db(
@@ -141,6 +142,7 @@ async def _retrieve_docs(
             question,
             settings.RAG_RETRIEVE_TOP_K,
             rerank=False,
+            keywords=keywords,
         )
         chunks = _extract_chunks(raw)
     except Exception as exc:  # noqa: BLE001 - 单点失败降级
@@ -194,6 +196,7 @@ async def _retrieve_excel(
     question: str,
     deps,
     settings,
+    keywords: list[str] | None = None,
 ) -> tuple[str, list[str], bool, str]:
     try:
         raw = await deps.retriever.query_excel(
@@ -201,6 +204,7 @@ async def _retrieve_excel(
             settings.EXCEL_COLLECTION,
             question,
             settings.RAG_RETRIEVE_TOP_K,
+            keywords=keywords,
         )
     except Exception as exc:  # noqa: BLE001 - 单点失败降级
         logger.warning("表格检索失败：%s", exc)
@@ -285,9 +289,25 @@ async def retrieve_local(
     result.attempted = True
     coros = []
     if "doc" in jobs:
-        coros.append(_retrieve_docs(token=token, question=question, deps=deps, settings=settings))
+        coros.append(
+            _retrieve_docs(
+                token=token,
+                question=question,
+                deps=deps,
+                settings=settings,
+                keywords=keywords,
+            )
+        )
     if "excel" in jobs:
-        coros.append(_retrieve_excel(token=token, question=question, deps=deps, settings=settings))
+        coros.append(
+            _retrieve_excel(
+                token=token,
+                question=question,
+                deps=deps,
+                settings=settings,
+                keywords=keywords,
+            )
+        )
 
     outcomes = await asyncio.gather(*coros, return_exceptions=True)
     ok_flags: list[bool] = []

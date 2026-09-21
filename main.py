@@ -247,6 +247,22 @@ async def lifespan(app: FastAPI):
         print(f"[warning] RAG 系统初始化失败: {e}")
         app.state.rag = None
 
+    # 混合检索（issue #16 路线 1）：pg_trgm 扩展 + 集合表 text 列 GIN 索引。
+    # 只在开关打开时检查；缺失索引的创建放后台任务（大表建索引可能耗时），
+    # 不阻塞启动，失败仅告警——字面检索退化为顺序扫描，功能不受影响。
+    if getattr(settings, "RETRIEVAL_HYBRID_ENABLED", False):
+
+        async def _ensure_fulltext_indexes_bg():
+            try:
+                from app.adapters.knowledge.lexical_search import ensure_fulltext_indexes
+
+                names = await asyncio.to_thread(ensure_fulltext_indexes)
+                print(f"[success] 字面检索索引就绪: {', '.join(names) or '（无集合表）'}")
+            except Exception as index_exc:
+                print(f"[warning] 字面检索索引检查失败（不影响启动）: {index_exc}")
+
+        app.state.fulltext_index_task = asyncio.create_task(_ensure_fulltext_indexes_bg())
+    
     # tagger 容器探活（issue #10）：地址写错 / 容器没起 / 路径不对在启动阶段暴露，
     # 而不是推迟到首次文档上传。同步 httpx 调用放到线程里，避免阻塞事件循环；
     # 失败仅告警、不阻断启动——文档标签会自动降级为本地 CPU 简单标签。
@@ -312,6 +328,18 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[warning] 清理观察者时出错: {e}")
         
+        try:
+            index_task = getattr(app.state, "fulltext_index_task", None)
+            if index_task is not None and not index_task.done():
+                index_task.cancel()
+                try:
+                    await index_task
+                except asyncio.CancelledError:
+                    pass
+                print("[success] 字面检索索引后台任务已取消")
+        except Exception as e:
+            print(f"[warning] 取消字面检索索引任务时出错: {e}")
+
         try:
             from app.core.retention_scheduler import stop_reconcile_scheduler
             await stop_reconcile_scheduler()

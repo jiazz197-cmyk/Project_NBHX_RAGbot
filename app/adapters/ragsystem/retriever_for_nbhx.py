@@ -577,6 +577,9 @@ class OptimizedRetriever:
                 "source": metadata.get("source", "Unknown"),
                 "score": node.score,
                 "metadata": metadata,
+                # issue #16：chunk 身份，供双路召回去重（lexical 路按 node_id 对账）。
+                # getattr 兜底：既有轻量替身/旧节点可能没有该属性。
+                "node_id": getattr(node, "node_id", None),
             })
         return {"chunks": chunks}
 

@@ -371,6 +371,36 @@ async def test_retrieval_doc_rerank_order_and_top_n():
     assert rerank_call["documents"] == ["A 内容", "B 内容", "C 内容"]
 
 
+async def test_retrieval_doc_forwards_keywords_to_main_app():
+    """issue #16：改写产出的结构化关键词要透传给主应用（稀疏检索路输入）。"""
+    deps = build_fake_deps(settings=FakeSettings(RAG_RERANK_TOP_N=1))
+    deps.retriever = FakeRetriever(db_result=_chunks(("a.pdf", "A 内容")))
+    deps.reranker = FakeReranker(ranking=[(0, 0.9)])
+
+    await retrieve_local(
+        intent="doc",
+        rewritten_query="售后费用",
+        keywords=["V254", "杨贵宁"],
+        token="tok",
+        deps=deps,
+    )
+
+    assert deps.retriever.db_calls[0]["keywords"] == ["V254", "杨贵宁"]
+
+
+async def test_retrieval_without_keywords_forwards_empty_list():
+    """老调用（空关键词）：透传空列表，客户端不会把 keywords 放进请求体 → 纯向量。"""
+    deps = build_fake_deps(settings=FakeSettings(RAG_RERANK_TOP_N=1))
+    deps.retriever = FakeRetriever(db_result=_chunks(("a.pdf", "A 内容")))
+    deps.reranker = FakeReranker(ranking=[(0, 0.9)])
+
+    await retrieve_local(
+        intent="doc", rewritten_query="q", keywords=[], token="tok", deps=deps
+    )
+
+    assert deps.retriever.db_calls[0]["keywords"] == []
+
+
 async def test_retrieval_reranker_failure_falls_back_to_truncate():
     settings = FakeSettings(RAG_RERANK_TOP_N=1)
     deps = build_fake_deps(settings=settings)
@@ -418,6 +448,8 @@ async def test_retrieval_excel_uses_chunks_and_reranks():
     # 未进入重排的第三个文件不出现在资料里
     assert "999910000095" in result.excel_answer
     assert "V540- GLC" not in result.excel_answer
+    # issue #16：Excel 台账路同样透传关键词（项目号/人名这类精确词的主要战场）
+    assert deps.retriever.excel_calls[0]["keywords"] == ["查表"]
 
 
 async def test_retrieval_excel_chunks_reranker_failure_falls_back():

@@ -48,12 +48,14 @@ from app.ports.outbound.retriever import RetrievalQuery, RetrievalResult  # noqa
 
 
 class _FakeNodeWithScore:
-    """鸭子类型：检索节点只需要 text / metadata / score。"""
+    """鸭子类型：检索节点只需要 text / metadata / score（node_id 可选，issue #16）。"""
 
-    def __init__(self, text, metadata=None, score=0.5):
+    def __init__(self, text, metadata=None, score=0.5, node_id=None):
         self.text = text
         self.metadata = metadata if metadata is not None else {}
         self.score = score
+        if node_id is not None:
+            self.node_id = node_id
 
 
 class _FakeVectorRetriever:
@@ -140,7 +142,7 @@ def adapter(fake_rag_retriever):
 
 def test_get_chunks_returns_structured_chunks_and_passes_top_k():
     nodes = [
-        _FakeNodeWithScore("  命中一  ", {"source": "doc1.pdf", "page": 1}, 0.91),
+        _FakeNodeWithScore("  命中一  ", {"source": "doc1.pdf", "page": 1}, 0.91, node_id="n1"),
         _FakeNodeWithScore("命中二", {"source": "doc2.pdf"}, 0.82),
         _FakeNodeWithScore("命中三", {"source": "doc3.pdf"}, 0.73),
     ]
@@ -151,12 +153,15 @@ def test_get_chunks_returns_structured_chunks_and_passes_top_k():
     assert len(result["chunks"]) == 2
     assert retriever.model_manager.calls == [("knowledge_chunks", 2)]
     assert retriever.model_manager._vector_retriever.questions == ["去年售后费用趋势？"]
+    # issue #16：chunk 带 node_id（双路召回去重键）；节点无该属性时为 None
     assert result["chunks"][0] == {
         "content": "命中一",
         "source": "doc1.pdf",
         "score": 0.91,
         "metadata": {"source": "doc1.pdf", "page": 1},
+        "node_id": "n1",
     }
+    assert result["chunks"][1]["node_id"] is None
     # metadata 是拷贝，调用方修改不会污染检索节点
     result["chunks"][0]["metadata"]["page"] = 99
     assert nodes[0].metadata == {"source": "doc1.pdf", "page": 1}
@@ -605,10 +610,6 @@ def _install_fake_api_port(monkeypatch, result):
     captured = {}
 
     class _FakePort:
-        def __init__(self, rag_instance, collection_name):
-            captured["rag_instance"] = rag_instance
-            captured["collection_name"] = collection_name
-
         async def query_db(self, q):
             captured["q"] = q
             return result
@@ -617,7 +618,13 @@ def _install_fake_api_port(monkeypatch, result):
             captured["q"] = q
             return result
 
-    monkeypatch.setattr(api_mod, "RAGRetrieverAdapter", _FakePort)
+    def _fake_factory(rag_instance, collection_name):
+        # issue #16：组合根改走 build_retriever_port（按开关决定纯向量/混合）
+        captured["rag_instance"] = rag_instance
+        captured["collection_name"] = collection_name
+        return _FakePort()
+
+    monkeypatch.setattr(api_mod, "build_retriever_port", _fake_factory)
     return captured
 
 

@@ -14,6 +14,9 @@ class RetrievalQuery:
     top_k: int = 10
     top_n: int = 5
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # issue #16：改写步骤产出的结构化关键词，供稀疏（字面）检索路使用。
+    # 缺省空列表 = 老调用方行为完全不变（只走 dense 向量路）。
+    keywords: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +42,30 @@ class RetrieverPort(Protocol):
         ...
 
     async def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+        ...
+
+
+@dataclass
+class LexicalHit:
+    """稀疏（字面/关键词）检索路的一条命中（issue #16）。"""
+    node_id: str
+    content: str
+    source: str = "Unknown"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    # 命中的关键词个数：用于同分时排序，也便于调用方观测命中强度
+    hits: int = 0
+
+
+class LexicalSearchPort(Protocol):
+    """按关键词在集合内做字面检索（issue #16 路线 1：PG 全文 / pg_trgm）。
+
+    实现方接收**逻辑集合名**（如 ``knowledge_chunks``），自行映射到物理表
+    ``data_<collection>``，并对集合名做白名单校验。
+    """
+
+    async def search(
+        self, collection: str, keywords: List[str], top_k: int
+    ) -> List[LexicalHit]:
         ...
 
 

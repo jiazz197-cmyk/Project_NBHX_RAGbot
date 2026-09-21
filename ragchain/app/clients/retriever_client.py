@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import httpx
 
@@ -24,6 +24,17 @@ class RetrieverClient(HTTPClientMixin):
     def _headers(token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
 
+    @staticmethod
+    def _body(question: str, keywords: Sequence[str] | None) -> dict[str, Any]:
+        """请求体：仅在有关键词时带 keywords（issue #16）。
+
+        无关键词时不出现该键，保证老调用方的 payload 形状与改造前完全一致。
+        """
+        body: dict[str, Any] = {"question": question}
+        if keywords:
+            body["keywords"] = [str(kw) for kw in keywords]
+        return body
+
     async def query_db(
         self,
         token: str,
@@ -31,6 +42,7 @@ class RetrieverClient(HTTPClientMixin):
         question: str,
         top_k: int,
         rerank: bool = False,
+        keywords: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         resp = await self._request(
             "POST",
@@ -40,7 +52,7 @@ class RetrieverClient(HTTPClientMixin):
                 "top_k": top_k,
                 "rerank": "true" if rerank else "false",
             },
-            json={"question": question},
+            json=self._body(question, keywords),
             headers=self._headers(token),
         )
         body = resp.json()
@@ -57,12 +69,13 @@ class RetrieverClient(HTTPClientMixin):
         collection: str,
         question: str,
         top_k: int,
+        keywords: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         resp = await self._request(
             "POST",
             "/retriever/excel",
             params={"collection": collection, "top_k": top_k},
-            json={"question": question},
+            json=self._body(question, keywords),
             headers=self._headers(token),
         )
         body = resp.json()

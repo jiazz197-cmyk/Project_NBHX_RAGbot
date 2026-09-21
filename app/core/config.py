@@ -287,6 +287,20 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
         env="RETRIEVER_ALLOWED_EXCEL_COLLECTIONS",
     )
 
+    # ---- 混合检索（issue #16 路线 1：PG 全文/pg_trgm + RRF 融合）----
+    # 开关默认关：未用 golden set 度量前不改变线上检索行为；开启后，
+    # 仅当调用方传了非空 keywords 才走双路召回 + 融合，不传 keywords 的
+    # 旧调用行为完全不变（可随时回滚为纯向量）。
+    RETRIEVAL_HYBRID_ENABLED: bool = Field(False, env="RETRIEVAL_HYBRID_ENABLED")
+    # 稀疏路召回条数（与 dense 的 top_k 各自独立）
+    RETRIEVAL_LEXICAL_TOP_K: int = Field(10, ge=1, le=100, env="RETRIEVAL_LEXICAL_TOP_K")
+    # RRF 平滑常数：score = Σ 1/(k + rank)
+    RETRIEVAL_RRF_K: int = Field(60, ge=1, le=1000, env="RETRIEVAL_RRF_K")
+    # 单次请求最多使用多少个关键词（防 SQL 膨胀）
+    RETRIEVAL_MAX_KEYWORDS: int = Field(12, ge=1, le=64, env="RETRIEVAL_MAX_KEYWORDS")
+    # 单个关键词最大长度（超长项直接丢弃）
+    RETRIEVAL_KEYWORD_MAX_LEN: int = Field(64, ge=1, le=512, env="RETRIEVAL_KEYWORD_MAX_LEN")
+
     BOOTSTRAP_SUPERUSER_USERNAME: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_USERNAME")
     BOOTSTRAP_SUPERUSER_EMAIL: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_EMAIL")
     BOOTSTRAP_SUPERUSER_PASSWORD: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_PASSWORD")

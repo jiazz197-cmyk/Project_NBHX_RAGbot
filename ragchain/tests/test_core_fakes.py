@@ -192,17 +192,32 @@ class FakeRetriever:
         self.db_calls: list[dict] = []
         self.excel_calls: list[dict] = []
 
-    async def query_db(self, token, collection, question, top_k, rerank: bool = False):
+    async def query_db(
+        self, token, collection, question, top_k, rerank: bool = False, keywords=None
+    ):
         self.db_calls.append(
-            {"token": token, "collection": collection, "question": question, "top_k": top_k, "rerank": rerank}
+            {
+                "token": token,
+                "collection": collection,
+                "question": question,
+                "top_k": top_k,
+                "rerank": rerank,
+                "keywords": keywords,
+            }
         )
         if self.db_error is not None:
             raise self.db_error
         return self.db_result
 
-    async def query_excel(self, token, collection, question, top_k):
+    async def query_excel(self, token, collection, question, top_k, keywords=None):
         self.excel_calls.append(
-            {"token": token, "collection": collection, "question": question, "top_k": top_k}
+            {
+                "token": token,
+                "collection": collection,
+                "question": question,
+                "top_k": top_k,
+                "keywords": keywords,
+            }
         )
         if self.excel_error is not None:
             raise self.excel_error

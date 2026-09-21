@@ -11,7 +11,7 @@ from app.ports.outbound.retriever import RetrievalQuery
 from app.adapters.retriever import (
     TOP_K_EXPLICIT_META_KEY,
     ChartAnalysisAdapter,
-    RAGRetrieverAdapter,
+    build_retriever_port,
 )
 from app.adapters.web.base import ChatRequest, ChartRequest
 from app.usecases.retriever.retrieve import ChartAnalysisUseCase, RetrieverUseCase
@@ -90,19 +90,24 @@ async def db(
 ):
     top_k = _normalize_query_int(top_k)
     rerank = _normalize_query_bool(rerank)
+    # issue #16：可选结构化关键词；缺省空列表 -> 纯向量（行为与改造前一致）
+    keywords = [str(kw) for kw in (request.keywords or []) if str(kw).strip()]
     # 接口分家：/db 只查文档表（白名单 RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS）。
     collection_name = _ensure_collection_access(
         collection, current_user, settings.RETRIEVER_ALLOWED_DOCUMENT_COLLECTIONS
     )
-    port = RAGRetrieverAdapter(rag_instance=rag_instance, collection_name=collection_name)
+    port = build_retriever_port(rag_instance, collection_name)
     # 旧行为：不传 top_k 时维持 RetrievalQuery 默认值，不改变 get_response 路径。
-    q = RetrievalQuery(question=request.question, collection_name=collection_name)
+    q = RetrievalQuery(
+        question=request.question, collection_name=collection_name, keywords=keywords
+    )
     if top_k is not None:
         q = RetrievalQuery(
             question=request.question,
             collection_name=collection_name,
             top_k=top_k,
             metadata={TOP_K_EXPLICIT_META_KEY: True, "rerank": rerank},
+            keywords=keywords,
         )
     result = await RetrieverUseCase(port).query_db(q)
     return {
@@ -141,19 +146,23 @@ async def excel(
 ):
     top_k = _normalize_query_int(top_k)
     rerank = _normalize_query_bool(rerank)
+    keywords = [str(kw) for kw in (request.keywords or []) if str(kw).strip()]
     # 接口分家：/excel 只查 Excel 表（白名单 RETRIEVER_ALLOWED_EXCEL_COLLECTIONS）。
     collection_name = _ensure_collection_access(
         collection, current_user, settings.RETRIEVER_ALLOWED_EXCEL_COLLECTIONS
     )
-    port = RAGRetrieverAdapter(rag_instance=rag_instance, collection_name=collection_name)
+    port = build_retriever_port(rag_instance, collection_name)
     # 旧行为：不传 top_k 时维持 RetrievalQuery 默认值。
-    q = RetrievalQuery(question=request.question, collection_name=collection_name)
+    q = RetrievalQuery(
+        question=request.question, collection_name=collection_name, keywords=keywords
+    )
     if top_k is not None:
         q = RetrievalQuery(
             question=request.question,
             collection_name=collection_name,
             top_k=top_k,
             metadata={TOP_K_EXPLICIT_META_KEY: True, "rerank": rerank},
+            keywords=keywords,
         )
     result = await RetrieverUseCase(port).query_excel(q)
     return {

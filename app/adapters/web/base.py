@@ -1,4 +1,4 @@
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
@@ -54,6 +54,9 @@ class ChatRequest(BaseModel):
 
     question: str
     collection_name: Optional[str] = None
+    # issue #16：改写步骤产出的结构化关键词。缺省空列表 = 纯向量检索，
+    # 与既有调用方（及未升级的 RAG 容器）完全一致。
+    keywords: List[str] = []
 
 class ChartRequest(BaseModel):
     data_source: dict

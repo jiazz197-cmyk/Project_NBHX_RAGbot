@@ -227,6 +227,33 @@ async def test_retriever_query_excel_shape():
     assert result["sources"] == ["费用表.xlsx"]
 
 
+async def test_retriever_client_sends_keywords_only_when_present():
+    """issue #16：有关键词才带 keywords 字段，老 payload 形状逐字节不变。"""
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content.decode()))
+        return _json_response(request, 200, {"chunks": [], "answer": ""})
+
+    client = RetrieverClient(BASE, transport=httpx.MockTransport(handler))
+    try:
+        await client.query_db("tok", "knowledge_chunks", "q", top_k=10)
+        await client.query_db(
+            "tok", "knowledge_chunks", "q", top_k=10, keywords=["V254", "杨贵宁"]
+        )
+        await client.query_db("tok", "knowledge_chunks", "q", top_k=10, keywords=[])
+        await client.query_excel(
+            "tok", "excel_db_chunks", "q", top_k=10, keywords=("查表",)
+        )
+    finally:
+        await client.aclose()
+
+    assert bodies[0] == {"question": "q"}
+    assert bodies[1] == {"question": "q", "keywords": ["V254", "杨贵宁"]}
+    assert bodies[2] == {"question": "q"}  # 空列表 = 不带该字段
+    assert bodies[3] == {"question": "q", "keywords": ["查表"]}
+
+
 async def test_retriever_error_maps_code_and_status():
     def handler(request: httpx.Request) -> httpx.Response:
         return _json_response(
