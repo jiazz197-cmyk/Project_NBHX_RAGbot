@@ -46,6 +46,11 @@ pytest:
     # 与 docker/dev.Dockerfile 的 PYPI_INDEX 默认值保持一致，改走 aliyun。
     # 需要覆盖时在 GitLab 项目/群组 CI/CD Variables 里定义 PIP_INDEX_URL 即可
     # （GitLab 里 project/group 变量优先级高于本文件的 job variables）。
+    # issue #21：检索缓存 adapter 会 import app.adapters.monitoring.prometheus
+    # （而它顶层 import psutil），缺失会让 import 链整体 ModuleNotFoundError。
+    # ⚠️ 注释必须写在这个 fold 块**之外**：`>` 会把块内换行折成空格，行内 `#`
+    # 会把其后整行（含 prometheus_client/psutil）变成 shell 注释——pipeline #111
+    # 就是这么红的（conftest 导入 psutil 失败）。
     PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
     PIP_DEFAULT_TIMEOUT: "30"
     PIP_RETRIES: "5"
@@ -59,8 +64,6 @@ pytest:
       tenacity==9.1.2 httpx==0.28.1 miniopy-async==1.23.5 minio==7.2.16
       urllib3==2.5.0 python-multipart==0.0.20 email-validator==2.3.0
       dnspython==2.8.0
-      # issue #21：检索缓存 adapter 会 import app.adapters.monitoring.prometheus
-      # （而它顶层 import psutil），缺失会让 import 链整体 ModuleNotFoundError。
       prometheus_client==0.21.1 psutil==7.0.0
     - pytest -q --junitxml=pytest-report.xml
   artifacts:
