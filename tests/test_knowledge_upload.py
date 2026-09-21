@@ -314,7 +314,10 @@ def test_excel_parser_reads_all_sheets(tmp_path):
     by_name = {table["sheet_name"]: table for table in tables}
     assert set(by_name) == {"产品表", "元数据"}
     assert by_name["产品表"]["headers"] == ["产品", "数量"]
-    assert [list(row) for row in by_name["产品表"]["rows"]] == [["A", 1], ["B", 2]]
+    # issue #23：写入端与读取端共用探测结果，行内单元格统一归一化成字符串
+    # （读取端一直如此；切分器本来也做 str()，故 chunk 文本不变）。
+    assert [list(row) for row in by_name["产品表"]["rows"]] == [["A", "1"], ["B", "2"]]
+    assert by_name["元数据"]["headers"] == ["编码"]
 
 
 def test_excel_parser_default_reads_single_sheet(tmp_path):

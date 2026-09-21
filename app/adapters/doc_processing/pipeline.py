@@ -232,6 +232,9 @@ class DocumentProcessingPipeline:
         failed_files: List[Dict[str, str]] = []
         # issue #17：本次批次因内容重复被跳过的块数（任务结果反馈给用户）
         skipped_duplicate_chunks = 0
+        # issue #23：本次批次被拒绝的 sheet（表头结构判不准）——同样反馈给用户，
+        # 避免「文件处理成功但某个 sheet 的知识静默消失」。
+        skipped_sheets: List[Dict[str, str]] = []
         for file_path in files:
             try:
                 # [note] 传递Excel专用分割器；excel-db 集合开启多 sheet 解析
@@ -243,6 +246,14 @@ class DocumentProcessingPipeline:
                     excel_splitter=self.excel_splitter,
                     excel_all_sheets=(collection == EXCEL_DB_COLLECTION_NAME),
                 )
+                for item in getattr(self.document_processor, "last_skipped_sheets", []) or []:
+                    skipped_sheets.append(
+                        {
+                            "file_name": _file_display_name(file_path),
+                            "sheet_name": str(item.get("sheet_name") or "默认 sheet"),
+                            "reason": str(item.get("reason") or "表头结构无法识别"),
+                        }
+                    )
                 if not chunks:
                     continue
                 nodes = self._documents_to_nodes(
@@ -288,5 +299,6 @@ class DocumentProcessingPipeline:
             "total_files": len(files),
             "failed_files": failed_files,
             "skipped_duplicate_chunks": skipped_duplicate_chunks,
+            "skipped_sheets": skipped_sheets,
         }
 

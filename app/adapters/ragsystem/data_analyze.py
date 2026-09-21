@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.core.logging import get_logger
 from app.core.time_utils import utcnow_naive
+from app.domain.knowledge import excel_layout
 
 logger = get_logger("ragsystem.data_analyze")
 
@@ -506,34 +507,86 @@ def excel_to_json(
     path: str,
     sheet_idx: int = 0,
     skiprows: list = None,
-    header_rows: int = 2
+    header_rows: int = None
 ) -> str:
-    """Excel -> JSON string with sheet_name, headers, rows (multi-level header flatten)."""
-    skip = skiprows if skiprows is not None else [0]
+    """Excel -> JSON string with sheet_name, headers, rows.
 
+    issue #23：表头/数据行不再写死「跳过第 0 行 + 前两行当两级表头」，而是与写入端
+    ``ExcelParser`` 共用 ``app.domain.knowledge.excel_layout`` 的结构探测结果——
+    同一份文件在 chunk 化与整表 JSON 两侧得到相同的表头与数据行语义。
+
+    - 探测结果为空 sheet → 返回空 headers/rows（不抛错）；
+    - 探测判不准 → 抛 ``ExcelLayoutError``（调用方 ``_charts_from_response`` 会把它
+      变成 ``{"error": ...}`` 返回给用户，不做静默错位）；
+    - 显式传 ``skiprows`` / ``header_rows`` 时保留旧手工口径（仓内已无调用方，
+      仅为兼容外部脚本），并打 WARNING。
+    """
     xls = _open_excel_file(path)
     sheet_name_actual = xls.sheet_names[sheet_idx]
 
-    title_df = pd.read_excel(
+    raw_df = pd.read_excel(
         xls,
         sheet_name=sheet_name_actual,
         header=None,
-        nrows=1
+        # 不写死 engine：沿用 ExcelFile 已选定的引擎（calamine 优先），
+        # 否则会退回 openpyxl 并在坏样式文件上失败。
     )
+    raw_rows = raw_df.values.tolist()
+
     raw_title = None
-    for v in title_df.iloc[0].tolist():
-        if pd.notna(v) and str(v).strip():
-            raw_title = str(v).strip()
-            break
+    if raw_rows:
+        for value in raw_rows[0]:
+            if pd.notna(value) and str(value).strip():
+                raw_title = str(value).strip()
+                break
     sheet_title = raw_title if raw_title else sheet_name_actual
 
+    if skiprows is not None or header_rows is not None:
+        logger.warning(
+            "excel_to_json 收到显式 skiprows/header_rows，按旧手工口径解析"
+            "（issue #23 起默认走自动结构探测）: path=%s",
+            path,
+        )
+        return _excel_to_json_manual(
+            xls,
+            sheet_name_actual,
+            sheet_title,
+            skiprows if skiprows is not None else [0],
+            header_rows if header_rows is not None else 2,
+        )
+
+    layout = excel_layout.detect_sheet_layout(raw_rows)
+    if layout is None:
+        headers: List[str] = []
+        rows: List[Dict[str, Any]] = []
+    else:
+        headers = list(layout.headers)
+        rows = [
+            dict(zip(headers, row))
+            for row in excel_layout.data_rows(raw_rows, layout)
+        ]
+
+    result = {
+        'sheet_name': sheet_title,
+        'headers': headers,
+        'rows': rows,
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _excel_to_json_manual(
+    xls: pd.ExcelFile,
+    sheet_name_actual: str,
+    sheet_title: str,
+    skip: list,
+    header_rows: int,
+) -> str:
+    """旧口径（issue #23 之前的写死实现），仅显式传参时保留。"""
     df = pd.read_excel(
         xls,
         sheet_name=sheet_name_actual,
         skiprows=skip,
         header=list(range(header_rows)),
-        # 不写死 engine：沿用 ExcelFile 已选定的引擎（calamine 优先），
-        # 否则会退回 openpyxl 并在坏样式文件上失败。
     )
 
     if isinstance(df.columns, pd.MultiIndex):

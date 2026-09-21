@@ -298,3 +298,202 @@ def test_summarize_failed_files():
     assert "f0.xlsx" in summary and "f2.xlsx" in summary
     assert "共 5 个文件失败" in summary
     assert "f4.xlsx" not in summary  # 超出前 3 个只报总数，避免消息过长
+
+
+# ---------------------------------------------------------------------------
+# 5. issue #23：表头结构统一探测（写入端）
+# ---------------------------------------------------------------------------
+
+
+def _write_rows_xlsx(path, rows, sheet_name="Sheet1") -> None:
+    pd = pytest.importorskip("pandas")
+    pd.DataFrame(rows).to_excel(path, sheet_name=sheet_name, index=False, header=False)
+
+
+def test_write_path_detects_title_row_and_two_level_header(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import ExcelParser
+
+    # 标题行 + 一级表头（真表头在第 1 行）
+    titled = tmp_path / "titled.xlsx"
+    _write_rows_xlsx(
+        titled,
+        [["模具系数表", None], ["#", "系数_L"], [1, "1.0"], [2, "1.15"]],
+    )
+    _, tables = ExcelParser()(str(titled), sheet_idx=0)
+    assert tables[0]["headers"] == ["#", "系数_L"]
+    assert tables[0]["rows"] == [["1", "1.0"], ["2", "1.15"]]
+    assert tables[0]["layout"].has_title_row is True
+    assert tables[0]["layout"].header_row == 1
+
+    # 两级表头（组行 + 叶子行）→ 扁平化成 组_子
+    grouped = tmp_path / "grouped.xlsx"
+    _write_rows_xlsx(
+        grouped,
+        [
+            ["项目信息", None, None, "指标", None],
+            ["项目编号", "客户", "项目名称", "指标名称", "版本"],
+            ["P1", "奇瑞", "E03", "产品收入", "FRQ"],
+        ],
+    )
+    _, tables = ExcelParser()(str(grouped), sheet_idx=0)
+    assert tables[0]["headers"] == [
+        "项目信息_项目编号",
+        "项目信息_客户",
+        "项目信息_项目名称",
+        "指标_指标名称",
+        "指标_版本",
+    ]
+    assert tables[0]["rows"] == [["P1", "奇瑞", "E03", "产品收入", "FRQ"]]
+
+
+def test_write_path_skips_leading_blank_row_and_names_blank_columns(tmp_path):
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import ExcelParser
+
+    path = tmp_path / "leading_blank.xlsx"
+    rows = [
+        ["", "", ""],
+        ["", "内控", "SOP"],
+        ["", "427CNB CNSL", "A3PA"],
+    ]
+    pd.DataFrame(rows).to_excel(path, sheet_name="工作表1", index=False, header=False)
+
+    _, tables = ExcelParser()(str(path), sheet_idx=None)
+
+    assert tables[0]["headers"] == ["列1", "内控", "SOP"]
+    assert tables[0]["rows"] == [["", "427CNB CNSL", "A3PA"]]
+
+
+def test_write_path_records_refused_sheet_and_keeps_others(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import ExcelParser
+
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "mixed.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame([["名称", "编码"], ["A", "1"]]).to_excel(
+            writer, sheet_name="数据表", index=False, header=False
+        )
+        # 首行全是数字 → 没有表头 → 拒绝该 sheet
+        pd.DataFrame([[1, 2], [3, 4]]).to_excel(
+            writer, sheet_name="无表头", index=False, header=False
+        )
+
+    parser = ExcelParser()
+    _, tables = parser(str(path), sheet_idx=None)
+
+    assert [t["sheet_name"] for t in tables] == ["数据表"]
+    assert len(parser.skipped_sheets) == 1
+    assert parser.skipped_sheets[0]["sheet_name"] == "无表头"
+    assert "表头" in parser.skipped_sheets[0]["reason"]
+
+
+def _stub_excel_splitter():
+    """绕过 BGE tokenizer 的假分割器：只按行拼「表头：值」。"""
+    from app.adapters.doc_processing.text_splitter import ExcelHeaderPreservingSplitter
+
+    splitter = object.__new__(ExcelHeaderPreservingSplitter)
+    splitter.chunk_size = 500
+    splitter.chunk_overlap = 50
+    splitter.count_tokens = lambda text: len(text)
+    return splitter
+
+
+def test_process_document_refuses_single_sheet_without_header(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import DocumentProcessor
+
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "noheader.xlsx"
+    pd.DataFrame([[1, 2], [3, 4]]).to_excel(path, sheet_name="数据", index=False, header=False)
+
+    processor = DocumentProcessor()
+    with pytest.raises(Exception) as excinfo:
+        processor.process_document(
+            str(path), None, excel_splitter=_stub_excel_splitter()
+        )
+
+    assert "表头" in str(excinfo.value)
+    assert processor.last_skipped_sheets  # 原因随实例带回，供任务结果拼接
+
+
+def test_process_document_empty_excel_fails_with_reason(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import DocumentProcessor
+
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "empty.xlsx"
+    pd.DataFrame({}).to_excel(path, sheet_name="空表", index=False)
+
+    processor = DocumentProcessor()
+    with pytest.raises(Exception) as excinfo:
+        processor.process_document(str(path), None, excel_splitter=_stub_excel_splitter())
+
+    assert "未产出任何" in str(excinfo.value)
+
+
+def test_pipeline_reports_skipped_sheets_and_message_mentions_them():
+    pytest.importorskip("langchain_core")
+    pytest.importorskip("llama_index")
+    import contextlib
+    from types import SimpleNamespace
+
+    from app.adapters.doc_processing.pipeline import DocumentProcessingPipeline
+    from app.adapters.doc_processing.document_task_runner import _compose_complete_message
+
+    class PartialProcessor:
+        last_skipped_sheets = [
+            {"sheet_name": "操作指南", "reason": "无法可靠探测表头：首行不符合表头特征"}
+        ]
+
+        def process_document(self, *args, **kwargs):
+            return [SimpleNamespace(page_content="ok", metadata={})]
+
+    class NoopVectorStore:
+        def upsert_chunks(self, *args, **kwargs):
+            return 1
+
+        def existing_fingerprints(self, *args, **kwargs):
+            return set()
+
+        def fingerprint_write_guard(self, *args, **kwargs):
+            return contextlib.nullcontext()
+
+    pipe = object.__new__(DocumentProcessingPipeline)
+    pipe.text_splitter = None
+    pipe.tag_generator = None
+    pipe.num_tags = 5
+    pipe.excel_splitter = None
+    pipe.embedding_model = None
+    pipe.document_processor = PartialProcessor()
+    pipe.vector_store_manager = NoopVectorStore()
+
+    stream = io.BytesIO(b"x")
+    stream.name = "项目利润表总览模板.xlsx"
+    result = pipe.process([stream], collection="excel_db_chunks")
+
+    assert result["skipped_sheets"] == [
+        {
+            "file_name": "项目利润表总览模板.xlsx",
+            "sheet_name": "操作指南",
+            "reason": "无法可靠探测表头：首行不符合表头特征",
+        }
+    ]
+    message = _compose_complete_message(
+        total_processed=1,
+        downloaded_count=1,
+        failed_files=[],
+        skipped_sheets=1,
+    )
+    assert "跳过 1 个无法识别表头的 sheet" in message

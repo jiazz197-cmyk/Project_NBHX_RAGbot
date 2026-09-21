@@ -78,8 +78,9 @@ def _compose_complete_message(
     downloaded_count: int,
     failed_files: List[dict],
     skipped_duplicate_chunks: int = 0,
+    skipped_sheets: int = 0,
 ) -> str:
-    """任务完成消息（前端可见）：失败明细（issue15）+ 跳过的重复块数（issue #17）。
+    """任务完成消息（前端可见）：失败明细（issue15）+ 跳过块数（issue #17 / #23）。
 
     单独成函数是为了可单测——这串文案是用户唯一能看到「为什么这次没新增内容」的地方。
     """
@@ -95,6 +96,9 @@ def _compose_complete_message(
         message = "文档处理完成"
     if skipped_duplicate_chunks:
         message = f"{message}，跳过 {skipped_duplicate_chunks} 个已存在的重复块"
+    if skipped_sheets:
+        # issue #23：表头结构判不准的 sheet 不产 chunk，但用户必须知道被跳过了。
+        message = f"{message}，跳过 {skipped_sheets} 个无法识别表头的 sheet（详见任务结果）"
     return message
 
 
@@ -190,6 +194,8 @@ def process_documents_background(
         total_processed = 0
         # issue #17：本次任务因内容重复被跳过的块数（随任务结果反馈给用户）
         total_skipped_duplicate_chunks = 0
+        # issue #23：本次任务因表头结构无法识别被跳过的 sheet（同上）
+        skipped_sheets: List[dict] = []
         # issue15：逐文件收集解析/处理失败（文件名 + 原因），任务收尾时
         # 反馈给用户——全部失败则任务标记失败，部分失败则随完成结果带明细。
         failed_files: List[dict] = []
@@ -261,6 +267,7 @@ def process_documents_background(
                     total_skipped_duplicate_chunks += int(
                         one_result.get("skipped_duplicate_chunks", 0) or 0
                     )
+                    skipped_sheets.extend(one_result.get("skipped_sheets") or [])
                     failed_files.extend(one_result.get("failed_files") or [])
                 except Exception as e:
                     logger.error(
@@ -303,11 +310,12 @@ def process_documents_background(
                 return {"status": "error", "message": failure_summary}
 
             logger.info(
-                "[%s] 已处理 %s 个文件，向量化成功段数: %s，跳过重复块: %s",
+                "[%s] 已处理 %s 个文件，向量化成功段数: %s，跳过重复块: %s，跳过无法识别表头的 sheet: %s",
                 task_id,
                 downloaded_count,
                 total_processed,
                 total_skipped_duplicate_chunks,
+                len(skipped_sheets),
             )
             loop.run_until_complete(
                 thread_tm.update_task_progress(task_id, 90, "正在保存结果...")
@@ -326,12 +334,15 @@ def process_documents_background(
                 "failed_files": failed_files,
                 # issue #17：内容重复被跳过的块数（写入端判重）
                 "skipped_duplicate_chunks": total_skipped_duplicate_chunks,
+                # issue #23：表头结构无法识别而跳过的 sheet（文件名 + sheet + 原因）
+                "skipped_sheets": skipped_sheets,
             }
             complete_message = _compose_complete_message(
                 total_processed=total_processed,
                 downloaded_count=downloaded_count,
                 failed_files=failed_files,
                 skipped_duplicate_chunks=total_skipped_duplicate_chunks,
+                skipped_sheets=len(skipped_sheets),
             )
             loop.run_until_complete(
                 thread_tm.complete_task(task_id, final_result, complete_message)

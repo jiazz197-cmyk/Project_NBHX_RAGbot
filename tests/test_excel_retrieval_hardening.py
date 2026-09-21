@@ -126,6 +126,121 @@ def test_excel_to_json_falls_back_when_calamine_missing(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 1b. issue #23：整表 JSON 与写入端共用表头结构探测（两侧逐项一致）
+# ---------------------------------------------------------------------------
+
+#: 三类布局：(标题行 + 一级表头) / 两级表头 / 一级表头（带空表头列）
+_LAYOUT_CASES = {
+    "title_single_level": [
+        ["模具系数表", None, None],
+        ["#", "长度范围(mm)", "系数_L"],
+        [1, "0~100", "1.0"],
+        [2, "100~300", "1.15"],
+    ],
+    "two_level": [
+        ["项目信息", None, None, "指标", None],
+        ["项目编号", "客户", "项目名称", "指标名称", "版本"],
+        ["P1", "奇瑞", "E03", "产品收入", "FRQ"],
+    ],
+    "single_level_with_blank_column": [
+        ["", "内控", "SOP"],
+        ["", "427CNB CNSL", "A3PA"],
+        ["", "BS4EM 仪表板", "B10"],
+    ],
+}
+
+
+def _layout_case_path(tmp_path, name):
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / f"{name}.xlsx"
+    pd.DataFrame(_LAYOUT_CASES[name]).to_excel(
+        path, sheet_name="数据表", index=False, header=False
+    )
+    return path
+
+
+@pytest.mark.parametrize("case", sorted(_LAYOUT_CASES))
+def test_write_and_read_paths_agree_on_layout(tmp_path, case):
+    """同一份 xlsx：写入端 headers/rows 与读取端 headers/rows 必须逐项一致。"""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    pytest.importorskip("langchain_core")
+    from app.adapters.doc_processing.doc_reader import ExcelParser
+    from app.adapters.ragsystem.data_analyze import excel_to_json
+
+    path = _layout_case_path(tmp_path, case)
+
+    _, tables = ExcelParser()(str(path), sheet_idx=0)
+    write_headers = list(tables[0]["headers"])
+    write_rows = [list(row) for row in tables[0]["rows"]]
+
+    payload = json.loads(excel_to_json(str(path)))
+    read_headers = list(payload["headers"])
+    read_rows = [[row.get(header, "") for header in read_headers] for row in payload["rows"]]
+
+    assert write_headers == read_headers
+    assert write_rows == read_rows
+    assert write_rows, "用例应当产出至少一行数据"
+
+
+def test_excel_to_json_flattens_two_level_header(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    from app.adapters.ragsystem.data_analyze import excel_to_json
+
+    path = _layout_case_path(tmp_path, "two_level")
+    payload = json.loads(excel_to_json(str(path)))
+
+    assert payload["headers"] == [
+        "项目信息_项目编号",
+        "项目信息_客户",
+        "项目信息_项目名称",
+        "指标_指标名称",
+        "指标_版本",
+    ]
+    assert payload["rows"] == [
+        {
+            "项目信息_项目编号": "P1",
+            "项目信息_客户": "奇瑞",
+            "项目信息_项目名称": "E03",
+            "指标_指标名称": "产品收入",
+            "指标_版本": "FRQ",
+        }
+    ]
+
+
+def test_excel_to_json_uses_title_row_header_not_title(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    from app.adapters.ragsystem.data_analyze import excel_to_json
+
+    path = _layout_case_path(tmp_path, "title_single_level")
+    payload = json.loads(excel_to_json(str(path)))
+
+    assert payload["sheet_name"] == "模具系数表"
+    assert payload["headers"] == ["#", "长度范围(mm)", "系数_L"]
+    assert payload["rows"][0] == {"#": "1", "长度范围(mm)": "0~100", "系数_L": "1.0"}
+
+
+def test_excel_to_json_refuses_undecidable_layout(tmp_path):
+    """探测不确定 → 抛 ExcelLayoutError（调用方转成 error 字符串），不产错位数据。"""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    from app.adapters.ragsystem.data_analyze import excel_to_json
+    from app.domain.knowledge.excel_layout import ExcelLayoutError
+
+    path = tmp_path / "noheader.xlsx"
+    pd.DataFrame([[1, 2], [3, 4]]).to_excel(
+        path, sheet_name="数据", index=False, header=False
+    )
+
+    with pytest.raises(ExcelLayoutError) as excinfo:
+        excel_to_json(str(path))
+
+    assert excinfo.value.reason == "no_header_row"
+
+
+# ---------------------------------------------------------------------------
 # 2. 重排入参清洗
 # ---------------------------------------------------------------------------
 

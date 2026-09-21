@@ -25,6 +25,7 @@ from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPres
 
 from app.core.config import settings
 from app.core.time_utils import utc_from_timestamp, utcnow
+from app.domain.knowledge import excel_layout
 from app.domain.knowledge.upload_rules import (
     MAX_EXCEL_TOTAL_CHUNKS,
     MAX_EXCEL_TOTAL_ROWS,
@@ -322,13 +323,47 @@ def _read_excel_frames(
         ) from exc
 
 
+def _no_chunk_reason(file_name: str, skipped_sheets: List[Dict[str, str]]) -> str:
+    """Excel 未产出任何 chunk 时的用户可见失败原因（issue #23）。
+
+    过去这种文件走 ``if not chunks: continue`` 被静默跳过，任务仍报“完成”——
+    与 issue #15 的诉求相同：宁可失败，也要把原因交给用户。
+    """
+    if skipped_sheets:
+        detail = "；".join(
+            f"sheet「{item.get('sheet_name') or '默认 sheet'}」"
+            f"{item.get('reason') or '表头结构无法识别'}"
+            for item in skipped_sheets[:3]
+        )
+        if len(skipped_sheets) > 3:
+            detail = f"{detail}；……共 {len(skipped_sheets)} 个 sheet 无法识别表头"
+        return (
+            f"Excel「{file_name}」未产出任何内容：{detail}。"
+            "请人工确认表头行（是否存在标题行 / 两级表头）后重新上传"
+        )
+    return (
+        f"Excel「{file_name}」未产出任何内容：所有 sheet 都没有可用的表头与数据行"
+        "（空文件，或整表只有表头没有数据）"
+    )
+
+
 class ExcelParser:
     """Excel 解析为纯文本。
 
     默认读第一个 sheet（``sheet_idx=0``，向后兼容）；
     传 ``sheet_idx=None`` 时遍历所有 sheet，每个 sheet 独立返回
     ``{"headers": [...], "rows": [...], "sheet_name": ...}``。
+
+    issue #23：表头/数据行由 ``app.domain.knowledge.excel_layout`` 统一探测
+    （标题行、一级/两级表头、数据起始行），与读取端 ``excel_to_json`` 共用同一
+    口径。判不准的 sheet **拒绝**（记入 ``skipped_sheets`` 并告警），不按旧口径
+    产出静默错位的 chunk。
     """
+
+    def __init__(self) -> None:
+        #: 本次解析被拒绝的 sheet（``{"sheet_name", "reason"}``），供
+        #: DocumentProcessor 汇总进任务结果（issue #23）。
+        self.skipped_sheets: List[Dict[str, str]] = []
 
     def __call__(
         self,
@@ -361,16 +396,37 @@ class ExcelParser:
 
             texts: List[str] = []
             tables: List[Dict] = []
+            skipped: List[Dict[str, str]] = []
             for sheet_name, df in sheet_frames:
-                df = df.fillna("")
-                texts.append("\n".join("\t".join(map(str, row)) for row in df.values.tolist()))
+                display_name = str(sheet_name) if sheet_name is not None else "默认 sheet"
+                # issue #23：先探测结构（原始单元格，含 NaN），写入端与读取端同一口径。
+                raw_rows = df.values.tolist()
+                try:
+                    layout = excel_layout.detect_sheet_layout(raw_rows)
+                except excel_layout.ExcelLayoutError as exc:
+                    logger.warning(
+                        "Excel sheet 表头结构无法可靠识别，已跳过: sheet=%s reason=%s",
+                        display_name,
+                        exc,
+                    )
+                    skipped.append({"sheet_name": display_name, "reason": str(exc)})
+                    continue
+                if layout is None:
+                    # 空 sheet：不产 chunk，也不当失败（既有语义）
+                    logger.info("Excel sheet 无数据，跳过: sheet=%s", display_name)
+                    continue
+
+                frame = df.fillna("")
+                texts.append("\n".join("\t".join(map(str, row)) for row in frame.values.tolist()))
                 table = {
-                    "headers": df.iloc[0].tolist() if not df.empty else [],
-                    "rows": df.iloc[1:].values.tolist(),
+                    "headers": list(layout.headers),
+                    "rows": excel_layout.data_rows(raw_rows, layout),
+                    "layout": layout,
                 }
                 if sheet_name is not None:
                     table["sheet_name"] = sheet_name
                 tables.append(table)
+            self.skipped_sheets = skipped
             return "\n".join(texts), tables
         finally:
             if temp_path and os.path.exists(temp_path):
@@ -527,6 +583,9 @@ class DocumentProcessor:
         self._parser_instances: Dict[str, Any] = {}
         self.processed_files = set()
         self.failed_files: Dict[str, str] = {}
+        #: issue #23：本次 process_document 被拒绝的 sheet（表头判不准），
+        #: pipeline 汇总后随任务结果反馈用户。
+        self.last_skipped_sheets: List[Dict[str, str]] = []
     
     def _get_parser(self, file_ext: str):
         """延迟获取 parser 实例，只在需要时才创建"""
@@ -640,6 +699,7 @@ class DocumentProcessor:
         excel_splitter: ExcelHeaderPreservingSplitter = None,
         excel_all_sheets: bool = False,
     ) -> List[Document]:
+        self.last_skipped_sheets = []
         try:
             file_ext = self.get_file_extension(file_input)
             
@@ -669,6 +729,16 @@ class DocumentProcessor:
                 )
             else:
                 text, tables = parser(file_input)
+
+            # issue #23：ExcelParser 会把「表头判不准」的 sheet 记在这里。单 sheet 模式
+            # （知识库上传）里被拒的 sheet 就是文件全部内容，与多 sheet 全拒一样 → 整文件失败；
+            # 部分 sheet 被拒但其他 sheet 有数据 → 成功，明细随任务结果反馈给用户。
+            skipped_sheets = list(getattr(parser, "skipped_sheets", []) or [])
+            self.last_skipped_sheets = skipped_sheets
+            if file_ext in ("xlsx", "xls") and not tables:
+                raise DocumentParseError(
+                    _no_chunk_reason(file_name, skipped_sheets)
+                )
 
             # [note] Excel文件特殊处理：使用保留表头的分割方式
             if file_ext in ("xlsx", "xls") and tables and excel_splitter:
@@ -702,6 +772,13 @@ class DocumentProcessor:
                             sheet_name = table.get("sheet_name")
                             if sheet_name:
                                 chunk_metadata["sheet_name"] = str(sheet_name)
+                            table_layout = table.get("layout")
+                            if table_layout is not None:
+                                # issue #23：把本次探测口径随 chunk 落库，便于以后对账
+                                # （存量老块没有这个键，对账脚本据此识别）。
+                                chunk_metadata["excel_layout"] = excel_layout.format_layout(
+                                    table_layout
+                                )
                             if tag_generator:
                                 chunk_metadata["tags"] = tag_generator.extract_tags(text_chunk, num_tags=num_tags)
                             chunks.append(Document(page_content=text_chunk, metadata=chunk_metadata))
@@ -713,6 +790,13 @@ class DocumentProcessor:
                 if len(chunks) > MAX_EXCEL_TOTAL_CHUNKS:
                     raise DocumentProcessingError(
                         f"Excel 切分块数 {len(chunks)} 超过上限 {MAX_EXCEL_TOTAL_CHUNKS}"
+                    )
+                if not chunks:
+                    # issue #23：能识别表头但一行数据都没有（或全部切分失败）时，
+                    # 过去是静默 continue，用户看不到任何原因——改为显式失败。
+                    raise DocumentParseError(
+                        f"Excel「{file_name}」未产出任何 chunk："
+                        "所有可识别 sheet 都只有表头、没有数据行"
                     )
                 if skipped_empty:
                     logger.info("Excel 分割跳过 %d 个空 chunk", skipped_empty)
