@@ -11,6 +11,15 @@ ACTIVE_CONNECTIONS = Gauge('aida_active_connections', 'Active database connectio
 SYSTEM_CPU_USAGE = Gauge('aida_system_cpu_usage_percent', 'System CPU usage')
 SYSTEM_MEMORY_USAGE = Gauge('aida_system_memory_usage_percent', 'System memory usage')
 
+# issue #21：检索查询级缓存命中率。layer=result|embedding，outcome=hit|miss|skip|error。
+# 刻意不打 collection 标签（集合数会随知识库增长，标签基数不可控）。
+RETRIEVAL_CACHE_LOOKUPS = Counter(
+    'aida_retrieval_cache_lookups_total', 'Retrieval query cache lookups', ['layer', 'outcome']
+)
+RETRIEVAL_CACHE_INVALIDATIONS = Counter(
+    'aida_retrieval_cache_invalidations_total', 'Retrieval cache invalidations (collection version bumps)'
+)
+
 try:
     import GPUtil
     gpu_available = True

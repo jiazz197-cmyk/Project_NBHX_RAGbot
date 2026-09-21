@@ -12,6 +12,7 @@ from .exceptions import DocumentProcessingError
 from .text_splitter import TagGenerator, TokenAwareTextSplitter, ExcelHeaderPreservingSplitter
 
 from app.adapters.knowledge.constants import EXCEL_DB_COLLECTION_NAME
+from app.adapters.retrieval_cache import get_retrieval_cache
 from app.adapters.vector_store_manager import VectorStoreManager
 from app.core.time_utils import utcnow
 from app.domain.knowledge.chunk_identity import content_fingerprint
@@ -263,6 +264,11 @@ class DocumentProcessingPipeline:
                             nodes, collection, self.embedding_model
                         )
                 skipped_duplicate_chunks += duplicate_skipped
+                if nodes:
+                    # issue #21：本集合的检索缓存失效（版本号自增）。同步路径——
+                    # 本函数跑在文档处理 worker 线程（自建事件循环），故用 sync 客户端；
+                    # 失败只告警，不影响入库结果（陈旧窗口由 TTL 兜底）。
+                    get_retrieval_cache().invalidate_collection_sync(collection)
                 if not nodes:
                     logger.info(
                         "文件 %s 无新块（%d 块全部重复或为空），跳过写入: collection=%s",

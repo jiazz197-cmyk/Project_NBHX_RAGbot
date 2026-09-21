@@ -10,6 +10,7 @@ from sqlalchemy.exc import ProgrammingError
 from app.core.database import AsyncSessionLocal
 from app.core.logging import get_logger
 from app.adapters.knowledge.collection_tables import is_missing_table, physical_table
+from app.adapters.retrieval_cache import get_retrieval_cache
 from app.ports.dto.knowledge_upload import KnowledgeFileConflict
 from app.ports.outbound.knowledge_metadata import KnowledgeMetadataPort
 
@@ -69,9 +70,15 @@ class VectorMetadataAdapter(KnowledgeMetadataPort):
                     {"file_name": file_name},
                 )
                 await db.commit()
-                return result.rowcount or 0
+                deleted = result.rowcount or 0
         except ProgrammingError as exc:
             if not is_missing_table(exc):
                 raise
             logger.debug("删除旧块：集合表尚未创建 table=%s", table)
             return 0
+
+        if deleted:
+            # issue #21：集合内容变了 → 该集合的检索缓存立即失效（版本号自增）。
+            # 只有真正删掉行才 bump；失败只告警（TTL 兜底），不影响删除结果。
+            await get_retrieval_cache().invalidate_collection(collection)
+        return deleted

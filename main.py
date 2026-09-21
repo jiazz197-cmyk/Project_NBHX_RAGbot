@@ -95,6 +95,13 @@ async def shutdown_all_pools() -> None:
     except Exception as e:
         print(f"[warning] 关闭 Redis 时出错: {e}")
 
+    # 3. 检索缓存（issue #21）：关闭其同步客户端（async 客户端归上面的 redis_manager）
+    try:
+        from app.adapters.retrieval_cache import get_retrieval_cache
+        get_retrieval_cache().close()
+    except Exception as e:
+        print(f"[warning] 关闭检索缓存时出错: {e}")
+
     # 5. MinIO
     try:
         from app.core.async_storage import AsyncMinioClientPool

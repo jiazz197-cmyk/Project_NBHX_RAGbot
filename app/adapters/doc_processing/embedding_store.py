@@ -34,6 +34,7 @@ from tenacity import (
     wait_fixed,
 )
 
+from app.adapters.retrieval_cache import get_retrieval_cache
 from app.core.config import settings
 from app.core.http_client import HttpClientManager, get_sync_http_client
 from .exceptions import EmbeddingError
@@ -268,7 +269,22 @@ class BGEM3EmbeddingWrapper(OpenAIEmbedding):
         return await self._embed_one_async(text)
 
     async def _aget_query_embedding(self, query: str) -> List[float]:
-        return await self._aget_text_embedding(query)
+        """issue #21：查询嵌入优先走 Redis 缓存（命中即省一次 BGE-M3 HTTP）。
+
+        只给**异步**钩子接缓存：HTTP 检索链路全走 ``aretrieve`` → 本方法；同步
+        钩子 ``_get_query_embedding`` 只服务轻量替身 / 线程池回退，那里没有可靠的
+        loop-safe Redis 客户端（worker 线程自建事件循环），故保持直连。
+        失败不缓存、空文本与全零向量也不缓存，语义见 ``RetrievalCache``。
+        """
+        cache = get_retrieval_cache()
+        cached = await cache.get_query_embedding(query, self.model_name)
+        if cached is not None:
+            logger.debug("查询嵌入缓存命中: model=%s", self.model_name)
+            return cached
+
+        vector = await self._aget_text_embedding(query)
+        await cache.set_query_embedding(query, self.model_name, vector)
+        return vector
 
     async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         return await self._embed_texts_async(texts)

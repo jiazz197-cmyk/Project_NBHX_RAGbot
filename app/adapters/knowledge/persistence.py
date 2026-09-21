@@ -8,7 +8,8 @@ from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal
 from app.core.logging import get_logger
-from app.adapters.knowledge.constants import KNOWLEDGE_CHUNKS_TABLE
+from app.adapters.knowledge.constants import KNOWLEDGE_CHUNKS_TABLE, KNOWLEDGE_COLLECTION_NAME
+from app.adapters.retrieval_cache import get_retrieval_cache
 
 logger = get_logger("knowledge.persistence")
 
@@ -55,4 +56,10 @@ class KnowledgePersistence:
                 {"id": record_id},
             )
             await db.commit()
-            return result.rowcount or 0
+            deleted = result.rowcount or 0
+
+        if deleted:
+            # issue #21：删除的是文档集合的 chunk → 该集合检索缓存失效。
+            # 只有真正删掉行才 bump；失败只告警（TTL 兜底），不影响删除结果。
+            await get_retrieval_cache().invalidate_collection(KNOWLEDGE_COLLECTION_NAME)
+        return deleted

@@ -5,10 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from app.adapters.retrieval_cache import PAYLOAD_VERSION, get_retrieval_cache
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.domain.retrieval.cache_key import (
+    PATH_CHUNKS,
+    PATH_LEGACY,
+    keywords_fingerprint,
+    retrieval_cache_key,
+)
 from app.domain.retrieval.ranking import (
     PATH_DENSE,
     PATH_LEXICAL,
@@ -337,27 +344,172 @@ class HybridRetrieverAdapter(RetrieverPort):
         )
 
 
-def build_retriever_port(rag_instance, collection_name: str) -> RetrieverPort:
-    """组合根工厂：按 ``RETRIEVAL_HYBRID_ENABLED`` 决定纯向量还是双路融合。
+# ---------------------------------------------------------------------------
+# issue #21：检索结果缓存装饰器
+# ---------------------------------------------------------------------------
 
-    开关关闭（默认）时返回的端口与改造前完全一致；打开后仅在调用方传了
-    非空 keywords 时走融合，未传 keywords 的调用行为不变。
+_AUTO_CACHE = object()
+"""``build_retriever_port(cache=...)`` 默认值：按配置自动取缓存单例。"""
+
+
+def _result_from_payload(payload: Dict[str, Any]) -> Optional[RetrievalResult]:
+    """缓存载荷 → :class:`RetrievalResult`；形状不符返回 ``None``（按未命中处理）。"""
+    answer = payload.get("answer")
+    if not isinstance(answer, str):
+        return None
+    sources = payload.get("sources")
+    metadata = payload.get("metadata")
+    return RetrievalResult(
+        answer=answer,
+        sources=list(sources) if isinstance(sources, list) else [],
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+    )
+
+
+class CachingRetrieverAdapter(RetrieverPort):
+    """结果级缓存装饰器：包在 dense / hybrid 端口的最外层（issue #21）。
+
+    行为边界（承重，别顺手改）：
+
+    - **键** = 端点域（``db`` / ``excel``）+ collection + 路径（chunks / legacy）
+      + ``top_k`` + 归一化问题 + 关键词集合 + **集合版本号**。知识库写入会让
+      版本号自增，旧键自然不再命中（不需要写路径 SCAN 删键）。
+    - **只缓存成功的非空结果**：空 chunks / 空 answer 不写缓存（否则一次网关
+      抖动会被固化成数分钟的「空答案」）；内层异常照原样抛出，不缓存错误。
+    - **``metadata["rerank"]`` 不进键**：chunks 路径不消费它（见
+      :func:`_should_return_chunks` 的说明）。若将来 chunks 路径开始消费 rerank，
+      必须把它加进键并补用例。
+    - **拿不到版本号即旁路**：缓存不可用（Redis 挂）时行为与改造前完全一致。
+    """
+
+    def __init__(
+        self,
+        inner: RetrieverPort,
+        cache: Any,
+        collection_name: str = "",
+        *,
+        include_keywords: bool = False,
+        max_keywords: Optional[int] = None,
+        max_keyword_len: Optional[int] = None,
+    ) -> None:
+        self._inner = inner
+        self._cache = cache
+        self._collection_name = collection_name
+        self._include_keywords = include_keywords
+        self._max_keywords = (
+            settings.RETRIEVAL_MAX_KEYWORDS if max_keywords is None else max_keywords
+        )
+        self._max_keyword_len = (
+            settings.RETRIEVAL_KEYWORD_MAX_LEN if max_keyword_len is None else max_keyword_len
+        )
+
+    async def query_db(self, q: RetrievalQuery) -> RetrievalResult:
+        return await self._cached(q, "db", self._inner.query_db)
+
+    async def query_excel(self, q: RetrievalQuery) -> RetrievalResult:
+        return await self._cached(q, "excel", self._inner.query_excel)
+
+    async def _cached(
+        self, q: RetrievalQuery, scope: str, call: Callable[[RetrievalQuery], Any]
+    ) -> RetrievalResult:
+        collection = q.collection_name or self._collection_name
+        if not collection:
+            # 没有集合名就无法做隔离（缓存键必须含 collection），直接放行
+            return await call(q)
+
+        version = await self._cache.collection_version(collection)
+        if version is None:
+            return await call(q)
+
+        chunks_path = _should_return_chunks(q)
+        path = PATH_CHUNKS if chunks_path else PATH_LEGACY
+        keywords: Tuple[str, ...] = ()
+        if self._include_keywords:
+            keywords = keywords_fingerprint(
+                q.keywords, max_count=self._max_keywords, max_len=self._max_keyword_len
+            )
+        key = retrieval_cache_key(
+            scope=scope,
+            collection=collection,
+            path=path,
+            question=q.question,
+            top_k=q.top_k if chunks_path else None,
+            keywords=keywords,
+            version=version,
+        )
+
+        cached = await self._cache.get_result(key)
+        if cached is not None:
+            result = _result_from_payload(cached)
+            if result is not None:
+                logger.info(
+                    "检索缓存命中: scope=%s collection=%s path=%s", scope, collection, path
+                )
+                return result
+
+        result = await call(q)
+        if self._is_cacheable(result, chunks_path):
+            await self._cache.set_result(
+                key,
+                {
+                    "v": PAYLOAD_VERSION,
+                    "answer": result.answer,
+                    "sources": result.sources,
+                    "metadata": result.metadata,
+                },
+            )
+        return result
+
+    @staticmethod
+    def _is_cacheable(result: Any, chunks_path: bool) -> bool:
+        """只有成功的非空结果进缓存（空结果按未命中处理，下请求会重算）。"""
+        if not isinstance(result, RetrievalResult):
+            return False
+        if chunks_path:
+            return bool(result.metadata.get("chunks"))
+        return bool(result.answer)
+
+
+def build_retriever_port(
+    rag_instance, collection_name: str, *, cache: Any = _AUTO_CACHE
+) -> RetrieverPort:
+    """组合根工厂：决定「纯向量 / 双路融合」并（issue #21）按配置包结果缓存。
+
+    - ``RETRIEVAL_HYBRID_ENABLED`` 关闭（默认）时内层与改造前完全一致；打开后
+      仅在调用方传了非空 keywords 时走融合，未传 keywords 的调用行为不变。
+    - ``cache=_AUTO_CACHE``（默认）：按 ``RETRIEVAL_CACHE_ENABLED`` 自动取缓存
+      单例；显式传 ``None``：不包缓存（测试 / 需要旁路时用）。
     """
     dense = RAGRetrieverAdapter(rag_instance=rag_instance, collection_name=collection_name)
-    if not getattr(settings, "RETRIEVAL_HYBRID_ENABLED", False):
-        return dense
+    hybrid_enabled = bool(getattr(settings, "RETRIEVAL_HYBRID_ENABLED", False))
+    if not hybrid_enabled:
+        port: RetrieverPort = dense
+    else:
+        from app.adapters.knowledge.lexical_search import PostgresLexicalSearcher
 
-    from app.adapters.knowledge.lexical_search import PostgresLexicalSearcher
-
-    return HybridRetrieverAdapter(
-        dense=dense,
-        lexical=PostgresLexicalSearcher(
+        port = HybridRetrieverAdapter(
+            dense=dense,
+            lexical=PostgresLexicalSearcher(
+                max_keywords=settings.RETRIEVAL_MAX_KEYWORDS,
+                max_keyword_len=settings.RETRIEVAL_KEYWORD_MAX_LEN,
+            ),
+            collection_name=collection_name,
+            rrf_k=settings.RETRIEVAL_RRF_K,
+            lexical_top_k=settings.RETRIEVAL_LEXICAL_TOP_K,
             max_keywords=settings.RETRIEVAL_MAX_KEYWORDS,
             max_keyword_len=settings.RETRIEVAL_KEYWORD_MAX_LEN,
-        ),
+        )
+
+    resolved = get_retrieval_cache() if cache is _AUTO_CACHE else cache
+    if resolved is None or not getattr(resolved, "enabled", False):
+        return port
+
+    return CachingRetrieverAdapter(
+        inner=port,
+        cache=resolved,
         collection_name=collection_name,
-        rrf_k=settings.RETRIEVAL_RRF_K,
-        lexical_top_k=settings.RETRIEVAL_LEXICAL_TOP_K,
+        # 关键词只在稀疏路真的消费它时才进键（否则只会平白拆散缓存条目）
+        include_keywords=hybrid_enabled,
         max_keywords=settings.RETRIEVAL_MAX_KEYWORDS,
         max_keyword_len=settings.RETRIEVAL_KEYWORD_MAX_LEN,
     )

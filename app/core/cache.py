@@ -54,6 +54,18 @@ class RedisKVStore:
             logger.error(f"Error deleting cache key {key}: {e}")
             return False
 
+    async def incr(self, key: str, amount: int = 1) -> Optional[int]:
+        """自增并返回新值；异常返回 ``None``（调用方按「Redis 不可用」处理）。
+
+        issue #21：检索缓存的集合版本号靠它 bump。调用方需保证**不给版本键设 TTL**
+        ——版本号一旦过期归零，失效前的旧缓存条目可能被重新命中。
+        """
+        try:
+            return int(await self.redis_client.incrby(key, int(amount)))
+        except Exception as e:
+            logger.error(f"Error incrementing cache key {key}: {e}")
+            return None
+
     async def keys(self, pattern: str) -> list:
         result = []
         try:

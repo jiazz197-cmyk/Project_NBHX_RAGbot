@@ -301,6 +301,22 @@ class Settings(BaseSettings, metaclass=SingletonModelMeta):
     # 单个关键词最大长度（超长项直接丢弃）
     RETRIEVAL_KEYWORD_MAX_LEN: int = Field(64, ge=1, le=512, env="RETRIEVAL_KEYWORD_MAX_LEN")
 
+    # ---- 查询级缓存（issue #21：重复问题不再重复付嵌入 + 向量检索成本）----
+    # 默认开：命中即省 1 次 BGE-M3 HTTP + 1 次 PG 向量查询（混合检索再省 1 次字面查询）。
+    # 一致性由「集合版本号」保证：知识库写入 / 删除会 bump 版本，旧键自然不再命中；
+    # TTL 只是漏 bump 时的兜底上限（即「可接受的陈旧窗口」）。置 false 即整体旁路。
+    RETRIEVAL_CACHE_ENABLED: bool = Field(True, env="RETRIEVAL_CACHE_ENABLED")
+    # 检索结果缓存 TTL（秒）。同时是版本号漏 bump 时的最大陈旧窗口。
+    RETRIEVAL_CACHE_TTL_SEC: int = Field(300, ge=1, le=3600, env="RETRIEVAL_CACHE_TTL_SEC")
+    # 单条缓存载荷上限（字节）；0 = 不限。用于挡住 /excel 整表 JSON 这类大结果。
+    RETRIEVAL_CACHE_MAX_PAYLOAD_BYTES: int = Field(
+        262144, ge=0, env="RETRIEVAL_CACHE_MAX_PAYLOAD_BYTES"
+    )
+    # 查询嵌入缓存（第 2 层）：同文本向量恒定，命中省一次嵌入 HTTP；失败/全零向量不缓存。
+    RETRIEVAL_EMBEDDING_CACHE_ENABLED: bool = Field(
+        True, env="RETRIEVAL_EMBEDDING_CACHE_ENABLED"
+    )
+
     BOOTSTRAP_SUPERUSER_USERNAME: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_USERNAME")
     BOOTSTRAP_SUPERUSER_EMAIL: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_EMAIL")
     BOOTSTRAP_SUPERUSER_PASSWORD: Optional[str] = Field(default=None, env="BOOTSTRAP_SUPERUSER_PASSWORD")

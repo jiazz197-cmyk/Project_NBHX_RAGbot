@@ -324,7 +324,9 @@ async def test_keyword_injection_shape_is_normalized_before_sql():
 def test_build_retriever_port_returns_pure_dense_when_flag_off(monkeypatch):
     monkeypatch.setattr(settings, "RETRIEVAL_HYBRID_ENABLED", False, raising=False)
 
-    port = build_retriever_port(object(), "knowledge_chunks")
+    # cache=None：本用例只验「dense / hybrid 的选择」，缓存包装由
+    # tests/test_retrieval_cache.py 覆盖（issue #21）
+    port = build_retriever_port(object(), "knowledge_chunks", cache=None)
 
     assert isinstance(port, RAGRetrieverAdapter)
     assert not isinstance(port, HybridRetrieverAdapter)
@@ -333,7 +335,7 @@ def test_build_retriever_port_returns_pure_dense_when_flag_off(monkeypatch):
 def test_build_retriever_port_wraps_hybrid_when_flag_on(monkeypatch):
     monkeypatch.setattr(settings, "RETRIEVAL_HYBRID_ENABLED", True, raising=False)
 
-    port = build_retriever_port(object(), "knowledge_chunks")
+    port = build_retriever_port(object(), "knowledge_chunks", cache=None)
 
     assert isinstance(port, HybridRetrieverAdapter)
 

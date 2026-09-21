@@ -329,3 +329,56 @@ def test_complete_message_keeps_failure_detail_and_skipped_count():
         "，跳过 2 个已存在的重复块"
     )
 
+
+# ---------------------------------------------------------------------------
+# 5. issue #21：写入成功后失效该集合的检索缓存（版本号自增）
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCache:
+    """假缓存：文档处理跑在 worker 线程，必须走**同步**失效。"""
+
+    enabled = True
+    embedding_enabled = False
+
+    def __init__(self):
+        self.sync_bumps = []
+
+    async def invalidate_collection(self, collection):  # pragma: no cover - 不该被调用
+        raise AssertionError("文档处理在 worker 线程，必须走 invalidate_collection_sync")
+
+    def invalidate_collection_sync(self, collection):
+        self.sync_bumps.append(collection)
+        return len(self.sync_bumps)
+
+
+@pytest.fixture
+def recording_cache():
+    from app.adapters import retrieval_cache as cache_mod
+
+    fake = _RecordingCache()
+    cache_mod.set_retrieval_cache_for_tests(fake)
+    return fake
+
+
+def test_process_bumps_collection_version_after_write(recording_cache):
+    store = _FakeVectorStore()
+    pipe = _pipeline(_FakeProcessor([_chunk("甲")]), store)
+
+    pipe.process([_stream("a.pdf")], collection="knowledge_chunks")
+
+    assert len(store.writes) == 1
+    assert recording_cache.sync_bumps == ["knowledge_chunks"]
+
+
+def test_process_does_not_bump_when_nothing_was_written(recording_cache):
+    """全部块重复 → 没有写入 → 不该白 bump（否则会平白清掉可用缓存）。"""
+    store = _FakeVectorStore(existing=[content_fingerprint("重复段")])
+    pipe = _pipeline(_FakeProcessor([_chunk("重复段")]), store)
+
+    pipe.process([_stream("a.pdf")], collection="knowledge_chunks")
+
+    assert store.writes == []
+    assert recording_cache.sync_bumps == []
+
+

@@ -367,4 +367,125 @@ async def test_async_single_text_failure_retries_once_not_twice():
 def test_api_base_derivation():
     assert embedding_store._to_api_base("http://h:8096/v1/embeddings") == "http://h:8096/v1"
     assert embedding_store._to_api_base("http://h:8096/v1/embeddings/") == "http://h:8096/v1"
+
+
+# ---------------------------------------------------------------------------
+# issue #21：异步查询嵌入钩子接缓存（同步钩子刻意不接）
+# ---------------------------------------------------------------------------
+
+
+class _MemKV:
+    """内存 KV 假件：语义对齐 ``RedisKVStore``（写入序列化 / 读取反序列化）。"""
+
+    def __init__(self) -> None:
+        self.data: dict = {}
+        self.fail = False
+
+    async def get(self, key):
+        if self.fail:
+            raise RuntimeError("redis down")
+        value = self.data.get(key)
+        if value is None:
+            return None
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+
+    async def set(self, key, value, ttl=None):
+        if self.fail:
+            raise RuntimeError("redis down")
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        self.data[key] = value
+        return True
+
+    async def incr(self, key, amount=1):
+        if self.fail:
+            raise RuntimeError("redis down")
+        self.data[key] = str(int(self.data.get(key) or 0) + int(amount))
+        return int(self.data[key])
+
+    async def delete(self, key):
+        return self.data.pop(key, None) is not None
+
+
+def _cached_query_hook(monkeypatch, **cache_kwargs):
+    """把嵌入客户端的缓存单例换成「真实 RetrievalCache + 内存 store」。
+
+    只替换单例获取函数，``embedding_store`` 里的其余代码路径保持正式实现。
+    """
+    from app.adapters.retrieval_cache import RetrievalCache
+
+    store = _MemKV()
+    cache = RetrievalCache(store=store, **cache_kwargs)
+    monkeypatch.setattr(embedding_store, "get_retrieval_cache", lambda: cache)
+    return store, cache
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_second_call_skips_http(monkeypatch):
+    gw = FakeGateway()
+    store, _ = _cached_query_hook(monkeypatch)
+
+    async with _AsyncHarness(gw) as wrapper:
+        first = await wrapper.aget_query_embedding("年假  标准")
+        # 归一化只折叠连续空白，第二次的写法与其归一化结果完全一致
+        second = await wrapper.aget_query_embedding(" 年假 标准 ")
+
+    assert first == second == [1.0] * _DIM
+    assert gw.calls == [["年假  标准"]]  # 第二次零 HTTP
+    assert store.data  # 向量确实落了缓存
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_failure_is_not_cached(monkeypatch):
+    gw = FakeGateway(status=500)
+    store, _ = _cached_query_hook(monkeypatch)
+
+    async with _AsyncHarness(gw) as wrapper:
+        with pytest.raises(EmbeddingError):
+            await wrapper.aget_query_embedding("boom")
+
+    assert len(gw.calls) == settings.BGE_M3_MAX_RETRIES
+    assert store.data == {}  # 失败不写缓存（否则会固化 5 分钟的坏向量）
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_cache_failure_fails_open(monkeypatch):
+    gw = FakeGateway()
+    store, _ = _cached_query_hook(monkeypatch)
+    store.fail = True
+
+    async with _AsyncHarness(gw) as wrapper:
+        first = await wrapper.aget_query_embedding("q")
+        second = await wrapper.aget_query_embedding("q")
+
+    assert first == second == [1.0] * _DIM
+    assert len(gw.calls) == 2  # 缓存不可用 → 每次都真发，且不报错
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_cache_can_be_disabled(monkeypatch):
+    gw = FakeGateway()
+    _cached_query_hook(monkeypatch, embedding_enabled=False)
+
+    async with _AsyncHarness(gw) as wrapper:
+        await wrapper.aget_query_embedding("q")
+        await wrapper.aget_query_embedding("q")
+
+    assert len(gw.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_query_hook_stays_uncached(monkeypatch):
+    """同步钩子刻意不接缓存：它服务的是线程池回退，没有 loop-safe Redis 客户端。"""
+    gw = FakeGateway()
+    store, _ = _cached_query_hook(monkeypatch)
+    wrapper = _wrapper(gw)
+
+    assert wrapper.get_query_embedding("q") == [1.0] * _DIM
+    assert wrapper.get_query_embedding("q") == [1.0] * _DIM
+    assert len(gw.calls) == 2
+    assert store.data == {}
     assert embedding_store._to_api_base("http://h:8096/v1") == "http://h:8096/v1"
