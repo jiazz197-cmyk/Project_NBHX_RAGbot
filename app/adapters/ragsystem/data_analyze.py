@@ -503,6 +503,14 @@ def _open_excel_file(path: str) -> pd.ExcelFile:
     return pd.ExcelFile(path, engine="openpyxl")
 
 
+def _first_nonempty_cell(row: Any) -> str:
+    """返回一行里第一个非空单元格的文本（标题行 / 旧口径 sheet 标题用）。"""
+    for value in row:
+        if pd.notna(value) and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 def excel_to_json(
     path: str,
     sheet_idx: int = 0,
@@ -533,15 +541,9 @@ def excel_to_json(
     )
     raw_rows = raw_df.values.tolist()
 
-    raw_title = None
-    if raw_rows:
-        for value in raw_rows[0]:
-            if pd.notna(value) and str(value).strip():
-                raw_title = str(value).strip()
-                break
-    sheet_title = raw_title if raw_title else sheet_name_actual
-
     if skiprows is not None or header_rows is not None:
+        # 旧手工口径：sheet 标题沿用「第 0 行第一个非空格」
+        sheet_title = _first_nonempty_cell(raw_rows[0]) if raw_rows else ""
         logger.warning(
             "excel_to_json 收到显式 skiprows/header_rows，按旧手工口径解析"
             "（issue #23 起默认走自动结构探测）: path=%s",
@@ -550,12 +552,19 @@ def excel_to_json(
         return _excel_to_json_manual(
             xls,
             sheet_name_actual,
-            sheet_title,
+            sheet_title or sheet_name_actual,
             skiprows if skiprows is not None else [0],
             header_rows if header_rows is not None else 2,
         )
 
     layout = excel_layout.detect_sheet_layout(raw_rows)
+    # sheet 标题：只有探测到「首行是标题行」时才取第 0 行的那一格；
+    # 否则第 0 行是表头，拿它的第一个单元格当标题会得到「序」「项目号」这种怪标题
+    # （issue #23 顺带修正），直接用真实 sheet 名。
+    sheet_title = sheet_name_actual
+    if layout is not None and layout.has_title_row and raw_rows:
+        sheet_title = _first_nonempty_cell(raw_rows[0]) or sheet_name_actual
+
     if layout is None:
         headers: List[str] = []
         rows: List[Dict[str, Any]] = []

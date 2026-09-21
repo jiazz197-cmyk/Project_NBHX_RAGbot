@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Excel 读写口径对账（issue #23 的运维入口）——**只读**，不改库、不改文件。
 
-比对「库里已经落下的 chunk」与「用当前代码重新解析源文件得到的口径」：
+把「库里已经落下的 chunk」与「用当前代码重新解析源文件得到的口径」逐行对齐：
 
-- 旧口径：``ExcelParser`` 当年把第 0 行当表头、``df.iloc[1:]`` 当数据行；
-- 新口径：``app.domain.knowledge.excel_layout`` 的结构探测（标题行 / 一级 / 两级表头）。
+- 库内块文本 = 切分器把每行渲染成 ``表头：值`` 再用换行拼起来（含 overlap 重复行），
+  因此按**行集合**比对即可（不受切块边界影响）；
+- 库内缺行（``missing``）→ 库内是旧口径的陈旧数据，需要重灌；
+- 库内多行（``extra``）→ 库内残留旧口径内容（重灌后会消失）；
+- 现在被拒绝、但库内仍有块的 sheet 一律算陈旧（当前口径复现不出来）。
 
-对每个 ``(文件, sheet)`` 输出：库内块数、空标签（``：值``）证据块数、旧→新表头差异，
-并汇总「需要重灌的文件与候选块数」。写入口径变化 = 该 sheet 的 chunk 文本会变
-（表头名变、数据起始行变、或该 sheet 现在被拒绝），重灌后才会一致。
+同时给出历史线索：旧口径（第 0 行当表头）与当前口径渲染是否不同、旧口径下
+读取端会因空/重复列名静默丢多少列、以及 ``：值`` 空标签块数。
 
 用法（在 dev 容器或有 .env 的宿主环境里跑）：
 
@@ -18,7 +20,7 @@
     python scripts/check_excel_layout.py --file documents/xxx.xlsx
     python scripts/check_excel_layout.py --json               # 机器可读
 
-退出码：0 = 无口径变化；1 = 存在需要重灌的文件（供人工/流水线判定）。
+退出码：0 = 库内与当前口径一致；1 = 存在需要重灌的文件（供人工/流水线判定）。
 """
 
 from __future__ import annotations
@@ -57,9 +59,9 @@ _EMPTY_LABEL = re.compile(r"(?:^|, )：")
 _DIFF_PREVIEW = 70
 
 _STATUS_LABEL = {
-    "ok": "✓ 口径未变",
-    "changed": "⚠ 口径变化",
-    "refused": "✗ 现在被拒绝",
+    "ok": "✓ 库内与当前口径一致",
+    "stale": "⚠ 库内陈旧（需重灌）",
+    "refused": "✗ 现在被拒绝（库内无块）",
     "empty": "· 空 sheet",
     "missing": "? 源文件里没有该 sheet",
 }
@@ -110,34 +112,6 @@ def _legacy_rendered_rows(raw_rows: List[List[Any]], headers: List[str]) -> List
     return rendered
 
 
-def _describe_diff(
-    legacy_headers: List[str],
-    headers: List[str],
-    legacy_rows: List[str],
-    new_rows: List[str],
-) -> str:
-    """把「为什么口径变了」压成一句话（行数 + 首个差异行示例）。"""
-    parts = []
-    if len(legacy_headers) != len(headers):
-        parts.append(f"表头列 {len(legacy_headers)}→{len(headers)}")
-    elif legacy_headers != headers:
-        parts.append("表头名变化")
-    if len(legacy_rows) != len(new_rows):
-        parts.append(f"数据行 {len(legacy_rows)}→{len(new_rows)}")
-    for old, new in zip(legacy_rows, new_rows):
-        if old != new:
-            parts.append(
-                f"首个差异行「{old[:_DIFF_PREVIEW]}」→「{new[:_DIFF_PREVIEW]}」"
-            )
-            break
-    else:
-        if len(legacy_rows) != len(new_rows):
-            tail = new_rows[len(legacy_rows) :] or legacy_rows[len(new_rows) :]
-            if tail:
-                parts.append(f"尾部行差异「{tail[0][:_DIFF_PREVIEW]}」")
-    return "；".join(parts)
-
-
 def _load_stored_rows() -> List[Dict[str, Any]]:
     """库内 excel chunk 的定位信息与文本（含空标签证据）。"""
     table = physical_table(EXCEL_DB_COLLECTION_NAME)
@@ -160,12 +134,47 @@ def _group_stored(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             {"file_name": row["file_name"], "sheets": {}},
         )
         sheet = entry["sheets"].setdefault(
-            row["sheet_name"], {"chunks": 0, "empty_label_chunks": 0}
+            row["sheet_name"],
+            {"chunks": 0, "empty_label_chunks": 0, "lines": set()},
         )
         sheet["chunks"] += 1
-        if _EMPTY_LABEL.search(row["chunk_text"] or ""):
+        text = row["chunk_text"] or ""
+        if _EMPTY_LABEL.search(text):
             sheet["empty_label_chunks"] += 1
+        # chunk 是「渲染行」用换行拼起来的（含 overlap 重复行），按行取集合
+        # 即可与当前口径的渲染结果逐行对齐，且不受切块边界影响。
+        sheet["lines"].update(line for line in text.split("\n") if line)
     return files
+
+
+def _stored_lines(db_sheet: Dict[str, Any]) -> set:
+    return set(db_sheet.get("lines") or ())
+
+
+def _line_fragments(rendered_rows: List[str]) -> set:
+    """把「渲染行」拆成比对用的行片段集合。
+
+    单元格里可能带换行（真实文件里 ``B SUV EREV\\n  5S加油&充电小门``、FONE 的
+    填报说明都是多行文本），它们落库后与 chunk 的分隔换行无法区分，所以**两侧都**
+    按 ``\\n`` 拆开再比对，避免把「多行单元格」误判成口径差异。
+    """
+    fragments = set()
+    for row in rendered_rows:
+        fragments.update(line for line in row.split("\n") if line)
+    return fragments
+
+
+def _compare_with_store(new_lines: List[str], stored_lines: set) -> Dict[str, Any]:
+    """库内块文本 vs 当前口径渲染：缺行=库内陈旧（需重灌），多行=库内残留旧口径。"""
+    current = _line_fragments(new_lines)
+    missing = sorted(current - stored_lines)
+    extra = sorted(stored_lines - current)
+    return {
+        "missing_lines": len(missing),
+        "extra_lines": len(extra),
+        "missing_sample": missing[0][:_DIFF_PREVIEW] if missing else "",
+        "extra_sample": extra[0][:_DIFF_PREVIEW] if extra else "",
+    }
 
 
 def _audit_file(
@@ -178,7 +187,9 @@ def _audit_file(
 
     sheets: List[Dict[str, Any]] = []
     for sheet_name in sheet_names:
-        db_sheet = stored["sheets"].get(sheet_name, {"chunks": 0, "empty_label_chunks": 0})
+        db_sheet = stored["sheets"].get(
+            sheet_name, {"chunks": 0, "empty_label_chunks": 0, "lines": set()}
+        )
         frame = frames.get(sheet_name)
         if frame is None:
             sheets.append(
@@ -190,9 +201,12 @@ def _audit_file(
                     "headers": [],
                     "legacy_headers": [],
                     "legacy_collapsed_columns": 0,
+                    "legacy_changed": False,
                     "layout": "",
                     "reason": "源文件里已无该 sheet（库内块将随重灌消失）",
                     "diff": "",
+                    "missing_lines": db_sheet["chunks"],
+                    "extra_lines": 0,
                 }
             )
             continue
@@ -207,12 +221,21 @@ def _audit_file(
             refused_reason = str(exc)
 
         diff = ""
+        legacy_changed = False
+        missing_lines = 0
+        extra_lines = 0
+        stored_lines = _stored_lines(db_sheet)
         if refused_reason:
-            status, headers, layout_text = "refused", [], ""
-            diff = "该 sheet 现在不产 chunk（原先有块）"
+            headers, layout_text = [], ""
+            # 现在被拒绝的 sheet：库内若还有块，那些块就是当前口径无法复现的陈旧数据
+            status = "stale" if db_sheet["chunks"] else "refused"
+            missing_lines = db_sheet["chunks"]
+            diff = "该 sheet 现在不产 chunk（库内仍有块 → 陈旧）" if db_sheet["chunks"] else "空/不可解析，库内也无块"
         elif layout is None:
-            status, headers, layout_text = "empty", [], ""
-            diff = "空 sheet"
+            headers, layout_text = [], ""
+            status = "stale" if db_sheet["chunks"] else "empty"
+            missing_lines = db_sheet["chunks"]
+            diff = "空 sheet（库内仍有块 → 陈旧）" if db_sheet["chunks"] else "空 sheet"
         else:
             headers = list(layout.headers)
             layout_text = format_layout(layout)
@@ -222,9 +245,18 @@ def _audit_file(
                 for text in (_render_row(headers, row) for row in data_rows(raw_rows, layout))
                 if text
             ]
-            status = "ok" if legacy_rows == new_rows else "changed"
-            if status == "changed":
-                diff = _describe_diff(legacy_headers, headers, legacy_rows, new_rows)
+            legacy_changed = legacy_rows != new_rows
+            comparison = _compare_with_store(new_rows, stored_lines)
+            missing_lines = comparison["missing_lines"]
+            extra_lines = comparison["extra_lines"]
+            status = "ok" if not missing_lines else "stale"
+            if status == "stale":
+                diff = (
+                    f"库内缺 {missing_lines} 行（如「{comparison['missing_sample']}」）"
+                    f"｜库内多 {extra_lines} 行（如「{comparison['extra_sample']}」）"
+                )
+            elif legacy_changed:
+                diff = "库内已与当前口径一致（历史旧口径曾不同）"
 
         sheets.append(
             {
@@ -235,14 +267,17 @@ def _audit_file(
                 "headers": headers,
                 "legacy_headers": legacy_headers,
                 "legacy_collapsed_columns": _legacy_collapsed_columns(legacy_headers),
+                "legacy_changed": legacy_changed,
                 "layout": layout_text,
                 "reason": refused_reason,
                 "diff": diff,
+                "missing_lines": missing_lines,
+                "extra_lines": extra_lines,
             }
         )
 
     affected = sum(
-        sheet["chunks"] for sheet in sheets if sheet["status"] not in ("ok", "empty")
+        sheet["chunks"] for sheet in sheets if sheet["status"] in ("stale", "missing")
     )
     return {
         "file_name": stored["file_name"] or object_path,
@@ -309,22 +344,38 @@ def _render_markdown(reports: List[Dict[str, Any]], limit: int) -> str:
         for report in reports
         for sheet in report["sheets"]
     )
+    total_missing = sum(
+        sheet.get("missing_lines", 0) for report in reports for sheet in report["sheets"]
+    )
+    total_extra = sum(
+        sheet.get("extra_lines", 0) for report in reports for sheet in report["sheets"]
+    )
+    legacy_changed_sheets = sum(
+        1
+        for report in reports
+        for sheet in report["sheets"]
+        if sheet.get("legacy_changed")
+    )
     affected = sum(report["affected_chunks"] for report in reports)
 
     lines.append("## Excel 读写口径对账（issue #23）")
     lines.append("")
     lines.append(
         f"- 源文件 {len(reports)} 个｜库内块 {total_chunks} 条"
-        f"｜需重灌文件 {len(needs)} 个 / 候选块 {affected} 条"
+        f"｜需重灌文件 {len(needs)} 个 / 陈旧块 {affected} 条"
     )
     lines.append(
-        f"- 旧口径证据：空标签（`：值`）块 {total_empty_labels} 条"
-        f"｜读取端会因空/重复列名静默丢列 {total_collapsed} 列（最坏情况）"
+        f"- 库内 vs 当前口径：缺失行 {total_missing}｜多余行 {total_extra}"
+        f"｜空标签（`：值`）块 {total_empty_labels}"
+    )
+    lines.append(
+        f"- 历史线索：旧口径与当前口径不同的 sheet 有 {legacy_changed_sheets} 个"
+        f"（旧口径下读取端会因空/重复列名静默丢列 {total_collapsed} 列，最坏情况）"
     )
     if needs:
         lines.append("- 需重灌：" + "、".join(r["file_name"] for r in needs))
     else:
-        lines.append("- 全部文件口径与库内一致，无需重灌")
+        lines.append("- 全部文件的库内块与当前口径一致，无需重灌")
     lines.append("")
 
     for report in reports:
@@ -334,24 +385,25 @@ def _render_markdown(reports: List[Dict[str, Any]], limit: int) -> str:
             lines.append("")
             continue
         lines.append(
-            f"- 对象：`{report['object_path']}`｜候选受影响块：{report['affected_chunks']}"
+            f"- 对象：`{report['object_path']}`｜陈旧块：{report['affected_chunks']}"
         )
         lines.append("")
-        lines.append("| sheet | 库内块 | 空标签块 | 旧口径丢列 | 判定 | 差异摘要 |")
-        lines.append("|---|---:|---:|---:|---|---|")
+        lines.append("| sheet | 库内块 | 空标签块 | 缺行/多行 | 判定 | 差异摘要 |")
+        lines.append("|---|---:|---:|---|---|---|")
         for sheet in report["sheets"][:limit]:
             lines.append(
                 f"| {sheet['sheet_name'] or '(默认)'} | {sheet['chunks']} |"
-                f" {sheet['empty_label_chunks']} | {sheet.get('legacy_collapsed_columns', 0)} |"
+                f" {sheet['empty_label_chunks']} |"
+                f" {sheet.get('missing_lines', 0)}/{sheet.get('extra_lines', 0)} |"
                 f" {_STATUS_LABEL.get(sheet['status'], sheet['status'])} |"
                 f" {sheet.get('diff') or '-'} |"
             )
         if len(report["sheets"]) > limit:
             lines.append(f"| … | | | | | 共 {len(report['sheets'])} 个 sheet |")
         for sheet in report["sheets"][:limit]:
-            if sheet["status"] in ("changed", "refused") and sheet["headers"]:
+            if sheet["status"] in ("stale", "refused") and sheet["headers"]:
                 lines.append(
-                    f"- 新表头（`{sheet['sheet_name']}`）："
+                    f"- 当前表头（`{sheet['sheet_name']}`）："
                     + "、".join(sheet["headers"][:8])
                 )
             if sheet["status"] == "refused":

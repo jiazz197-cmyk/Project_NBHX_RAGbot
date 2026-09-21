@@ -191,6 +191,8 @@ def test_excel_to_json_flattens_two_level_header(tmp_path):
     path = _layout_case_path(tmp_path, "two_level")
     payload = json.loads(excel_to_json(str(path)))
 
+    # 没有标题行时 sheet_name 用真实 sheet 名（不再拿表头首格当标题）
+    assert payload["sheet_name"] == "数据表"
     assert payload["headers"] == [
         "项目信息_项目编号",
         "项目信息_客户",

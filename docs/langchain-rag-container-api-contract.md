@@ -606,6 +606,8 @@ Content-Type: application/json
 - 不传 `top_k` 时保留旧行为：`answer` 是 Excel 数据/分析结果的 JSON 字符串（`{"data": <excel_to_json 结果>, "sources": [...]}` 中的 `data` 序列化结果），`sources` 是定位成功的 Excel **源文件名**列表（如 `["华翔定价表.xlsx"]`），供来源页脚展示；失败时 `answer` 为错误信息、`sources=[]`；`chunks` 恒为 `[]`；
 - 可选 Query 参数 `top_k: int | None`（`ge=1, le=50`）与 `rerank: bool = true`；`rerank` 仅在未显式传 `top_k` 的旧路径生效（该路径内部重排 top_n=3）；
 - 整表 JSON 依赖 `data_analyze.excel_to_json` 从 MinIO 取源文件再解析：引擎优先 `python-calamine`（WPS/腾讯文档导出的 `xl/styles.xml` 含自闭合空 `<fill/>` 时 openpyxl 会抛 `TypeError`），不可用时回退 openpyxl。
+- **表头口径（issue #23）**：表头行 / 一级或两级表头 / 数据起始行由 `app.domain.knowledge.excel_layout` 统一探测，与写入端 `ExcelParser` **共用同一结果**（同一份文件在 chunk 与整表 JSON 两侧的 headers/rows 逐项一致）。两级表头扁平化为 `组_子`，空表头列按 `列N` 兜底，重名列去重为 `名字_2/_3`（旧实现下重复/空列名会在 `rows` records 里静默丢列）；`sheet_name` 仅在探测到首行为标题行时取那一格，否则用真实 sheet 名。
+- **拒绝语义**：探测判不准（首行不像表头、或两级/一级表头填充率介于 0.2~0.8）时抛 `ExcelLayoutError`，`answer` 为该错误信息（含 sheet 与原因）、`sources=[]`——不再返回错位列名的数据。
 
 ### 8.3 `POST /api/v1/retriever/charts`
 
