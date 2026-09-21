@@ -73,6 +73,31 @@ def _summarize_failed_files(failed_files: List[dict], max_items: int = 3) -> str
     return "；".join(parts)
 
 
+def _compose_complete_message(
+    total_processed: int,
+    downloaded_count: int,
+    failed_files: List[dict],
+    skipped_duplicate_chunks: int = 0,
+) -> str:
+    """任务完成消息（前端可见）：失败明细（issue15）+ 跳过的重复块数（issue #17）。
+
+    单独成函数是为了可单测——这串文案是用户唯一能看到「为什么这次没新增内容」的地方。
+    """
+    if failed_files:
+        failed_names = "、".join(
+            str(item.get("file_name") or "未命名文件") for item in failed_files
+        )
+        message = (
+            f"文档处理完成：{total_processed}/{downloaded_count} 个文件成功，"
+            f"失败：{failed_names}（详见任务结果）"
+        )
+    else:
+        message = "文档处理完成"
+    if skipped_duplicate_chunks:
+        message = f"{message}，跳过 {skipped_duplicate_chunks} 个已存在的重复块"
+    return message
+
+
 def process_documents_background(
     token: CancellationToken,
     task_id: str,
@@ -163,6 +188,8 @@ def process_documents_background(
         )
         downloaded_count = 0
         total_processed = 0
+        # issue #17：本次任务因内容重复被跳过的块数（随任务结果反馈给用户）
+        total_skipped_duplicate_chunks = 0
         # issue15：逐文件收集解析/处理失败（文件名 + 原因），任务收尾时
         # 反馈给用户——全部失败则任务标记失败，部分失败则随完成结果带明细。
         failed_files: List[dict] = []
@@ -231,6 +258,9 @@ def process_documents_background(
                         file_id=file_record.id,
                     )
                     total_processed += int(one_result.get("processed_files", 0) or 0)
+                    total_skipped_duplicate_chunks += int(
+                        one_result.get("skipped_duplicate_chunks", 0) or 0
+                    )
                     failed_files.extend(one_result.get("failed_files") or [])
                 except Exception as e:
                     logger.error(
@@ -273,10 +303,11 @@ def process_documents_background(
                 return {"status": "error", "message": failure_summary}
 
             logger.info(
-                "[%s] 已处理 %s 个文件，向量化成功段数: %s",
+                "[%s] 已处理 %s 个文件，向量化成功段数: %s，跳过重复块: %s",
                 task_id,
                 downloaded_count,
                 total_processed,
+                total_skipped_duplicate_chunks,
             )
             loop.run_until_complete(
                 thread_tm.update_task_progress(task_id, 90, "正在保存结果...")
@@ -293,18 +324,15 @@ def process_documents_background(
                 "collection": collection,
                 # issue15：部分失败时把逐文件原因带给前端展示
                 "failed_files": failed_files,
+                # issue #17：内容重复被跳过的块数（写入端判重）
+                "skipped_duplicate_chunks": total_skipped_duplicate_chunks,
             }
-            if failed_files:
-                failed_names = "、".join(
-                    str(item.get("file_name") or "未命名文件")
-                    for item in failed_files
-                )
-                complete_message = (
-                    f"文档处理完成：{total_processed}/{downloaded_count} 个文件成功，"
-                    f"失败：{failed_names}（详见任务结果）"
-                )
-            else:
-                complete_message = "文档处理完成"
+            complete_message = _compose_complete_message(
+                total_processed=total_processed,
+                downloaded_count=downloaded_count,
+                failed_files=failed_files,
+                skipped_duplicate_chunks=total_skipped_duplicate_chunks,
+            )
             loop.run_until_complete(
                 thread_tm.complete_task(task_id, final_result, complete_message)
             )

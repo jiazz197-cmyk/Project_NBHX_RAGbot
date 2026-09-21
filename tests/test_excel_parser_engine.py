@@ -18,6 +18,7 @@ test_knowledge_upload.py 的 importorskip 模式：CI 里跳过，dev 容器全�
 
 from __future__ import annotations
 
+import contextlib
 import io
 import re
 import zipfile
@@ -199,6 +200,14 @@ def test_pipeline_collects_failed_files(monkeypatch):
             calls.append(args[0])
             return len(calls)
 
+        def existing_fingerprints(self, *args, **kwargs):
+            # issue #17：写入端会先做内容指纹预检；本用例只关心失败聚合
+            return set()
+
+        def fingerprint_write_guard(self, *args, **kwargs):
+            # issue #17：预检 + 写入在 advisory lock 临界区内，这里用空上下文替代
+            return contextlib.nullcontext()
+
     calls: list = []
     # 只测聚合逻辑，不起真实 embedding / tokenizer：绕过 __init__ 手工装配
     pipe = object.__new__(DocumentProcessingPipeline)
@@ -246,6 +255,12 @@ def test_pipeline_partial_failure_keeps_successes(monkeypatch):
     class NoopVectorStore:
         def upsert_chunks(self, *args, **kwargs):
             return 1
+
+        def existing_fingerprints(self, *args, **kwargs):
+            return set()
+
+        def fingerprint_write_guard(self, *args, **kwargs):
+            return contextlib.nullcontext()
 
     pipe = object.__new__(DocumentProcessingPipeline)
     pipe.text_splitter = None

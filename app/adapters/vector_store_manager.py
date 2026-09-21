@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, Iterable, List
 
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
@@ -111,6 +111,33 @@ class VectorStoreManager:
 
         except Exception as exc:
             raise VectorStoreError(f"写入 PGVector 失败: {exc}") from exc
+
+    def existing_fingerprints(
+        self, collection_name: str, fingerprints: Iterable[str]
+    ) -> set[str]:
+        """写入前的内容级去重预检（issue #17）：返回入参中**已存在**的指纹。
+
+        判定用 PG 侧现算的 ``md5(text)``（见 ``app/adapters/knowledge/chunk_fingerprint``），
+        因此存量老数据（没有 content_hash metadata）同样覆盖，无需回填。
+
+        - 集合表懒建表：表不存在 → 空集（视为「无重复」）；
+        - 其他查询异常**向上抛**，由调用方（pipeline）决定降级，不在本层吞掉。
+        """
+        from app.adapters.knowledge.chunk_fingerprint import existing_fingerprints
+
+        return existing_fingerprints(collection_name, fingerprints)
+
+    def fingerprint_write_guard(self, collection_name: str):
+        """同集合「指纹预检 + 写入」的临界区（issue #17 并发竞态）。
+
+        用法：``with manager.fingerprint_write_guard(collection):`` —— 预检与
+        upsert 必须**都**在这个 with 里，否则并发上传同一内容仍会双写（两个任务的
+        预检都早于对方插入 → 都判定「无重复」）。拿不到锁不阻断写入（降级为尽力
+        去重），细节见 ``app/adapters/knowledge/chunk_fingerprint``。
+        """
+        from app.adapters.knowledge.chunk_fingerprint import fingerprint_write_guard
+
+        return fingerprint_write_guard(collection_name)
 
     def list_available_collections_sync(self) -> List[str]:
         """information_schema 里 data_% 表（同步，供 worker/线程池）。
