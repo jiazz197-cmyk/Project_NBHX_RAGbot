@@ -19,8 +19,24 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688.svg)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D.svg)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
+![Sanitized](https://img.shields.io/badge/Edition-脱敏开源版-lightgrey.svg)
 
 </div>
+
+---
+
+> [!IMPORTANT]
+> ### 🔒 本仓库为「脱敏开源版本」（Sanitized Open-Source Edition）
+>
+> 本仓库面向开源分享与技术交流，已对企业敏感信息做脱敏处理：
+>
+> - **密钥与凭证**：真实 API Key / Token / 口令 / 证书均已移除，示例配置统一使用占位符（`change_me_*`、`<...>`）；
+> - **配置与数据**：只保留配置字段结构与示例值，不含生产配置、业务数据、日志与数据库导出；
+> - **模型与资产**：不含模型权重，AI 推理能力全部通过外部 HTTP 服务接入。
+>
+> ⚠️ 仓库内出现的任何账号、口令、API Key 均为**开发环境示例或占位符**，不对应任何生产系统，**请勿直接复用**；请勿将本仓库的示例配置用于生产环境。
+>
+> 企业名称与业务场景描述仅用于交代项目背景，不构成任何数据披露或授权。
 
 ---
 
@@ -371,6 +387,14 @@ bash scripts/dev.sh ragchain up|restart|build|check|logs|ps|down|shell|test
 - 允许自由使用、修改、分发（含商业用途），需保留版权声明与许可声明；
 - 平台面向宁波华翔内部业务场景构建，代码以 Apache-2.0 开放，欢迎参考与复用；
 - 第三方依赖（主应用 155 条 / RAG 栈 96 条 / 开发工具 5 条）各自遵循其原始许可。
+
+### 脱敏开源版本声明
+
+本仓库为**脱敏开源版本**：仓库中不含企业真实凭证与密钥，示例配置一律使用占位符（`change_me_*`、`<...>`），配置仅保留字段结构，不含生产配置、业务数据与模型权重。
+
+- 仓库内出现的任何账号、口令、API Key 均为**开发环境示例或占位符**，不对应任何生产系统，**请勿直接复用**；
+- 使用者应自行生成密钥与口令，并自行承担将示例配置用于生产环境所导致的风险；
+- 如需基于本仓库二次开发，请在部署前完整复核 `README` 的「配置」章节与 `.env.example`，替换全部占位值。
 
 ```
 Copyright 2026 宁波华翔电子股份有限公司（NBHX）
