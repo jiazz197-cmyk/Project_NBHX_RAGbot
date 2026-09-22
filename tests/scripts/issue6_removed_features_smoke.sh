@@ -3,7 +3,7 @@
 #
 # 用法（后端 + 前端已启动）：
 #   BASE_URL=http://127.0.0.1:8000 FRONTEND_URL=http://127.0.0.1 \
-#   SUPER_USER=superuser SUPER_PASS=superuser.5001 \
+#   SUPER_USER=superuser SUPER_PASS=<超管口令> \
 #   bash tests/scripts/issue6_removed_features_smoke.sh
 #
 # 后端不可用时脚本输出 SKIP，不会产生 FAIL；适合本地/验收前快速跑。
@@ -15,7 +15,8 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 BASE="${BASE:-$BASE_URL/api/v1}"
 FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1}"
 SUPER_USER="${SUPER_USER:-superuser}"
-SUPER_PASS="${SUPER_PASS:-superuser.5001}"
+# 超管口令不入库：必须由环境变量提供（值同 .env 的 BOOTSTRAP_SUPERUSER_PASSWORD）
+SUPER_PASS="${SUPER_PASS:?请先 export SUPER_PASS=<超管口令>}"
 RUN_ID="${RUN_ID:-issue6_smoke_$(date +%Y%m%d_%H%M%S)}"
 WORKDIR="${WORKDIR:-/tmp/nbhx_issue6_smoke_$RUN_ID}"
 

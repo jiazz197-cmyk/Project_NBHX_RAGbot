@@ -300,10 +300,15 @@ bash scripts/dev.sh ragchain logs          # 跟随日志（-f）
 
 ## 7. 启动后冒烟（可选）
 
+> 超管口令不入库：先 export，值同 `.env` 的 `BOOTSTRAP_SUPERUSER_PASSWORD`。
+
 ```bash
+export SUPER_USER=superuser
+export SUPER_PASS='<超管口令>'
+
 TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"superuser","password":"<seed-superuser-password>"}' \
+  -d "{\"username\":\"$SUPER_USER\",\"password\":\"$SUPER_PASS\"}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
 
 curl -sS -N -X POST http://127.0.0.1:8010/api/v1/chat-messages \

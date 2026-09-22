@@ -6,7 +6,8 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 BASE="${BASE:-$BASE_URL/api/v1}"
 
 SUPER_USER="${SUPER_USER:-superuser}"
-SUPER_PASS="${SUPER_PASS:-superuser.5001}"
+# 超管口令不入库：必须由环境变量提供（值同 .env 的 BOOTSTRAP_SUPERUSER_PASSWORD）
+SUPER_PASS="${SUPER_PASS:?请先 export SUPER_PASS=<超管口令>}"
 
 TEST_PDF="${TEST_PDF:-/home/shmtu/桌面/ADW-0314S规格书.pdf}"
 RUN_ID="${RUN_ID:-full_accept_$(date +%Y%m%d_%H%M%S)}"
